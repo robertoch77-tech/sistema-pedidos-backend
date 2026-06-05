@@ -1,45 +1,137 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const { Pool } = require('pg');
+
+// Cache de conexiones por mayorista
+const conexiones = {};
+
+async function getConexionMayorista(mayorista_id) {
+  if (conexiones[mayorista_id]) return conexiones[mayorista_id];
+
+  const resultado = await pool.query(
+    'SELECT db_connection FROM mayoristas WHERE id = $1',
+    [mayorista_id]
+  );
+
+  if (!resultado.rows[0]?.db_connection) return null;
+
+  const poolExterno = new Pool({
+    connectionString: resultado.rows[0].db_connection,
+    ssl: false
+  });
+
+  // La base de Ivan viene en LATIN1
+  poolExterno.on('connect', (client) => {
+    client.query("SET client_encoding TO 'LATIN1'");
+  });
+
+  conexiones[mayorista_id] = poolExterno;
+  return poolExterno;
+}
+
+// Reemplaza ñ, acentos y el caracter roto (�) por comodin _ (1 caracter cualquiera).
+// Mismo criterio que ya usabas en la busqueda, asi la ñ no rompe el filtro.
+function normalizar(texto) {
+  return texto.replace(/[ñÑáéíóúÁÉÍÓÚ\uFFFD]/g, '_');
+}
+
+// Opciones para los selectores de marca / rubro / tipo (se piden una sola vez)
+router.get('/:mayorista_id/opciones', async (req, res) => {
+  try {
+    const { mayorista_id } = req.params;
+    const poolExterno = await getConexionMayorista(mayorista_id);
+    if (!poolExterno) return res.status(404).json({ mensaje: 'Sin conexión configurada' });
+
+    const distinct = async (campo) => {
+      const r = await poolExterno.query(
+        `SELECT DISTINCT ${campo} AS valor
+         FROM "viewProductos"
+         WHERE ${campo} IS NOT NULL AND ${campo} <> ''
+         ORDER BY ${campo}`
+      );
+      return r.rows.map(x => x.valor);
+    };
+
+    const [marcas, rubros, tipos] = await Promise.all([
+      distinct('des_producto_marca'),
+      distinct('des_producto_rubro'),
+      distinct('des_producto_tipo')
+    ]);
+
+    res.json({ marcas, rubros, tipos });
+  } catch (error) {
+    console.error('Error opciones:', error.message);
+    res.status(500).json({ mensaje: 'Error del servidor' });
+  }
+});
 
 router.get('/:mayorista_id', async (req, res) => {
   try {
     const { mayorista_id } = req.params;
-    const resultado = await pool.query(
-      'SELECT * FROM productos WHERE mayorista_id = $1 AND activo = true ORDER BY nombre',
-      [mayorista_id]
-    );
-    res.json(resultado.rows);
-  } catch (error) {
-    res.status(500).json({ mensaje: 'Error del servidor' });
-  }
-});
+    const busqueda = req.query.busqueda || '';
+    const marca = req.query.marca || '';
+    const rubro = req.query.rubro || '';
+    const tipo = req.query.tipo || '';
+    const pagina = parseInt(req.query.pagina) || 1;
+    const porPagina = 50;
+    const desde = (pagina - 1) * porPagina;
 
-router.post('/', async (req, res) => {
-  try {
-    const { mayorista_id, codigo, nombre, descripcion, imagen_url, precio, stock } = req.body;
-    const resultado = await pool.query(
-      `INSERT INTO productos (mayorista_id, codigo, nombre, descripcion, imagen_url, precio, stock)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-      [mayorista_id, codigo, nombre, descripcion, imagen_url, precio, stock]
-    );
-    res.json(resultado.rows[0]);
-  } catch (error) {
-    res.status(500).json({ mensaje: 'Error del servidor' });
-  }
-});
+    const poolExterno = await getConexionMayorista(mayorista_id);
+    if (!poolExterno) return res.status(404).json({ mensaje: 'Sin conexión configurada' });
 
-router.put('/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { codigo, nombre, descripcion, imagen_url, precio, stock, activo } = req.body;
-    const resultado = await pool.query(
-      `UPDATE productos SET codigo=$1, nombre=$2, descripcion=$3, imagen_url=$4, precio=$5, stock=$6, activo=$7
-       WHERE id=$8 RETURNING *`,
-      [codigo, nombre, descripcion, imagen_url, precio, stock, activo, id]
+    // Armo el WHERE dinamico segun lo que venga (busqueda + filtros)
+    const condiciones = [];
+    const params = [];
+    let i = 1;
+
+    // Busqueda incremental: cada palabra puede estar en cualquier campo,
+    // en cualquier parte y en cualquier orden (AND entre palabras).
+    // Ej: "caño negro" encuentra "Caño PVC negro 1/2".
+    if (busqueda.trim() !== '') {
+      const palabras = normalizar(busqueda).trim().split(/\s+/).filter(p => p);
+      for (const palabra of palabras) {
+        condiciones.push(`(cod_producto ILIKE $${i}
+          OR des_producto ILIKE $${i}
+          OR des_producto_marca ILIKE $${i}
+          OR des_producto_rubro ILIKE $${i})`);
+        params.push(`%${palabra}%`);
+        i++;
+      }
+    }
+    if (marca) { condiciones.push(`des_producto_marca ILIKE $${i}`); params.push(normalizar(marca)); i++; }
+    if (rubro) { condiciones.push(`des_producto_rubro ILIKE $${i}`); params.push(normalizar(rubro)); i++; }
+    if (tipo)  { condiciones.push(`des_producto_tipo ILIKE $${i}`);  params.push(normalizar(tipo));  i++; }
+
+    const where = condiciones.length ? `WHERE ${condiciones.join(' AND ')}` : '';
+
+    // Total ya filtrado -> sobre esto se calcula la paginacion
+    const totalResultado = await poolExterno.query(
+      `SELECT COUNT(*) FROM "viewProductos" ${where}`,
+      params
     );
-    res.json(resultado.rows[0]);
+    const total = parseInt(totalResultado.rows[0].count);
+
+    // Productos de la pagina actual (50), respetando el filtro
+    const productosResultado = await poolExterno.query(
+      `SELECT id_producto, cod_producto, des_producto, imagen_producto,
+              precio_producto, stock_temporal, des_producto_marca,
+              des_producto_rubro, des_producto_tipo
+       FROM "viewProductos"
+       ${where}
+       ORDER BY des_producto
+       LIMIT ${porPagina} OFFSET ${desde}`,
+      params
+    );
+
+    res.json({
+      productos: productosResultado.rows,
+      total,
+      pagina,
+      totalPaginas: Math.ceil(total / porPagina)
+    });
   } catch (error) {
+    console.error('Error productos:', error.message);
     res.status(500).json({ mensaje: 'Error del servidor' });
   }
 });

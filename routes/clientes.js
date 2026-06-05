@@ -1,30 +1,83 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const { Pool } = require('pg');
 
+// Cache de conexiones por mayorista (igual que productos.js)
+const conexiones = {};
+
+async function getConexionMayorista(mayorista_id) {
+  if (conexiones[mayorista_id]) return conexiones[mayorista_id];
+
+  const resultado = await pool.query(
+    'SELECT db_connection FROM mayoristas WHERE id = $1',
+    [mayorista_id]
+  );
+
+  if (!resultado.rows[0]?.db_connection) return null;
+
+  const poolExterno = new Pool({
+    connectionString: resultado.rows[0].db_connection,
+    ssl: false
+  });
+
+  poolExterno.on('connect', (client) => {
+    client.query("SET client_encoding TO 'LATIN1'");
+  });
+
+  conexiones[mayorista_id] = poolExterno;
+  return poolExterno;
+}
+
+// Reemplaza ñ y acentos por _ para que la búsqueda no rompa con SQL_ASCII
+function normalizar(texto) {
+  return texto.replace(/[ñÑáéíóúÁÉÍÓÚ\uFFFD]/g, '_');
+}
+
+// Buscar clientes en la base de Ivan (viewClientes)
+// Busca por CUIT (doc_cliente), nombre (nom_fan_cliente) o razón social (raz_soc_cliente)
 router.get('/:mayorista_id', async (req, res) => {
   try {
     const { mayorista_id } = req.params;
-    const resultado = await pool.query(
-      'SELECT * FROM clientes WHERE mayorista_id = $1 AND activo = true ORDER BY nombre',
-      [mayorista_id]
-    );
-    res.json(resultado.rows);
-  } catch (error) {
-    res.status(500).json({ mensaje: 'Error del servidor' });
-  }
-});
+    const busqueda = req.query.busqueda || '';
+    const pagina = parseInt(req.query.pagina) || 1;
+    const porPagina = 50;
+    const desde = (pagina - 1) * porPagina;
 
-router.post('/', async (req, res) => {
-  try {
-    const { mayorista_id, nombre, email, telefono, direccion, ver_stock, ver_precios, descuento } = req.body;
-    const resultado = await pool.query(
-      `INSERT INTO clientes (mayorista_id, nombre, email, telefono, direccion, ver_stock, ver_precios, descuento)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-      [mayorista_id, nombre, email, telefono, direccion, ver_stock, ver_precios, descuento]
+    const poolExterno = await getConexionMayorista(mayorista_id);
+    if (!poolExterno) return res.status(404).json({ mensaje: 'Sin conexión configurada' });
+
+    let where = '';
+    let params = [];
+
+    if (busqueda.trim()) {
+      const b = `%${normalizar(busqueda.trim())}%`;
+      where = `WHERE (doc_cliente ILIKE $1 OR nom_fan_cliente ILIKE $1 OR raz_soc_cliente ILIKE $1)`;
+      params = [b];
+    }
+
+    const totalRes = await poolExterno.query(
+      `SELECT COUNT(*) FROM "viewClientes" ${where}`, params
     );
-    res.json(resultado.rows[0]);
+    const total = parseInt(totalRes.rows[0].count);
+
+    const clientesRes = await poolExterno.query(
+      `SELECT id_cliente, doc_cliente, nom_fan_cliente, raz_soc_cliente, es_activo
+       FROM "viewClientes"
+       ${where}
+       ORDER BY nom_fan_cliente, raz_soc_cliente
+       LIMIT ${porPagina} OFFSET ${desde}`,
+      params
+    );
+
+    res.json({
+      clientes: clientesRes.rows,
+      total,
+      pagina,
+      totalPaginas: Math.ceil(total / porPagina)
+    });
   } catch (error) {
+    console.error('Error clientes:', error.message);
     res.status(500).json({ mensaje: 'Error del servidor' });
   }
 });
