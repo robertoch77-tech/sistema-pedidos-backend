@@ -1,6 +1,28 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const { Pool } = require('pg');
+
+// Cache de conexiones por mayorista (igual que productos.js)
+const conexiones = {};
+
+async function getConexionMayorista(mayorista_id) {
+  if (conexiones[mayorista_id]) return conexiones[mayorista_id];
+  const resultado = await pool.query(
+    'SELECT db_connection FROM mayoristas WHERE id = $1',
+    [mayorista_id]
+  );
+  if (!resultado.rows[0]?.db_connection) return null;
+  const poolExterno = new Pool({
+    connectionString: resultado.rows[0].db_connection,
+    ssl: false
+  });
+  poolExterno.on('connect', (client) => {
+    client.query("SET client_encoding TO 'LATIN1'");
+  });
+  conexiones[mayorista_id] = poolExterno;
+  return poolExterno;
+}
 
 // Mis Pedidos del cliente
 router.get('/cliente/:cuit', async (req, res) => {
@@ -51,7 +73,6 @@ router.get('/:mayorista_id', async (req, res) => {
     const params = [mayorista_id];
     let i = 2;
 
-    // Excluir siempre los borradores del cliente
     if (estado && estado !== 'todos') {
       condiciones.push(`p.estado = $${i}`); params.push(estado); i++;
     } else {
@@ -104,6 +125,8 @@ router.post('/', async (req, res) => {
   try {
     const { mayorista_id, cliente_cuit, cliente_nombre, numero_pedido,
             descuento, total_estimado, observaciones, tamanio_hoja, estado, items } = req.body;
+
+    // 1 — Grabar en Supabase (igual que antes)
     const pedido = await pool.query(
       `INSERT INTO pedidos_web
          (mayorista_id, cliente_cuit, cliente_nombre, numero_pedido, descuento,
@@ -114,6 +137,7 @@ router.post('/', async (req, res) => {
        estado || 'borrador', false]
     );
     const pedido_id = pedido.rows[0].id;
+
     for (const item of items) {
       await pool.query(
         `INSERT INTO pedidos_web_items (pedido_id,producto_id,codigo,nombre,rubro,cantidad,precio_unitario)
@@ -121,7 +145,75 @@ router.post('/', async (req, res) => {
         [pedido_id, item.producto_id||null, item.codigo||'', item.nombre||'', item.rubro||'', item.cantidad, item.precio_unitario||0]
       );
     }
-    // TODO: si estado === 'enviado' → enviar email al mayorista
+
+    // 2 — Si es enviado, verificar si ivan_activo antes de replicar
+    if (estado === 'enviado') {
+      try {
+        const cfgRes = await pool.query(
+          `SELECT ivan_activo, ivan_id_deposito, ivan_id_operario, ivan_id_vendedor,
+                  ivan_id_tipo_pedido, ivan_id_sucursal, ivan_porc_iva
+           FROM mayoristas WHERE id = $1`,
+          [mayorista_id]
+        );
+        const cfg = cfgRes.rows[0];
+
+        // Solo replica si ivan_activo está en true
+        if (cfg && cfg.ivan_activo) {
+          const poolIvan = await getConexionMayorista(mayorista_id);
+
+          const clienteRes = await poolIvan.query(
+            `SELECT id_cliente FROM "viewClientes" WHERE cuit_cliente = $1 LIMIT 1`,
+            [cliente_cuit]
+          );
+          const fk_id_cliente = clienteRes.rows[0]?.id_cliente || null;
+
+          if (fk_id_cliente) {
+            const ahora = new Date().toISOString();
+
+            // INSERT en Pedidos de Ivan
+            const pedidoIvanRes = await poolIvan.query(
+              `INSERT INTO Pedidos
+                 (fec_pedido, fec_fac_pedido, nro_pedido, nro_suc_pedido, estado_pedido,
+                  fec_estado_pedido, obs_pedido, es_remoto, porc_desc_pedido,
+                  fk_id_producto_deposito, fk_id_operario, fk_id_vendedor,
+                  fk_id_tipo_pedido, fk_id_cliente)
+               VALUES ($1,$2,$3,$4,'PENDIENTE',$5,$6,true,$7,$8,$9,$10,$11,$12)
+               RETURNING id`,
+              [ahora, ahora, numero_pedido, cfg.ivan_id_sucursal,
+               ahora, observaciones || '', descuento || 0,
+               cfg.ivan_id_deposito, cfg.ivan_id_operario,
+               cfg.ivan_id_vendedor, cfg.ivan_id_tipo_pedido, fk_id_cliente]
+            );
+            const fk_id_pedido = pedidoIvanRes.rows[0].id;
+
+            // INSERT items
+            for (const item of items) {
+              const itemRes = await poolIvan.query(
+                `INSERT INTO Items_Pedidos
+                   (can_item_pedido, porc_iva_item_pedido, imp_neto_item_pedido,
+                    imp_int_item_pedido, porc_desc_item_pedido, fk_id_pedido)
+                 VALUES ($1,$2,$3,0,0,$4)
+                 RETURNING id`,
+                [item.cantidad, cfg.ivan_porc_iva,
+                 item.precio_unitario * item.cantidad, fk_id_pedido]
+              );
+              const fk_id_item = itemRes.rows[0].id;
+
+              await poolIvan.query(
+                `INSERT INTO Productos_x_Items_Pedidos (fk_id_producto, fk_id_item_pedido)
+                 VALUES ($1,$2)`,
+                [item.producto_id, fk_id_item]
+              );
+            }
+          } else {
+            console.warn(`Pedido ${numero_pedido}: cliente CUIT ${cliente_cuit} no encontrado en base de Ivan`);
+          }
+        }
+      } catch (errorIvan) {
+        console.error('Error replicando en Ivan:', errorIvan.message);
+      }
+    }
+
     res.json(pedido.rows[0]);
   } catch (error) {
     console.error('Error guardando pedido:', error);
@@ -146,7 +238,6 @@ router.put('/:id', async (req, res) => {
         [id, item.producto_id||null, item.codigo||'', item.nombre||'', item.rubro||'', item.cantidad, item.precio_unitario||0]
       );
     }
-    // TODO: si estado === 'enviado' → enviar email al mayorista
     const resultado = await pool.query(`SELECT * FROM pedidos_web WHERE id=$1`, [id]);
     res.json(resultado.rows[0]);
   } catch (error) {
