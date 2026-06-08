@@ -111,4 +111,21 @@ router.post('/:id/resetear-clave-cliente', async (req, res) => {
   } catch (error) { res.status(500).json({ mensaje: 'Error del servidor' }); }
 });
 
+// GET — próximo número de pedido (devuelve el número actual y suma 1)
+router.get('/:id/proximo-numero', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const resultado = await pool.query(
+      `UPDATE mayoristas SET numero_pedido_inicio = numero_pedido_inicio + 1
+       WHERE id=$1 RETURNING numero_pedido_inicio - 1 AS numero`,
+      [id]
+    );
+    if (!resultado.rows[0]) return res.status(404).json({ mensaje: 'Mayorista no encontrado' });
+    res.json({ numero: resultado.rows[0].numero });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ mensaje: 'Error del servidor' });
+  }
+});
+
 module.exports = router;
