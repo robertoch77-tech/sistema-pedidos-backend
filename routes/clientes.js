@@ -35,7 +35,6 @@ function normalizar(texto) {
 }
 
 // Buscar clientes en la base de Ivan (viewClientes)
-// Busca por CUIT (doc_cliente), nombre (nom_fan_cliente) o razón social (raz_soc_cliente)
 router.get('/:mayorista_id', async (req, res) => {
   try {
     const { mayorista_id } = req.params;
@@ -78,6 +77,39 @@ router.get('/:mayorista_id', async (req, res) => {
     });
   } catch (error) {
     console.error('Error clientes:', error.message);
+    res.status(500).json({ mensaje: 'Error del servidor' });
+  }
+});
+
+// Cuentas corrientes del cliente
+router.get('/:mayorista_id/ctas-ctes/:id_cliente', async (req, res) => {
+  try {
+    const { mayorista_id, id_cliente } = req.params;
+    const { fecha_desde, fecha_hasta } = req.query;
+
+    const poolExterno = await getConexionMayorista(mayorista_id);
+    if (!poolExterno) return res.status(404).json({ mensaje: 'Sin conexión configurada' });
+
+    let condiciones = [`fk_id_cliente = $1`];
+    let params = [id_cliente];
+    let i = 2;
+
+    if (fecha_desde) { condiciones.push(`fecha_comp >= $${i}`); params.push(fecha_desde); i++; }
+    if (fecha_hasta) { condiciones.push(`fecha_comp <= $${i}`); params.push(fecha_hasta); i++; }
+
+    const resultado = await poolExterno.query(
+      `SELECT id_tipo, tipo, fk_id_cliente, id_cta_cte_cliente_temp,
+              importe, saldo, fecha_comp, fecha_venc, fecha_generacion,
+              nro_suc_comprobante, nro_comprobante, letra
+       FROM "viewClientesCtasCtes"
+       WHERE ${condiciones.join(' AND ')}
+       ORDER BY fecha_comp DESC`,
+      params
+    );
+
+    res.json(resultado.rows);
+  } catch (error) {
+    console.error('Error ctas ctes:', error.message);
     res.status(500).json({ mensaje: 'Error del servidor' });
   }
 });

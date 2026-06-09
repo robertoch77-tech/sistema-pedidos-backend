@@ -151,7 +151,7 @@ router.post('/', async (req, res) => {
       try {
         const cfgRes = await pool.query(
           `SELECT ivan_activo, ivan_id_deposito, ivan_id_operario, ivan_id_vendedor,
-                  ivan_id_tipo_pedido, ivan_id_sucursal, ivan_porc_iva
+                  ivan_id_tipo_pedido, ivan_id_sucursal, ivan_porc_iva, ivan_id_condicion_venta
            FROM mayoristas WHERE id = $1`,
           [mayorista_id]
         );
@@ -169,19 +169,29 @@ router.post('/', async (req, res) => {
           if (fk_id_cliente) {
             const ahora = new Date().toISOString();
 
-            // INSERT en Pedidos de Ivan
+            // Armar columnas e valores dinámicamente según si hay condicion_venta
+            const columnas = [
+              'fec_pedido', 'fec_fac_pedido', 'nro_pedido', 'nro_suc_pedido', 'estado_pedido',
+              'fec_estado_pedido', 'obs_pedido', 'es_remoto', 'porc_desc_pedido',
+              'fk_id_producto_deposito', 'fk_id_operario', 'fk_id_vendedor',
+              'fk_id_tipo_pedido', 'fk_id_cliente'
+            ];
+            const valores = [
+              ahora, ahora, numero_pedido, cfg.ivan_id_sucursal, 'PENDIENTE',
+              ahora, observaciones || '', true, descuento || 0,
+              cfg.ivan_id_deposito, cfg.ivan_id_operario,
+              cfg.ivan_id_vendedor, cfg.ivan_id_tipo_pedido, fk_id_cliente
+            ];
+
+            if (cfg.ivan_id_condicion_venta !== null && cfg.ivan_id_condicion_venta !== undefined) {
+              columnas.push('fk_id_condicion_venta');
+              valores.push(cfg.ivan_id_condicion_venta ? parseInt(cfg.ivan_id_condicion_venta) : null);
+            }
+
+            const placeholders = valores.map((_, i) => `$${i + 1}`).join(',');
             const pedidoIvanRes = await poolIvan.query(
-              `INSERT INTO Pedidos
-                 (fec_pedido, fec_fac_pedido, nro_pedido, nro_suc_pedido, estado_pedido,
-                  fec_estado_pedido, obs_pedido, es_remoto, porc_desc_pedido,
-                  fk_id_producto_deposito, fk_id_operario, fk_id_vendedor,
-                  fk_id_tipo_pedido, fk_id_cliente)
-               VALUES ($1,$2,$3,$4,'PENDIENTE',$5,$6,true,$7,$8,$9,$10,$11,$12)
-               RETURNING *`,
-              [ahora, ahora, numero_pedido, cfg.ivan_id_sucursal,
-               ahora, observaciones || '', descuento || 0,
-               cfg.ivan_id_deposito, cfg.ivan_id_operario,
-               cfg.ivan_id_vendedor, cfg.ivan_id_tipo_pedido, fk_id_cliente]
+              `INSERT INTO Pedidos (${columnas.join(', ')}) VALUES (${placeholders}) RETURNING *`,
+              valores
             );
             const fk_id_pedido = pedidoIvanRes.rows[0].id_pedido;
 

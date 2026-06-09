@@ -28,7 +28,8 @@ router.get('/:id/configuracion', async (req, res) => {
     const resultado = await pool.query(
       `SELECT mostrar_precios, mostrar_stock, mostrar_marca, mostrar_rubro, mostrar_tipo,
               habilitar_calculadora, descuento_1, descuento_2, descuento_3, iva,
-              orden_pdf, config_habilitada, pedir_clave, tamanio_hoja, items_por_hoja, numero_pedido_inicio
+              orden_pdf, config_habilitada, pedir_clave, tamanio_hoja, items_por_hoja,
+              numero_pedido_inicio, habilitar_ctas_ctes
        FROM mayoristas WHERE id=$1`, [id]
     );
     if (!resultado.rows[0]) return res.status(404).json({ mensaje: 'Mayorista no encontrado' });
@@ -42,19 +43,20 @@ router.put('/:id/configuracion', async (req, res) => {
     const {
       mostrar_precios, mostrar_stock, mostrar_marca, mostrar_rubro, mostrar_tipo,
       pedir_clave, tamanio_hoja, items_por_hoja, numero_pedido_inicio,
-      habilitar_calculadora, descuento_1, descuento_2, descuento_3, iva, orden_pdf
+      habilitar_calculadora, descuento_1, descuento_2, descuento_3, iva, orden_pdf,
+      habilitar_ctas_ctes
     } = req.body;
     const resultado = await pool.query(
       `UPDATE mayoristas SET
         mostrar_precios=$1, mostrar_stock=$2, mostrar_marca=$3, mostrar_rubro=$4, mostrar_tipo=$5,
         pedir_clave=$6, tamanio_hoja=$7, items_por_hoja=$8, numero_pedido_inicio=$9,
         habilitar_calculadora=$10, descuento_1=$11, descuento_2=$12, descuento_3=$13, iva=$14,
-        orden_pdf=$15
-       WHERE id=$16 RETURNING *`,
+        orden_pdf=$15, habilitar_ctas_ctes=$16
+       WHERE id=$17 RETURNING *`,
       [mostrar_precios, mostrar_stock, mostrar_marca, mostrar_rubro, mostrar_tipo,
        pedir_clave, tamanio_hoja, items_por_hoja, numero_pedido_inicio,
        habilitar_calculadora, descuento_1||0, descuento_2||0, descuento_3||0, iva||21,
-       orden_pdf||'codigo', id]
+       orden_pdf||'codigo', habilitar_ctas_ctes||false, id]
     );
     res.json(resultado.rows[0]);
   } catch (error) {
