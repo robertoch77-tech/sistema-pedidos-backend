@@ -2,8 +2,6 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 const { Pool } = require('pg');
-const https = require('https');
-const http = require('http');
 
 // Cache de conexiones por mayorista
 const conexiones = {};
@@ -127,28 +125,6 @@ router.get('/:mayorista_id', async (req, res) => {
     });
   } catch (error) {
     console.error('Error productos:', error.message);
-    res.status(500).json({ mensaje: 'Error del servidor' });
-  }
-});
-
-// Proxy de imágenes — resuelve el problema de Mixed Content (HTTP vs HTTPS)
-router.get('/imagen', async (req, res) => {
-  try {
-    const { url } = req.query;
-    if (!url) return res.status(400).json({ mensaje: 'Falta la URL' });
-
-    const urlDecoded = decodeURIComponent(url);
-    const cliente = urlDecoded.startsWith('https') ? https : http;
-
-    cliente.get(urlDecoded, (imgRes) => {
-      res.setHeader('Content-Type', imgRes.headers['content-type'] || 'image/jpeg');
-      res.setHeader('Cache-Control', 'public, max-age=86400');
-      imgRes.pipe(res);
-    }).on('error', () => {
-      res.status(404).json({ mensaje: 'Imagen no encontrada' });
-    });
-  } catch (error) {
-    console.error('Error proxy imagen:', error.message);
     res.status(500).json({ mensaje: 'Error del servidor' });
   }
 });
