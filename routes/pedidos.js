@@ -157,7 +157,6 @@ router.post('/', async (req, res) => {
         );
         const cfg = cfgRes.rows[0];
 
-        // Solo replica si ivan_activo está en true
         if (cfg && cfg.ivan_activo) {
           const poolIvan = await getConexionMayorista(mayorista_id);
 
@@ -184,7 +183,7 @@ router.post('/', async (req, res) => {
                cfg.ivan_id_deposito, cfg.ivan_id_operario,
                cfg.ivan_id_vendedor, cfg.ivan_id_tipo_pedido, fk_id_cliente]
             );
-            const fk_id_pedido = pedidoIvanRes.rows[0].id || pedidoIvanRes.rows[0].id_pedido || Object.values(pedidoIvanRes.rows[0])[0];
+            const fk_id_pedido = pedidoIvanRes.rows[0].id_pedido;
 
             // INSERT items
             for (const item of items) {
@@ -193,11 +192,11 @@ router.post('/', async (req, res) => {
                    (can_item_pedido, porc_iva_item_pedido, imp_neto_item_pedido,
                     imp_int_item_pedido, porc_desc_item_pedido, fk_id_pedido)
                  VALUES ($1,$2,$3,0,0,$4)
-                 RETURNING id`,
+                 RETURNING *`,
                 [item.cantidad, cfg.ivan_porc_iva,
                  item.precio_unitario * item.cantidad, fk_id_pedido]
               );
-              const fk_id_item = itemRes.rows[0].id;
+              const fk_id_item = itemRes.rows[0].id_item_pedido;
 
               await poolIvan.query(
                 `INSERT INTO Productos_x_Items_Pedidos (fk_id_producto, fk_id_item_pedido)
@@ -210,13 +209,13 @@ router.post('/', async (req, res) => {
           }
         }
       } catch (errorIvan) {
-  console.error('Error replicando en Ivan:', errorIvan.message);
-  return res.status(200).json({ 
-    ...pedido.rows[0], 
-    ivan_error: true,
-    ivan_mensaje: errorIvan.message 
-  });
-}
+        console.error('Error replicando en Ivan:', errorIvan.message);
+        return res.status(200).json({
+          ...pedido.rows[0],
+          ivan_error: true,
+          ivan_mensaje: errorIvan.message
+        });
+      }
     }
 
     res.json(pedido.rows[0]);
