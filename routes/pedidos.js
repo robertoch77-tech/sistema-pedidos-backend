@@ -178,13 +178,13 @@ router.post('/', async (req, res) => {
                   fk_id_producto_deposito, fk_id_operario, fk_id_vendedor,
                   fk_id_tipo_pedido, fk_id_cliente)
                VALUES ($1,$2,$3,$4,'PENDIENTE',$5,$6,true,$7,$8,$9,$10,$11,$12)
-               RETURNING id`,
+               RETURNING *`,
               [ahora, ahora, numero_pedido, cfg.ivan_id_sucursal,
                ahora, observaciones || '', descuento || 0,
                cfg.ivan_id_deposito, cfg.ivan_id_operario,
                cfg.ivan_id_vendedor, cfg.ivan_id_tipo_pedido, fk_id_cliente]
             );
-            const fk_id_pedido = pedidoIvanRes.rows[0].id;
+            const fk_id_pedido = pedidoIvanRes.rows[0].id || pedidoIvanRes.rows[0].id_pedido || Object.values(pedidoIvanRes.rows[0])[0];
 
             // INSERT items
             for (const item of items) {
