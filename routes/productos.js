@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 const { Pool } = require('pg');
+const https = require('https');
+const http = require('http');
 
 // Cache de conexiones por mayorista
 const conexiones = {};
@@ -31,7 +33,6 @@ async function getConexionMayorista(mayorista_id) {
 }
 
 // Reemplaza ñ, acentos y el caracter roto (�) por comodin _ (1 caracter cualquiera).
-// Mismo criterio que ya usabas en la busqueda, asi la ñ no rompe el filtro.
 function normalizar(texto) {
   return texto.replace(/[ñÑáéíóúÁÉÍÓÚ\uFFFD]/g, '_');
 }
@@ -80,14 +81,10 @@ router.get('/:mayorista_id', async (req, res) => {
     const poolExterno = await getConexionMayorista(mayorista_id);
     if (!poolExterno) return res.status(404).json({ mensaje: 'Sin conexión configurada' });
 
-    // Armo el WHERE dinamico segun lo que venga (busqueda + filtros)
     const condiciones = [];
     const params = [];
     let i = 1;
 
-    // Busqueda incremental: cada palabra puede estar en cualquier campo,
-    // en cualquier parte y en cualquier orden (AND entre palabras).
-    // Ej: "caño negro" encuentra "Caño PVC negro 1/2".
     if (busqueda.trim() !== '') {
       const palabras = normalizar(busqueda).trim().split(/\s+/).filter(p => p);
       for (const palabra of palabras) {
@@ -105,14 +102,12 @@ router.get('/:mayorista_id', async (req, res) => {
 
     const where = condiciones.length ? `WHERE ${condiciones.join(' AND ')}` : '';
 
-    // Total ya filtrado -> sobre esto se calcula la paginacion
     const totalResultado = await poolExterno.query(
       `SELECT COUNT(*) FROM "viewProductos" ${where}`,
       params
     );
     const total = parseInt(totalResultado.rows[0].count);
 
-    // Productos de la pagina actual (50), respetando el filtro
     const productosResultado = await poolExterno.query(
       `SELECT id_producto, cod_producto, des_producto, imagen_producto,
               precio_producto, stock_temporal, des_producto_marca,
@@ -132,6 +127,28 @@ router.get('/:mayorista_id', async (req, res) => {
     });
   } catch (error) {
     console.error('Error productos:', error.message);
+    res.status(500).json({ mensaje: 'Error del servidor' });
+  }
+});
+
+// Proxy de imágenes — resuelve el problema de Mixed Content (HTTP vs HTTPS)
+router.get('/imagen', async (req, res) => {
+  try {
+    const { url } = req.query;
+    if (!url) return res.status(400).json({ mensaje: 'Falta la URL' });
+
+    const urlDecoded = decodeURIComponent(url);
+    const cliente = urlDecoded.startsWith('https') ? https : http;
+
+    cliente.get(urlDecoded, (imgRes) => {
+      res.setHeader('Content-Type', imgRes.headers['content-type'] || 'image/jpeg');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      imgRes.pipe(res);
+    }).on('error', () => {
+      res.status(404).json({ mensaje: 'Imagen no encontrada' });
+    });
+  } catch (error) {
+    console.error('Error proxy imagen:', error.message);
     res.status(500).json({ mensaje: 'Error del servidor' });
   }
 });

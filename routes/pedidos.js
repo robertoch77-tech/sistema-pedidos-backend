@@ -162,7 +162,7 @@ router.post('/', async (req, res) => {
           const poolIvan = await getConexionMayorista(mayorista_id);
 
           const clienteRes = await poolIvan.query(
-            `SELECT id_cliente FROM "viewClientes" WHERE cuit_cliente = $1 LIMIT 1`,
+            `SELECT id_cliente FROM "viewClientes" WHERE doc_cliente = $1 LIMIT 1`,
             [cliente_cuit]
           );
           const fk_id_cliente = clienteRes.rows[0]?.id_cliente || null;
@@ -210,8 +210,13 @@ router.post('/', async (req, res) => {
           }
         }
       } catch (errorIvan) {
-        console.error('Error replicando en Ivan:', errorIvan.message);
-      }
+  console.error('Error replicando en Ivan:', errorIvan.message);
+  return res.status(200).json({ 
+    ...pedido.rows[0], 
+    ivan_error: true,
+    ivan_mensaje: errorIvan.message 
+  });
+}
     }
 
     res.json(pedido.rows[0]);
