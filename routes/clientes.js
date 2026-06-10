@@ -68,7 +68,7 @@ router.get('/:mayorista_id/ctas-ctes/:id_cliente', async (req, res) => {
     const poolExterno = await getConexionMayorista(mayorista_id);
     if (!poolExterno) return res.status(404).json({ mensaje: 'Sin conexión configurada' });
 
-    let condiciones = [`fk_id_cliente = $1`];
+    let condiciones = [`doc_cliente = $1`];
     let params = [id_cliente];
     let i = 2;
 
@@ -76,8 +76,8 @@ router.get('/:mayorista_id/ctas-ctes/:id_cliente', async (req, res) => {
     if (fecha_hasta) { condiciones.push(`fecha_comp <= $${i}`); params.push(fecha_hasta); i++; }
 
     const resultado = await poolExterno.query(
-      `SELECT id_tipo, tipo, fk_id_cliente, id_cta_cte_cliente_temp,
-              importe, saldo, fecha_comp, fecha_venc, fecha_generacion,
+      `SELECT id_tipo, tipo, fk_id_cliente, doc_cliente, raz_soc_cliente,
+              importe, saldo, fecha_comp, fecha_venc,
               nro_suc_comprobante, nro_comprobante, letra
        FROM "viewClientesCtasCtes"
        WHERE ${condiciones.join(' AND ')}
