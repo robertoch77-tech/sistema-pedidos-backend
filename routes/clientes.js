@@ -113,5 +113,16 @@ router.get('/:mayorista_id/ctas-ctes/:id_cliente', async (req, res) => {
     res.status(500).json({ mensaje: 'Error del servidor' });
   }
 });
-
+// TEMPORAL — diagnóstico ctas ctes
+router.get('/:mayorista_id/diag-ctas', async (req, res) => {
+  try {
+    const { mayorista_id } = req.params;
+    const poolExterno = await getConexionMayorista(mayorista_id);
+    if (!poolExterno) return res.status(404).json({ mensaje: 'Sin conexión' });
+    const r = await poolExterno.query(`SELECT * FROM "viewClientesCtasCtes" LIMIT 5`);
+    res.json(r.rows);
+  } catch (error) {
+    res.status(500).json({ mensaje: error.message });
+  }
+});
 module.exports = router;
