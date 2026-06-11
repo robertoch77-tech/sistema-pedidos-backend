@@ -15,7 +15,7 @@ const checkAdmin = (req, res, next) => {
 router.get('/mayoristas', checkAdmin, async (req, res) => {
   try {
     const resultado = await pool.query(
-      `SELECT id, nombre, email, codigo, activo, config_habilitada, db_connection, ivan_activo, habilitar_ctas_ctes
+      `SELECT id, nombre, email, codigo, activo, config_habilitada, db_connection, ivan_activo, habilitar_ctas_ctes, razon_social
        FROM mayoristas ORDER BY nombre`
     );
     res.json(resultado.rows);
@@ -53,17 +53,17 @@ router.post('/mayoristas', checkAdmin, async (req, res) => {
   }
 });
 
-// PUT — editar datos (nombre, email, db_connection)
+// PUT — editar datos (nombre, email, db_connection, razon_social)
 router.put('/mayoristas/:id/datos', checkAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const { nombre, email, db_connection } = req.body;
+    const { nombre, email, db_connection, razon_social } = req.body;
     if (!nombre || !email)
       return res.status(400).json({ mensaje: 'Nombre y email son obligatorios' });
     const resultado = await pool.query(
-      `UPDATE mayoristas SET nombre=$1, email=$2, db_connection=$3
-       WHERE id=$4 RETURNING id, nombre, email, codigo, activo, config_habilitada, db_connection`,
-      [nombre.trim(), email.trim().toLowerCase(), db_connection || '', id]
+      `UPDATE mayoristas SET nombre=$1, email=$2, db_connection=$3, razon_social=$4
+       WHERE id=$5 RETURNING id, nombre, email, codigo, activo, config_habilitada, db_connection, razon_social`,
+      [nombre.trim(), email.trim().toLowerCase(), db_connection || '', razon_social || null, id]
     );
     res.json(resultado.rows[0]);
   } catch (error) {
