@@ -76,7 +76,7 @@ router.get('/:mayorista_id/ctas-ctes/:id_cliente', async (req, res) => {
     if (fecha_hasta) { condiciones.push(`fecha_comp <= $${i}`); params.push(fecha_hasta); i++; }
 
     const resultado = await poolExterno.query(
-      `SELECT id_tipo, tipo, fk_id_cliente, doc_cliente, raz_soc_cliente,
+      `SELECT id_tipo, tipo, fk_id_cliente, doc_cliente,
               importe, saldo, fecha_comp, fecha_venc,
               nro_suc_comprobante, nro_comprobante, letra
        FROM "viewClientesCtasCtes"
