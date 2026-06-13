@@ -3,7 +3,6 @@ const router = express.Router();
 const pool = require('../db');
 const { Pool } = require('pg');
 
-// Cache de conexiones por mayorista (igual que productos.js)
 const conexiones = {};
 
 async function getConexionMayorista(mayorista_id) {
@@ -61,6 +60,30 @@ router.get('/:mayorista_id/nuevos', async (req, res) => {
     res.json({ cantidad: parseInt(resultado.rows[0].count) });
   } catch (error) {
     res.json({ cantidad: 0 });
+  }
+});
+
+// Traer un pedido por ID
+router.get('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const resultado = await pool.query(
+      `SELECT p.*,
+         COALESCE(json_agg(json_build_object(
+           'producto_id', pi.producto_id,'codigo', pi.codigo,'nombre', pi.nombre,'rubro', pi.rubro,
+           'cantidad', pi.cantidad,'precio_unitario', pi.precio_unitario
+         )) FILTER (WHERE pi.id IS NOT NULL),'[]'::json) as items
+       FROM pedidos_web p
+       LEFT JOIN pedidos_web_items pi ON p.id = pi.pedido_id
+       WHERE p.id=$1
+       GROUP BY p.id`,
+      [id]
+    );
+    if (!resultado.rows[0]) return res.status(404).json({ mensaje: 'No encontrado' });
+    res.json(resultado.rows[0]);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ mensaje: 'Error del servidor' });
   }
 });
 
@@ -126,7 +149,6 @@ router.post('/', async (req, res) => {
     const { mayorista_id, cliente_cuit, cliente_nombre, numero_pedido,
             descuento, total_estimado, observaciones, tamanio_hoja, estado, items } = req.body;
 
-    // 1 — Grabar en Supabase (igual que antes)
     const pedido = await pool.query(
       `INSERT INTO pedidos_web
          (mayorista_id, cliente_cuit, cliente_nombre, numero_pedido, descuento,
@@ -146,7 +168,6 @@ router.post('/', async (req, res) => {
       );
     }
 
-    // 2 — Si es enviado, verificar si ivan_activo antes de replicar
     if (estado === 'enviado') {
       try {
         const cfgRes = await pool.query(
@@ -169,7 +190,6 @@ router.post('/', async (req, res) => {
           if (fk_id_cliente) {
             const ahora = new Date().toISOString();
 
-            // Armar columnas e valores dinámicamente según si hay condicion_venta
             const columnas = [
               'fec_pedido', 'fec_fac_pedido', 'nro_pedido', 'nro_suc_pedido', 'estado_pedido',
               'fec_estado_pedido', 'obs_pedido', 'es_remoto', 'porc_desc_pedido',
@@ -195,7 +215,6 @@ router.post('/', async (req, res) => {
             );
             const fk_id_pedido = pedidoIvanRes.rows[0].id_pedido;
 
-            // INSERT items
             for (const item of items) {
               const itemRes = await poolIvan.query(
                 `INSERT INTO Items_Pedidos
