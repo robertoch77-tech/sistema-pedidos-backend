@@ -15,7 +15,7 @@ const checkAdmin = (req, res, next) => {
 router.get('/mayoristas', checkAdmin, async (req, res) => {
   try {
     const resultado = await pool.query(
-      `SELECT id, nombre, email, codigo, activo, config_habilitada, db_connection, ivan_activo, habilitar_ctas_ctes, razon_social
+      `SELECT id, nombre, email, codigo, activo, config_habilitada, db_connection, ivan_activo, habilitar_ctas_ctes, razon_social, habilitar_demanda
        FROM mayoristas ORDER BY nombre`
     );
     res.json(resultado.rows);
@@ -41,8 +41,8 @@ router.post('/mayoristas', checkAdmin, async (req, res) => {
           mostrar_precios, mostrar_stock, mostrar_marca, mostrar_rubro, mostrar_tipo,
           pedir_clave, tamanio_hoja, items_por_hoja, numero_pedido_inicio,
           habilitar_calculadora, descuento_1, descuento_2, descuento_3, iva, orden_pdf,
-          ivan_activo, habilitar_ctas_ctes)
-       VALUES ($1,$2,$3,$4,$5,true,false,true,true,true,true,true,false,'A4',30,1,false,0,0,0,21,'codigo',false,false)
+          ivan_activo, habilitar_ctas_ctes, habilitar_demanda)
+       VALUES ($1,$2,$3,$4,$5,true,false,true,true,true,true,true,false,'A4',30,1,false,0,0,0,21,'codigo',false,false,false)
        RETURNING id, nombre, email, codigo`,
       [nombre.trim(), email.trim().toLowerCase(), password, codigo.trim().toLowerCase(), db_connection || '']
     );
@@ -100,6 +100,17 @@ router.put('/mayoristas/:id/toggle-ctas-ctes', checkAdmin, async (req, res) => {
     const { id } = req.params;
     const resultado = await pool.query(
       'UPDATE mayoristas SET habilitar_ctas_ctes = NOT habilitar_ctas_ctes WHERE id=$1 RETURNING id, nombre, habilitar_ctas_ctes', [id]
+    );
+    res.json(resultado.rows[0]);
+  } catch (error) { res.status(500).json({ mensaje: 'Error del servidor' }); }
+});
+
+// PUT — toggle habilitar_demanda
+router.put('/mayoristas/:id/toggle-demanda', checkAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const resultado = await pool.query(
+      'UPDATE mayoristas SET habilitar_demanda = NOT habilitar_demanda WHERE id=$1 RETURNING id, nombre, habilitar_demanda', [id]
     );
     res.json(resultado.rows[0]);
   } catch (error) { res.status(500).json({ mensaje: 'Error del servidor' }); }
