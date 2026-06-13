@@ -30,8 +30,8 @@ router.get('/:mayorista_id', async (req, res) => {
     const params = [mayorista_id];
     let i = 2;
 
-    if (fecha_desde) { condiciones.push(`DATE(fecha) >= $${i}`); params.push(fecha_desde); i++; }
-    if (fecha_hasta) { condiciones.push(`DATE(fecha) <= $${i}`); params.push(fecha_hasta); i++; }
+    if (fecha_desde) { condiciones.push(`fecha >= ($${i}::date AT TIME ZONE 'America/Argentina/Buenos_Aires')`); params.push(fecha_desde); i++; }
+    if (fecha_hasta) { condiciones.push(`fecha < (($${i}::date + interval '1 day') AT TIME ZONE 'America/Argentina/Buenos_Aires')`); params.push(fecha_hasta); i++; }
     if (busqueda) { condiciones.push(`busqueda ILIKE $${i}`); params.push(`%${busqueda}%`); i++; }
 
     const resultado = await pool.query(
