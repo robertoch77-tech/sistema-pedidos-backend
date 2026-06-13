@@ -54,6 +54,22 @@ router.get('/:mayorista_id', async (req, res) => {
   }
 });
 
+// Marcar búsqueda como atendida (borrar esa búsqueda específica)
+router.delete('/:mayorista_id/atender', async (req, res) => {
+  try {
+    const { mayorista_id } = req.params;
+    const { busqueda } = req.body;
+    await pool.query(
+      'DELETE FROM demanda_no_satisfecha WHERE mayorista_id = $1 AND busqueda = $2',
+      [mayorista_id, busqueda]
+    );
+    res.json({ ok: true });
+  } catch (error) {
+    console.error(error);
+    res.json({ ok: false });
+  }
+});
+
 // Limpiar demanda (borrar todos los registros del mayorista)
 router.delete('/:mayorista_id', async (req, res) => {
   try {
