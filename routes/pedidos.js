@@ -63,30 +63,6 @@ router.get('/:mayorista_id/nuevos', async (req, res) => {
   }
 });
 
-// Traer un pedido por ID
-router.get('/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const resultado = await pool.query(
-      `SELECT p.*,
-         COALESCE(json_agg(json_build_object(
-           'producto_id', pi.producto_id,'codigo', pi.codigo,'nombre', pi.nombre,'rubro', pi.rubro,
-           'cantidad', pi.cantidad,'precio_unitario', pi.precio_unitario
-         )) FILTER (WHERE pi.id IS NOT NULL),'[]'::json) as items
-       FROM pedidos_web p
-       LEFT JOIN pedidos_web_items pi ON p.id = pi.pedido_id
-       WHERE p.id=$1
-       GROUP BY p.id`,
-      [id]
-    );
-    if (!resultado.rows[0]) return res.status(404).json({ mensaje: 'No encontrado' });
-    res.json(resultado.rows[0]);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ mensaje: 'Error del servidor' });
-  }
-});
-
 // Pedidos del panel del mayorista (nunca muestra borradores del cliente)
 router.get('/:mayorista_id', async (req, res) => {
   try {
@@ -136,6 +112,30 @@ router.put('/:id/imprimir', async (req, res) => {
       `UPDATE pedidos_web SET estado='impreso', visto_mayorista=true WHERE id=$1 RETURNING *`,
       [id]
     );
+    res.json(resultado.rows[0]);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ mensaje: 'Error del servidor' });
+  }
+});
+
+// Traer un pedido por ID (para editar borrador desde cliente)
+router.get('/detalle/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const resultado = await pool.query(
+      `SELECT p.*,
+         COALESCE(json_agg(json_build_object(
+           'producto_id', pi.producto_id,'codigo', pi.codigo,'nombre', pi.nombre,'rubro', pi.rubro,
+           'cantidad', pi.cantidad,'precio_unitario', pi.precio_unitario
+         )) FILTER (WHERE pi.id IS NOT NULL),'[]'::json) as items
+       FROM pedidos_web p
+       LEFT JOIN pedidos_web_items pi ON p.id = pi.pedido_id
+       WHERE p.id=$1
+       GROUP BY p.id`,
+      [id]
+    );
+    if (!resultado.rows[0]) return res.status(404).json({ mensaje: 'No encontrado' });
     res.json(resultado.rows[0]);
   } catch (error) {
     console.error(error);
