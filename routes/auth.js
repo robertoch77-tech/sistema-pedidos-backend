@@ -62,7 +62,8 @@ router.post('/login', async (req, res) => {
         tamanio_hoja: mayorista.tamanio_hoja,
         items_por_hoja: mayorista.items_por_hoja,
         numero_pedido_inicio: mayorista.numero_pedido_inicio,
-        razon_social: mayorista.razon_social || ''
+        razon_social: mayorista.razon_social || '',
+        habilitar_demanda: mayorista.habilitar_demanda || false
       }
     });
   } catch (error) {
