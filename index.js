@@ -71,6 +71,7 @@ app.use('/api/pedidos', require('./routes/pedidos'));
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/demanda', require('./routes/demanda'));
 app.use('/api/ofertas', require('./routes/ofertas'));
+app.use('/api/productos-solicitados', require('./routes/productos-solicitados'));
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
