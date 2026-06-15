@@ -15,7 +15,7 @@ const checkAdmin = (req, res, next) => {
 router.get('/mayoristas', checkAdmin, async (req, res) => {
   try {
     const resultado = await pool.query(
-      `SELECT id, nombre, email, codigo, activo, config_habilitada, db_connection, ivan_activo, habilitar_ctas_ctes, razon_social, habilitar_demanda
+      `SELECT id, nombre, email, codigo, activo, config_habilitada, db_connection, ivan_activo, habilitar_ctas_ctes, razon_social, habilitar_demanda, habilitar_ofertas
        FROM mayoristas ORDER BY nombre`
     );
     res.json(resultado.rows);
@@ -111,6 +111,17 @@ router.put('/mayoristas/:id/toggle-demanda', checkAdmin, async (req, res) => {
     const { id } = req.params;
     const resultado = await pool.query(
       'UPDATE mayoristas SET habilitar_demanda = NOT habilitar_demanda WHERE id=$1 RETURNING id, nombre, habilitar_demanda', [id]
+    );
+    res.json(resultado.rows[0]);
+  } catch (error) { res.status(500).json({ mensaje: 'Error del servidor' }); }
+});
+
+// PUT — toggle habilitar_ofertas
+router.put('/mayoristas/:id/toggle-ofertas', checkAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const resultado = await pool.query(
+      'UPDATE mayoristas SET habilitar_ofertas = NOT habilitar_ofertas WHERE id=$1 RETURNING id, nombre, habilitar_ofertas', [id]
     );
     res.json(resultado.rows[0]);
   } catch (error) { res.status(500).json({ mensaje: 'Error del servidor' }); }

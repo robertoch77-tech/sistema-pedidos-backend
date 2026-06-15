@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const express = require('express');
+const router = express.Router();
+const pool = require('../db');
 const { Pool } = require('pg');
 
 const conexiones = {};
@@ -35,7 +38,8 @@ router.get('/cliente/:cuit', async (req, res) => {
       `SELECT p.*,
          COALESCE(json_agg(json_build_object(
            'codigo', pi.codigo,'nombre', pi.nombre,'rubro', pi.rubro,
-           'cantidad', pi.cantidad,'precio_unitario', pi.precio_unitario
+           'cantidad', pi.cantidad,'precio_unitario', pi.precio_unitario,
+           'es_oferta', pi.es_oferta,'oferta_titulo', pi.oferta_titulo
          )) FILTER (WHERE pi.id IS NOT NULL),'[]'::json) as items
        FROM pedidos_web p
        LEFT JOIN pedidos_web_items pi ON p.id = pi.pedido_id
@@ -89,7 +93,8 @@ router.get('/:mayorista_id', async (req, res) => {
       `SELECT p.*,
          COALESCE(json_agg(json_build_object(
            'codigo', pi.codigo,'nombre', pi.nombre,'rubro', pi.rubro,
-           'cantidad', pi.cantidad,'precio_unitario', pi.precio_unitario
+           'cantidad', pi.cantidad,'precio_unitario', pi.precio_unitario,
+           'es_oferta', pi.es_oferta,'oferta_titulo', pi.oferta_titulo
          )) FILTER (WHERE pi.id IS NOT NULL),'[]'::json) as items
        FROM pedidos_web p
        LEFT JOIN pedidos_web_items pi ON p.id = pi.pedido_id
@@ -127,7 +132,8 @@ router.get('/detalle/:id', async (req, res) => {
       `SELECT p.*,
          COALESCE(json_agg(json_build_object(
            'producto_id', pi.producto_id,'codigo', pi.codigo,'nombre', pi.nombre,'rubro', pi.rubro,
-           'cantidad', pi.cantidad,'precio_unitario', pi.precio_unitario
+           'cantidad', pi.cantidad,'precio_unitario', pi.precio_unitario,
+           'es_oferta', pi.es_oferta,'oferta_titulo', pi.oferta_titulo
          )) FILTER (WHERE pi.id IS NOT NULL),'[]'::json) as items
        FROM pedidos_web p
        LEFT JOIN pedidos_web_items pi ON p.id = pi.pedido_id
@@ -162,9 +168,9 @@ router.post('/', async (req, res) => {
 
     for (const item of items) {
       await pool.query(
-        `INSERT INTO pedidos_web_items (pedido_id,producto_id,codigo,nombre,rubro,cantidad,precio_unitario)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [pedido_id, item.producto_id||null, item.codigo||'', item.nombre||'', item.rubro||'', item.cantidad, item.precio_unitario||0]
+        `INSERT INTO pedidos_web_items (pedido_id,producto_id,codigo,nombre,rubro,cantidad,precio_unitario,es_oferta,oferta_titulo)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [pedido_id, item.producto_id||null, item.codigo||'', item.nombre||'', item.rubro||'', item.cantidad, item.precio_unitario||0, item.es_oferta||false, item.oferta_titulo||null]
       );
     }
 
@@ -266,9 +272,9 @@ router.put('/:id', async (req, res) => {
     await pool.query(`DELETE FROM pedidos_web_items WHERE pedido_id=$1`, [id]);
     for (const item of items) {
       await pool.query(
-        `INSERT INTO pedidos_web_items (pedido_id,producto_id,codigo,nombre,rubro,cantidad,precio_unitario)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [id, item.producto_id||null, item.codigo||'', item.nombre||'', item.rubro||'', item.cantidad, item.precio_unitario||0]
+        `INSERT INTO pedidos_web_items (pedido_id,producto_id,codigo,nombre,rubro,cantidad,precio_unitario,es_oferta,oferta_titulo)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [id, item.producto_id||null, item.codigo||'', item.nombre||'', item.rubro||'', item.cantidad, item.precio_unitario||0, item.es_oferta||false, item.oferta_titulo||null]
       );
     }
     const resultado = await pool.query(`SELECT * FROM pedidos_web WHERE id=$1`, [id]);
