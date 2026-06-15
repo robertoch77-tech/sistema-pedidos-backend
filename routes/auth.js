@@ -64,7 +64,8 @@ router.post('/login', async (req, res) => {
         numero_pedido_inicio: mayorista.numero_pedido_inicio,
         razon_social: mayorista.razon_social || '',
         habilitar_demanda: mayorista.habilitar_demanda || false,
-        habilitar_ofertas: mayorista.habilitar_ofertas || false
+        habilitar_ofertas: mayorista.habilitar_ofertas || false,
+        habilitar_productos_solicitados: mayorista.habilitar_productos_solicitados || false // === NUEVO ===
       }
     });
   } catch (error) {
