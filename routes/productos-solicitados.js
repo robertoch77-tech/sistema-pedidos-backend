@@ -18,7 +18,7 @@ router.get('/:mayorista_id', async (req, res) => {
     const baseQuery = `
       SELECT pwi.codigo, pwi.nombre, SUM(pwi.cantidad) AS total
       FROM pedidos_web_items pwi
-      JOIN pedidos p ON p.id = pwi.pedido_id
+      JOIN pedidos_web p ON p.id = pwi.pedido_id
       WHERE p.mayorista_id = $1
         AND p.estado IN ('enviado','impreso')
         AND p.fecha_pedido >= ($2::date AT TIME ZONE 'America/Argentina/Buenos_Aires')
