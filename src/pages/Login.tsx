@@ -23,10 +23,12 @@ function Login() {
   const [primeraVez, setPrimeraVez] = useState(false);
   const [error, setError] = useState('');
   const [cargando, setCargando] = useState(false);
-  const [tipo, setTipo] = useState<'mayorista' | 'cliente'>('mayorista');
-
   const params = new URLSearchParams(window.location.search);
   const codigoUrl = params.get('m');
+
+  // Si hay ?m=codigo en la URL → modo cliente forzado; si no → mayorista forzado.
+  // El toggle se elimina: el tipo se deriva de la URL, no del estado.
+  const tipo: 'mayorista' | 'cliente' = codigoUrl ? 'cliente' : 'mayorista';
 
   useEffect(() => {
     if (codigoUrl) localStorage.setItem('codigo_mayorista', codigoUrl);
@@ -95,26 +97,6 @@ function Login() {
           </div>
           <h1 className="text-3xl font-bold text-gray-800">Gestión Integral Pedidos</h1>
           <p className="text-gray-500 mt-2">Ingresá con tu cuenta</p>
-        </div>
-
-        {/* SELECTOR TIPO */}
-        <div className="flex bg-gray-100 rounded-lg p-1 mb-6">
-          <button
-            onClick={() => setTipo('mayorista')}
-            className={`flex-1 py-2 rounded-md text-sm font-medium transition-colors ${
-              tipo === 'mayorista' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500'
-            }`}
-          >
-            Mayorista
-          </button>
-          <button
-            onClick={() => setTipo('cliente')}
-            className={`flex-1 py-2 rounded-md text-sm font-medium transition-colors ${
-              tipo === 'cliente' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500'
-            }`}
-          >
-            Cliente
-          </button>
         </div>
 
         <form onSubmit={handleLogin} className="space-y-4">
