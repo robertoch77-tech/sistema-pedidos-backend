@@ -94,6 +94,7 @@ function ClienteHome() {
               Gestión Integral Pedidos{cfg.razon_social ? ` | ${cfg.razon_social}` : ''}
             </p>
             <h1 className="text-lg font-bold text-blue-600">Inicio</h1>
+            <p className="text-xs text-gray-400 leading-none mt-0.5">Panel Cliente</p>
           </div>
         </div>
         <button onClick={cerrarSesion} className="text-sm text-red-500 hover:text-red-700 font-medium">

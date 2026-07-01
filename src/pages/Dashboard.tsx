@@ -162,6 +162,7 @@ function Dashboard() {
             <div>
               <p className="text-xs text-gray-400 leading-none">Gestión Integral Pedidos{mayorista.razon_social ? ` | ${mayorista.razon_social}` : ''}</p>
               <h1 className="text-base font-bold text-blue-600 leading-tight">{mayorista.nombre || 'Panel'}</h1>
+              <p className="text-xs text-gray-400 leading-none mt-0.5">Panel Mayorista</p>
             </div>
           </div>
         </div>
@@ -174,6 +175,14 @@ function Dashboard() {
         {/* SIDEBAR */}
         <aside className={`${menuAbierto ? 'block' : 'hidden'} md:block w-64 bg-white shadow-sm min-h-screen p-4 absolute md:relative z-10`}>
           <nav className="space-y-1">
+            <button
+              onClick={() => { setPaginaActual('dashboard'); setMenuAbierto(false); }}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors text-left ${
+                paginaActual === 'dashboard' ? 'bg-blue-50 text-blue-600 font-semibold' : 'text-gray-700 hover:bg-blue-50 hover:text-blue-600'
+              }`}>
+              <span>🏠</span>
+              <span className="font-medium flex-1">Inicio</span>
+            </button>
             {menuItems.map(item => (
               <button key={item.key}
                 onClick={() => { setPaginaActual(item.key); setMenuAbierto(false); }}
