@@ -89,6 +89,8 @@ function Catalogo() {
   const [filtroRubro, setFiltroRubro] = useState('');
   const [filtroTipo, setFiltroTipo] = useState('');
   const [opciones, setOpciones] = useState<Opciones>({ marcas: [], rubros: [], tipos: [] });
+  const [rubrosFiltrados, setRubrosFiltrados] = useState<string[]>([]);
+  const [tiposFiltrados, setTiposFiltrados] = useState<string[]>([]);
 
   const [imagenAmpliada, setImagenAmpliada] = useState<string | null>(null);
   const [imagenesRotas, setImagenesRotas] = useState<Set<number>>(new Set());
@@ -115,9 +117,41 @@ function Catalogo() {
     if (!mayorista_id) return;
     fetch(`${API}/api/productos/${mayorista_id}/opciones`)
       .then(r => r.json())
-      .then(data => setOpciones({ marcas: data.marcas || [], rubros: data.rubros || [], tipos: data.tipos || [] }))
+      .then(data => {
+        setOpciones({ marcas: data.marcas || [], rubros: data.rubros || [], tipos: data.tipos || [] });
+        setRubrosFiltrados(data.rubros || []);
+        setTiposFiltrados(data.tipos || []);
+      })
       .catch(() => {});
   }, [mayorista_id]);
+
+  // Actualiza rubros y tipos según la marca y rubro seleccionados
+  useEffect(() => {
+    if (!mayorista_id) return;
+    if (!filtroMarca) {
+      setRubrosFiltrados(opciones.rubros);
+      setTiposFiltrados(opciones.tipos);
+      return;
+    }
+    const params = new URLSearchParams({ marca: filtroMarca });
+    if (filtroRubro) params.append('rubro', filtroRubro);
+    fetch(`${API}/api/productos/${mayorista_id}/opciones?${params}`)
+      .then(r => r.json())
+      .then(data => {
+        const nuevosRubros = data.rubros || [];
+        const nuevosTipos = data.tipos || [];
+        setRubrosFiltrados(nuevosRubros);
+        setTiposFiltrados(nuevosTipos);
+        if (filtroRubro && !nuevosRubros.includes(filtroRubro)) {
+          setFiltroRubro('');
+          setFiltroTipo('');
+        } else if (filtroTipo && !nuevosTipos.includes(filtroTipo)) {
+          setFiltroTipo('');
+        }
+      })
+      .catch(() => {});
+    // eslint-disable-next-line
+  }, [filtroMarca, filtroRubro, mayorista_id]);
 
   useEffect(() => {
     if (!mayorista_id) return;
@@ -377,14 +411,14 @@ function Catalogo() {
             <select value={filtroRubro} onChange={e => { setFiltroRubro(e.target.value); setPagina(1); }}
               className="flex-1 min-w-[140px] border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
               <option value="">Todos los rubros</option>
-              {opciones.rubros.map(r => <option key={r} value={r}>{arreglarNombre(r)}</option>)}
+              {rubrosFiltrados.map(r => <option key={r} value={r}>{arreglarNombre(r)}</option>)}
             </select>
           )}
           {cfg.mostrar_tipo && (
             <select value={filtroTipo} onChange={e => { setFiltroTipo(e.target.value); setPagina(1); }}
               className="flex-1 min-w-[140px] border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
               <option value="">Todos los tipos</option>
-              {opciones.tipos.map(t => <option key={t} value={t}>{arreglarNombre(t)}</option>)}
+              {tiposFiltrados.map(t => <option key={t} value={t}>{arreglarNombre(t)}</option>)}
             </select>
           )}
           {(hayFiltros || busqueda) && (
