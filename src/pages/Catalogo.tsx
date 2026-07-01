@@ -90,7 +90,7 @@ function Catalogo() {
   const [filtroTipo, setFiltroTipo] = useState('');
   const [opciones, setOpciones] = useState<Opciones>({ marcas: [], rubros: [], tipos: [] });
 
-  const [imagenAmpliada, setImagenAmpliada] = useState<string | null>(null);
+  const [productoModal, setProductoModal] = useState<Producto | null>(null);
   const [imagenesRotas, setImagenesRotas] = useState<Set<number>>(new Set());
   const marcarImagenRota = (id: number) => setImagenesRotas(prev => new Set(prev).add(id));
 
@@ -423,7 +423,7 @@ function Catalogo() {
                     <div className="h-48 bg-gray-100 flex items-center justify-center p-2">
                       {producto.imagen_producto && !imagenesRotas.has(producto.id_producto) ? (
                         <img src={`${API}/api/imagen?url=${encodeURIComponent(producto.imagen_producto)}`} alt=""
-                          onClick={() => setImagenAmpliada(`${API}/api/imagen?url=${encodeURIComponent(producto.imagen_producto)}`)}
+                          onClick={() => setProductoModal(producto)}
                           onError={() => marcarImagenRota(producto.id_producto)}
                           className="max-w-full max-h-full object-contain cursor-pointer hover:opacity-90 transition-opacity"
                         />
@@ -452,7 +452,7 @@ function Catalogo() {
                     <div className="w-16 h-16 flex-shrink-0 bg-gray-100 rounded-lg flex items-center justify-center overflow-hidden">
                       {producto.imagen_producto && !imagenesRotas.has(producto.id_producto) ? (
                         <img src={`${API}/api/imagen?url=${encodeURIComponent(producto.imagen_producto)}`} alt=""
-                          onClick={() => setImagenAmpliada(`${API}/api/imagen?url=${encodeURIComponent(producto.imagen_producto)}`)}
+                          onClick={() => setProductoModal(producto)}
                           onError={() => marcarImagenRota(producto.id_producto)}
                           className="max-w-full max-h-full object-contain cursor-pointer hover:opacity-90 transition-opacity"
                         />
@@ -561,15 +561,95 @@ function Catalogo() {
         Gestión Integral Pedidos
       </footer>
 
-      {/* MODAL IMAGEN */}
-      {imagenAmpliada && (
-        <div className="fixed inset-0 bg-black bg-opacity-80 z-[60] flex items-center justify-center p-4"
-          onClick={() => setImagenAmpliada(null)}>
-          <img src={imagenAmpliada} alt="Producto ampliado"
-            onClick={e => e.stopPropagation()} className="max-w-full max-h-full object-contain"
-          />
-          <button onClick={() => setImagenAmpliada(null)}
-            className="absolute top-4 right-4 text-white text-4xl leading-none">×</button>
+      {/* MODAL PRODUCTO */}
+      {productoModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-60 z-[60] flex items-end sm:items-center justify-center"
+          onClick={() => setProductoModal(null)}>
+          <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-lg max-h-[90vh] overflow-y-auto"
+            onClick={e => e.stopPropagation()}>
+
+            {/* Encabezado */}
+            <div className="flex items-center justify-between px-4 py-3 border-b sticky top-0 bg-white z-10">
+              <p className="text-xs text-gray-400 font-mono font-semibold tracking-wide">{productoModal.cod_producto}</p>
+              <button onClick={() => setProductoModal(null)}
+                className="text-gray-400 hover:text-gray-600 text-3xl leading-none w-8 h-8 flex items-center justify-center">×</button>
+            </div>
+
+            {/* Imagen */}
+            <div className="bg-gray-50 flex items-center justify-center py-6 px-4 min-h-[180px]">
+              {productoModal.imagen_producto && !imagenesRotas.has(productoModal.id_producto) ? (
+                <img
+                  src={`${API}/api/imagen?url=${encodeURIComponent(productoModal.imagen_producto)}`}
+                  alt=""
+                  onError={() => marcarImagenRota(productoModal.id_producto)}
+                  className="max-h-56 max-w-full object-contain"
+                />
+              ) : (
+                <span className="text-sm text-gray-400">Sin imagen disponible</span>
+              )}
+            </div>
+
+            {/* Detalles */}
+            <div className="p-4 space-y-4">
+              <h2 className="text-base font-bold text-gray-800 leading-snug">{arreglarNombre(productoModal.des_producto)}</h2>
+
+              {cfg.mostrar_precios && (
+                <p className="text-2xl font-bold text-blue-600">${formatPrecio(productoModal.precio_producto)}</p>
+              )}
+
+              <div className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
+                {cfg.mostrar_stock && productoModal.stock_temporal != null && (
+                  <div>
+                    <p className="text-xs text-gray-400">Stock</p>
+                    <p className="font-medium text-gray-700">{productoModal.stock_temporal}</p>
+                  </div>
+                )}
+                {cfg.mostrar_marca && productoModal.des_producto_marca && (
+                  <div>
+                    <p className="text-xs text-gray-400">Marca</p>
+                    <p className="font-medium text-gray-700">{arreglarNombre(productoModal.des_producto_marca)}</p>
+                  </div>
+                )}
+                {cfg.mostrar_rubro && productoModal.des_producto_rubro && (
+                  <div>
+                    <p className="text-xs text-gray-400">Rubro</p>
+                    <p className="font-medium text-gray-700">{arreglarNombre(productoModal.des_producto_rubro)}</p>
+                  </div>
+                )}
+                {cfg.mostrar_tipo && productoModal.des_producto_tipo && (
+                  <div>
+                    <p className="text-xs text-gray-400">Tipo</p>
+                    <p className="font-medium text-gray-700">{arreglarNombre(productoModal.des_producto_tipo)}</p>
+                  </div>
+                )}
+              </div>
+
+              {(() => {
+                const obs = (productoModal as any).observaciones || null;
+                const pres = (productoModal as any).presentacion || null;
+                return (obs || pres) ? (
+                  <div className="space-y-2">
+                    {obs && (
+                      <div>
+                        <p className="text-xs text-gray-400">Observaciones</p>
+                        <p className="text-sm text-gray-700">{obs}</p>
+                      </div>
+                    )}
+                    {pres && (
+                      <div>
+                        <p className="text-xs text-gray-400">Presentación</p>
+                        <p className="text-sm text-gray-700">{pres}</p>
+                      </div>
+                    )}
+                  </div>
+                ) : null;
+              })()}
+
+              <div className="pt-2 border-t">
+                <ControlCantidad producto={productoModal} />
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>
