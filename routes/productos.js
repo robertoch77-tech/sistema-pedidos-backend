@@ -35,28 +35,40 @@ function normalizar(texto) {
   return texto.replace(/[ñÑáéíóúÁÉÍÓÚ\uFFFD]/g, '_');
 }
 
-// Opciones para los selectores de marca / rubro / tipo (se piden una sola vez)
+// Opciones para los selectores de marca / rubro / tipo
+// Acepta ?marca=X para filtrar rubros, y ?marca=X&rubro=Y para filtrar tipos
 router.get('/:mayorista_id/opciones', async (req, res) => {
   try {
     const { mayorista_id } = req.params;
+    const marca = req.query.marca || '';
+    const rubro = req.query.rubro || '';
     const poolExterno = await getConexionMayorista(mayorista_id);
     if (!poolExterno) return res.status(404).json({ mensaje: 'Sin conexión configurada' });
 
-    const distinct = async (campo) => {
+    const distinct = async (campo, extraConds = [], extraParams = []) => {
+      const baseCond = `${campo} IS NOT NULL AND ${campo} <> ''`;
+      const allConds = extraConds.length ? `${baseCond} AND ${extraConds.join(' AND ')}` : baseCond;
       const r = await poolExterno.query(
-        `SELECT DISTINCT ${campo} AS valor
-         FROM "viewProductos"
-         WHERE ${campo} IS NOT NULL AND ${campo} <> ''
-         ORDER BY ${campo}`
+        `SELECT DISTINCT ${campo} AS valor FROM "viewProductos" WHERE ${allConds} ORDER BY ${campo}`,
+        extraParams
       );
       return r.rows.map(x => x.valor);
     };
 
-    const [marcas, rubros, tipos] = await Promise.all([
-      distinct('des_producto_marca'),
-      distinct('des_producto_rubro'),
-      distinct('des_producto_tipo')
-    ]);
+    // Marcas: siempre la lista completa
+    const marcas = await distinct('des_producto_marca');
+
+    // Rubros: filtrados por marca si viene ?marca
+    const rubrosConds = marca ? [`des_producto_marca ILIKE $1`] : [];
+    const rubrosParams = marca ? [normalizar(marca)] : [];
+    const rubros = await distinct('des_producto_rubro', rubrosConds, rubrosParams);
+
+    // Tipos: filtrados por marca y/o rubro si vienen esos parámetros
+    const tiposConds = [];
+    const tiposParams = [];
+    if (marca) { tiposConds.push(`des_producto_marca ILIKE $${tiposParams.length + 1}`); tiposParams.push(normalizar(marca)); }
+    if (rubro) { tiposConds.push(`des_producto_rubro ILIKE $${tiposParams.length + 1}`); tiposParams.push(normalizar(rubro)); }
+    const tipos = await distinct('des_producto_tipo', tiposConds, tiposParams);
 
     res.json({ marcas, rubros, tipos });
   } catch (error) {
