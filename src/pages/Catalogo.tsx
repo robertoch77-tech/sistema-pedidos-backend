@@ -88,6 +88,7 @@ function Catalogo() {
   const [filtroMarca, setFiltroMarca] = useState('');
   const [filtroRubro, setFiltroRubro] = useState('');
   const [filtroTipo, setFiltroTipo] = useState('');
+  const [ordenPrecio, setOrdenPrecio] = useState('');
   const [opciones, setOpciones] = useState<Opciones>({ marcas: [], rubros: [], tipos: [] });
 
   const [imagenAmpliada, setImagenAmpliada] = useState<string | null>(null);
@@ -182,7 +183,7 @@ function Catalogo() {
     }, 400);
     return () => clearTimeout(timer);
     // eslint-disable-next-line
-  }, [busqueda, pagina, filtroMarca, filtroRubro, filtroTipo]);
+  }, [busqueda, pagina, filtroMarca, filtroRubro, filtroTipo, ordenPrecio]);
 
   useEffect(() => {
     if (busqueda.trim().length < 3) return;
@@ -210,13 +211,14 @@ function Catalogo() {
       if (filtroMarca) params.append('marca', filtroMarca);
       if (filtroRubro) params.append('rubro', filtroRubro);
       if (filtroTipo) params.append('tipo', filtroTipo);
+      if (ordenPrecio) params.append('orden_precio', ordenPrecio);
       const res = await fetch(`${API}/api/productos/${mayorista_id}?${params.toString()}`);
       const data = await res.json();
       setProductos(data.productos || []); setTotal(data.total || 0); setTotalPaginas(data.totalPaginas || 0);
     } catch (error) { console.error(error); } finally { setCargando(false); }
   };
 
-  const limpiarFiltros = () => { setFiltroMarca(''); setFiltroRubro(''); setFiltroTipo(''); setBusqueda(''); setPagina(1); };
+  const limpiarFiltros = () => { setFiltroMarca(''); setFiltroRubro(''); setFiltroTipo(''); setOrdenPrecio(''); setBusqueda(''); setPagina(1); };
 
   const guardarDemanda = async (texto: string) => {
     if (!texto || texto.trim().length < 3 || !mayorista_id) return;
@@ -387,7 +389,13 @@ function Catalogo() {
               {opciones.tipos.map(t => <option key={t} value={t}>{arreglarNombre(t)}</option>)}
             </select>
           )}
-          {(hayFiltros || busqueda) && (
+          <select value={ordenPrecio} onChange={e => { setOrdenPrecio(e.target.value); setPagina(1); }}
+            className="flex-1 min-w-[140px] border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <option value="">Orden por defecto</option>
+            <option value="asc">Precio: menor a mayor</option>
+            <option value="desc">Precio: mayor a menor</option>
+          </select>
+          {(hayFiltros || busqueda || ordenPrecio) && (
             <button onClick={limpiarFiltros}
               className="text-sm text-gray-500 hover:text-gray-700 px-3 py-2 rounded-lg hover:bg-gray-100 transition-colors whitespace-nowrap">
               Limpiar
