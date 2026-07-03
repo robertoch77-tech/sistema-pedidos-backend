@@ -156,6 +156,63 @@ router.get('/mayoristas/:id/ivan', checkAdmin, async (req, res) => {
   }
 });
 
+// === NUEVO: descuentos propios por cliente ===
+
+// GET — clientes con descuentos propios de un mayorista (lee claves_clientes)
+router.get('/mayoristas/:id/clientes-descuentos', checkAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const may = await pool.query('SELECT codigo FROM mayoristas WHERE id=$1', [id]);
+    if (!may.rows[0]) return res.status(404).json({ mensaje: 'Mayorista no encontrado' });
+    const resultado = await pool.query(
+      `SELECT cuit, descuento_1, descuento_2, descuento_3
+       FROM claves_clientes WHERE mayorista_codigo=$1 ORDER BY cuit`,
+      [may.rows[0].codigo]
+    );
+    res.json(resultado.rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ mensaje: 'Error del servidor' });
+  }
+});
+
+// PUT — asignar/editar descuentos propios de un cliente (crea la fila si no existe)
+router.put('/clientes/:mayorista_codigo/:cuit/descuentos', checkAdmin, async (req, res) => {
+  try {
+    const { mayorista_codigo, cuit } = req.params;
+    const { descuento_1, descuento_2, descuento_3 } = req.body;
+    const upd = await pool.query(
+      `UPDATE claves_clientes SET descuento_1=$1, descuento_2=$2, descuento_3=$3
+       WHERE mayorista_codigo=$4 AND cuit=$5
+       RETURNING cuit, descuento_1, descuento_2, descuento_3`,
+      [descuento_1 ?? null, descuento_2 ?? null, descuento_3 ?? null, mayorista_codigo, cuit]
+    );
+    if (upd.rows[0]) return res.json(upd.rows[0]);
+    // El cliente todavía no tiene fila en claves_clientes (nunca registró clave)
+    const ins = await pool.query(
+      `INSERT INTO claves_clientes (mayorista_codigo, cuit, descuento_1, descuento_2, descuento_3)
+       VALUES ($1,$2,$3,$4,$5)
+       RETURNING cuit, descuento_1, descuento_2, descuento_3`,
+      [mayorista_codigo, cuit, descuento_1 ?? null, descuento_2 ?? null, descuento_3 ?? null]
+    );
+    res.json(ins.rows[0]);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ mensaje: 'Error al guardar descuentos del cliente' });
+  }
+});
+
+// PUT — toggle habilitar_descuentos_por_cliente
+router.put('/mayoristas/:id/toggle-descuentos-cliente', checkAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const resultado = await pool.query(
+      'UPDATE mayoristas SET habilitar_descuentos_por_cliente = NOT habilitar_descuentos_por_cliente WHERE id=$1 RETURNING id, nombre, habilitar_descuentos_por_cliente', [id]
+    );
+    res.json(resultado.rows[0]);
+  } catch (error) { res.status(500).json({ mensaje: 'Error del servidor' }); }
+});
+
 // PUT — guardar configuración Ivan
 router.put('/mayoristas/:id/ivan', checkAdmin, async (req, res) => {
   try {

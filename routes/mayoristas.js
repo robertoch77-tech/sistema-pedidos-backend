@@ -30,7 +30,8 @@ router.get('/:id/configuracion', async (req, res) => {
       `SELECT mostrar_precios, mostrar_stock, mostrar_marca, mostrar_rubro, mostrar_tipo,
               habilitar_calculadora, descuento_1, descuento_2, descuento_3, iva,
               orden_pdf, config_habilitada, pedir_clave, tamanio_hoja, items_por_hoja,
-              numero_pedido_inicio, habilitar_ctas_ctes, razon_social, habilitar_demanda, habilitar_ofertas, habilitar_productos_solicitados
+              numero_pedido_inicio, habilitar_ctas_ctes, razon_social, habilitar_demanda, habilitar_ofertas, habilitar_productos_solicitados,
+              habilitar_descuentos_por_cliente
        FROM mayoristas WHERE id=$1`, [id]
     );
     if (!resultado.rows[0]) return res.status(404).json({ mensaje: 'Mayorista no encontrado' });
