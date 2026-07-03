@@ -15,6 +15,89 @@ const Logo = ({ size = 28 }: { size?: number }) => (
 
 const API = 'https://sistema-pedidos-backend-2hec.onrender.com';
 
+// === NUEVO: carrusel de banners ===
+// El backend ya devuelve lista vacía si habilitar_banners=false o si no hay
+// banners vigentes — en ese caso este componente no renderiza nada.
+
+interface Banner {
+  id: number;
+  imagen_url: string;
+  titulo: string | null;
+  descripcion: string | null;
+  link_destino: string | null;
+  orden: number;
+}
+
+function CarruselBanners({ banners }: { banners: Banner[] }) {
+  const [actual, setActual] = useState(0);
+  const [rotas, setRotas] = useState<Set<number>>(new Set());
+  const total = banners.length;
+
+  useEffect(() => {
+    if (total <= 1) return;
+    const timer = setInterval(() => setActual(prev => (prev + 1) % total), 4000);
+    return () => clearInterval(timer);
+  }, [total]);
+
+  if (total === 0) return null;
+
+  const anterior = () => setActual(prev => (prev - 1 + total) % total);
+  const siguiente = () => setActual(prev => (prev + 1) % total);
+  const banner = banners[actual];
+  const rota = rotas.has(banner.id);
+
+  const contenido = (
+    <>
+      {rota ? (
+        <div className="w-full h-full bg-gradient-to-r from-blue-100 to-cyan-100 flex items-center justify-center">
+          <span className="text-4xl">🖼️</span>
+        </div>
+      ) : (
+        <img src={`${API}/api/imagen?url=${encodeURIComponent(banner.imagen_url)}`}
+          alt={banner.titulo || 'Banner'}
+          onError={() => setRotas(prev => new Set(prev).add(banner.id))}
+          className="w-full h-full object-cover"
+        />
+      )}
+      {(banner.titulo || banner.descripcion) && (
+        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-3 pt-8">
+          {banner.titulo && <p className="text-white font-bold text-sm leading-tight">{banner.titulo}</p>}
+          {banner.descripcion && <p className="text-white/80 text-xs leading-tight mt-0.5">{banner.descripcion}</p>}
+        </div>
+      )}
+    </>
+  );
+
+  return (
+    <div className="relative rounded-xl overflow-hidden shadow-sm mb-6 h-40 sm:h-56 bg-gray-100">
+      {banner.link_destino ? (
+        <a href={banner.link_destino} className="block w-full h-full relative">{contenido}</a>
+      ) : (
+        <div className="w-full h-full relative">{contenido}</div>
+      )}
+
+      {total > 1 && (
+        <>
+          <button onClick={anterior} aria-label="Banner anterior"
+            className="absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/40 hover:bg-black/60 text-white flex items-center justify-center text-lg leading-none">
+            ‹
+          </button>
+          <button onClick={siguiente} aria-label="Banner siguiente"
+            className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/40 hover:bg-black/60 text-white flex items-center justify-center text-lg leading-none">
+            ›
+          </button>
+          <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-1.5">
+            {banners.map((b, idx) => (
+              <button key={b.id} onClick={() => setActual(idx)} aria-label={`Ir al banner ${idx + 1}`}
+                className={`w-2 h-2 rounded-full transition-colors ${idx === actual ? 'bg-white' : 'bg-white/40'}`} />
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function ClienteHome() {
   const cliente = JSON.parse(localStorage.getItem('cliente') || '{}');
   const mayorista_id = cliente.mayorista_id;
@@ -24,6 +107,7 @@ function ClienteHome() {
     habilitar_calculadora: false,
     habilitar_ctas_ctes: false,
   });
+  const [banners, setBanners] = useState<Banner[]>([]); // === NUEVO ===
 
   useEffect(() => {
     if (!mayorista_id) return;
@@ -34,6 +118,15 @@ function ClienteHome() {
         habilitar_calculadora: data.habilitar_calculadora ?? false,
         habilitar_ctas_ctes: data.habilitar_ctas_ctes ?? false,
       }))
+      .catch(() => {});
+  }, [mayorista_id]);
+
+  // === NUEVO: banners activos y vigentes (vacío si habilitar_banners=false) ===
+  useEffect(() => {
+    if (!mayorista_id) return;
+    fetch(`${API}/api/banners/cliente/${mayorista_id}`)
+      .then(r => r.json())
+      .then(data => setBanners(Array.isArray(data) ? data : []))
       .catch(() => {});
   }, [mayorista_id]);
 
@@ -104,6 +197,9 @@ function ClienteHome() {
       {/* CONTENIDO */}
       <div className="p-4 max-w-lg mx-auto">
         <p className="text-gray-500 text-sm mb-6 mt-2">Hola, <strong>{cliente.nombre}</strong>. ¿Qué querés hacer hoy?</p>
+
+        {/* === NUEVO: carrusel de banners (no renderiza nada si no hay) === */}
+        <CarruselBanners banners={banners} />
 
         <div className="space-y-3">
           {secciones
