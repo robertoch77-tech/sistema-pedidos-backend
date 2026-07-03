@@ -65,6 +65,48 @@ router.get('/:mayorista_id/opciones', async (req, res) => {
   }
 });
 
+// Todos los productos sin paginación — solo para la descarga de listas (PDF/Excel) en MisPrecios.
+// Misma query base, misma conexión Ivan (LATIN1), mismo normalizar() que el endpoint paginado.
+router.get('/:mayorista_id/todos', async (req, res) => {
+  try {
+    const { mayorista_id } = req.params;
+    const busqueda = req.query.busqueda || '';
+    const poolExterno = await getConexionMayorista(mayorista_id);
+    if (!poolExterno) return res.status(404).json({ mensaje: 'Sin conexión configurada' });
+
+    const condiciones = [];
+    const params = [];
+    let i = 1;
+    if (busqueda.trim() !== '') {
+      const palabras = normalizar(busqueda).trim().split(/\s+/).filter(p => p);
+      for (const palabra of palabras) {
+        condiciones.push(`(cod_producto ILIKE $${i}
+          OR des_producto ILIKE $${i}
+          OR des_producto_marca ILIKE $${i}
+          OR des_producto_rubro ILIKE $${i})`);
+        params.push(`%${palabra}%`);
+        i++;
+      }
+    }
+    const where = condiciones.length ? `WHERE ${condiciones.join(' AND ')}` : '';
+
+    const resultado = await poolExterno.query(
+      `SELECT id_producto, cod_producto, des_producto, imagen_producto,
+              precio_producto, stock_temporal, des_producto_marca,
+              des_producto_rubro, des_producto_tipo
+       FROM "viewProductos"
+       ${where}
+       ORDER BY des_producto`,
+      params
+    );
+
+    res.json({ productos: resultado.rows, total: resultado.rows.length });
+  } catch (error) {
+    console.error('Error productos todos:', error.message);
+    res.status(500).json({ mensaje: 'Error del servidor' });
+  }
+});
+
 router.get('/:mayorista_id', async (req, res) => {
   try {
     const { mayorista_id } = req.params;

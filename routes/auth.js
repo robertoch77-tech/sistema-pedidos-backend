@@ -92,7 +92,7 @@ router.post('/login-cliente', async (req, res) => {
     const cliente = resultado.rows[0];
 
     const cfg = await pool.query(
-      'SELECT pedir_clave FROM mayoristas WHERE codigo = $1',
+      'SELECT pedir_clave, mostrar_precios, mostrar_stock FROM mayoristas WHERE codigo = $1',
       [codigo]
     );
     const pedirClave = cfg.rows[0]?.pedir_clave === true;
@@ -124,6 +124,25 @@ router.post('/login-cliente', async (req, res) => {
       }
     }
 
+    // Descuentos propios del cliente (si el Admin se los asignó en claves_clientes).
+    // Defensivo: si las columnas descuento_1/2/3 todavía no existen en Supabase,
+    // el login sigue funcionando sin descuentos propios.
+    let descuentosCliente = null;
+    try {
+      const descRow = await pool.query(
+        'SELECT descuento_1, descuento_2, descuento_3 FROM claves_clientes WHERE mayorista_codigo = $1 AND cuit = $2',
+        [codigo, cuit]
+      );
+      if (descRow.rows[0]) {
+        const { descuento_1, descuento_2, descuento_3 } = descRow.rows[0];
+        if (descuento_1 != null || descuento_2 != null || descuento_3 != null) {
+          descuentosCliente = { descuento_1, descuento_2, descuento_3 };
+        }
+      }
+    } catch (e) {
+      console.error('Descuentos por cliente no disponibles (¿falta migración?):', e.message);
+    }
+
     const token = jwt.sign(
       { id: cliente.id_cliente, cuit: cliente.doc_cliente, tipo: 'cliente' },
       process.env.JWT_SECRET,
@@ -137,8 +156,9 @@ router.post('/login-cliente', async (req, res) => {
         nombre: cliente.nom_fan_cliente || cliente.raz_soc_cliente,
         cuit: cliente.doc_cliente,
         mayorista_id: conexion.mayorista_id,
-        ver_stock: true,
-        ver_precios: true
+        ver_stock: cfg.rows[0]?.mostrar_stock ?? true,
+        ver_precios: cfg.rows[0]?.mostrar_precios ?? true,
+        ...(descuentosCliente || {})
       }
     });
   } catch (error) {
