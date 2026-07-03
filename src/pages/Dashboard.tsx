@@ -31,6 +31,7 @@ function Dashboard() {
     pedidos_hoy: 0, total_productos: 0, total_clientes: 0, pedidos_pendientes: 0
   });
   const [pedidosSinImprimir, setPedidosSinImprimir] = useState<any[]>([]);
+  const [subseccionLabel, setSubseccionLabel] = useState('');
 
   useEffect(() => {
     if (paginaActual === 'dashboard') cargarStats();
@@ -68,6 +69,14 @@ function Dashboard() {
     localStorage.removeItem('mayorista');
     window.location.href = '/login';
   };
+
+  const labelMap: Record<string, string> = {
+    productos: 'Productos', clientes: 'Clientes', pedidos: 'Pedidos',
+    demanda: 'Demanda', ofertas: 'Ofertas',
+    'productos-solicitados': 'Más/Menos solicitados', configuracion: 'Configuración',
+  };
+
+  const navegar = (key: string) => { setPaginaActual(key); setSubseccionLabel(''); setMenuAbierto(false); };
 
   const menuItems = [
     { icon: '🏠', label: 'Inicio',        key: 'dashboard' },
@@ -162,6 +171,7 @@ function Dashboard() {
             <div>
               <p className="text-xs text-gray-400 leading-none">Gestión Integral Pedidos{mayorista.razon_social ? ` | ${mayorista.razon_social}` : ''}</p>
               <h1 className="text-base font-bold text-blue-600 leading-tight">{mayorista.nombre || 'Panel'}</h1>
+              <p className="text-xs text-gray-400 leading-none mt-0.5">Panel Mayorista</p>
             </div>
           </div>
         </div>
@@ -176,7 +186,7 @@ function Dashboard() {
           <nav className="space-y-1">
             {menuItems.map(item => (
               <button key={item.key}
-                onClick={() => { setPaginaActual(item.key); setMenuAbierto(false); }}
+                onClick={() => navegar(item.key)}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors text-left ${
                   paginaActual === item.key ? 'bg-blue-50 text-blue-600 font-semibold' : 'text-gray-700 hover:bg-blue-50 hover:text-blue-600'
                 }`}>
@@ -192,7 +202,28 @@ function Dashboard() {
           </nav>
         </aside>
 
-        <main className="flex-1">{renderPagina()}</main>
+        <main className="flex-1">
+          {paginaActual !== 'dashboard' && (
+            <div className="px-6 pt-4 pb-0">
+              <nav className="flex items-center gap-1.5 text-xs text-gray-400">
+                <button onClick={() => navegar('dashboard')} className="hover:text-blue-600 transition-colors">Inicio</button>
+                <span>›</span>
+                {subseccionLabel ? (
+                  <>
+                    <button onClick={() => setSubseccionLabel('')} className="hover:text-blue-600 transition-colors">
+                      {labelMap[paginaActual] ?? paginaActual}
+                    </button>
+                    <span>›</span>
+                    <span className="text-gray-600 font-medium">{subseccionLabel}</span>
+                  </>
+                ) : (
+                  <span className="text-gray-600 font-medium">{labelMap[paginaActual] ?? paginaActual}</span>
+                )}
+              </nav>
+            </div>
+          )}
+          {renderPagina()}
+        </main>
       </div>
 
       {/* FOOTER */}
