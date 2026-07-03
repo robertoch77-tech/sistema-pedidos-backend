@@ -19,6 +19,10 @@ interface Producto {
   des_producto: string;
   imagen_producto: string;
   precio_producto?: number;
+  stock_temporal?: number;
+  des_producto_marca?: string;
+  des_producto_rubro?: string;
+  des_producto_tipo?: string;
 }
 
 const API = 'https://sistema-pedidos-backend-2hec.onrender.com';
@@ -34,12 +38,14 @@ function MisPrecios() {
   const [total, setTotal] = useState(0);
   const [cargando, setCargando] = useState(false);
   const [ganancia, setGanancia] = useState(30);
-  const [imagenAmpliada, setImagenAmpliada] = useState<string | null>(null);
+  const [productoModal, setProductoModal] = useState<Producto | null>(null);
   const [imagenesRotas, setImagenesRotas] = useState<Set<number>>(new Set());
   const marcarImagenRota = (id: number) => setImagenesRotas(prev => new Set(prev).add(id));
 
   const [cfg, setCfg] = useState({
     razon_social: '', descuento_1: 0, descuento_2: 0, descuento_3: 0, iva: 21,
+    mostrar_precios: false, mostrar_stock: false, mostrar_marca: false,
+    mostrar_rubro: false, mostrar_tipo: false,
   });
 
   useEffect(() => {
@@ -52,6 +58,11 @@ function MisPrecios() {
         descuento_2: data.descuento_2 || 0,
         descuento_3: data.descuento_3 || 0,
         iva: data.iva ?? 21,
+        mostrar_precios: data.mostrar_precios ?? false,
+        mostrar_stock: data.mostrar_stock ?? false,
+        mostrar_marca: data.mostrar_marca ?? false,
+        mostrar_rubro: data.mostrar_rubro ?? false,
+        mostrar_tipo: data.mostrar_tipo ?? false,
       }))
       .catch(() => {});
   }, [mayorista_id]);
@@ -157,7 +168,7 @@ function MisPrecios() {
                       {producto.imagen_producto && !imagenesRotas.has(producto.id_producto) ? (
                         <img src={`${API}/api/imagen?url=${encodeURIComponent(producto.imagen_producto)}`}
                           onError={() => marcarImagenRota(producto.id_producto)}
-                          onClick={() => setImagenAmpliada(`${API}/api/imagen?url=${encodeURIComponent(producto.imagen_producto)}`)}
+                          onClick={() => setProductoModal(producto)}
                           className="w-full h-full object-contain cursor-pointer"
                         />
                       ) : <span className="text-xs text-gray-400">Próx.</span>}
@@ -197,17 +208,88 @@ function MisPrecios() {
         Gestión Integral Pedidos
       </footer>
 
-      {/* MODAL IMAGEN */}
-      {imagenAmpliada && (
-        <div className="fixed inset-0 bg-black bg-opacity-80 z-[60] flex items-center justify-center p-4"
-          onClick={() => setImagenAmpliada(null)}>
-          <img src={imagenAmpliada} alt="Producto ampliado"
-            onClick={e => e.stopPropagation()} className="max-w-full max-h-full object-contain"
-          />
-          <button onClick={() => setImagenAmpliada(null)}
-            className="absolute top-4 right-4 text-white text-4xl leading-none">×</button>
-        </div>
-      )}
+      {/* MODAL PRODUCTO */}
+      {productoModal && (() => {
+        const obs = (productoModal as any).observaciones || null;
+        const pres = (productoModal as any).presentacion || null;
+        const { costo, venta } = calcularPrecios(productoModal.precio_producto || 0);
+        return (
+          <div className="fixed inset-0 bg-black bg-opacity-60 z-[60] flex items-center justify-center p-4"
+            onClick={() => setProductoModal(null)}>
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm max-h-[90vh] overflow-y-auto"
+              onClick={e => e.stopPropagation()}>
+              <div className="bg-gray-50 rounded-t-2xl flex items-center justify-center p-4" style={{ minHeight: 220 }}>
+                {productoModal.imagen_producto && !imagenesRotas.has(productoModal.id_producto) ? (
+                  <img src={`${API}/api/imagen?url=${encodeURIComponent(productoModal.imagen_producto)}`}
+                    onError={() => marcarImagenRota(productoModal.id_producto)}
+                    className="max-h-52 object-contain" alt={productoModal.des_producto}
+                  />
+                ) : (
+                  <div className="text-gray-300 text-5xl">📦</div>
+                )}
+              </div>
+              <div className="p-4 space-y-3">
+                <div>
+                  <p className="text-xs text-gray-400 font-mono mb-0.5">{productoModal.cod_producto}</p>
+                  <h2 className="font-bold text-gray-800 text-base leading-tight">{arreglarNombre(productoModal.des_producto)}</h2>
+                </div>
+                {cfg.mostrar_precios && productoModal.precio_producto != null && (
+                  <div className="bg-green-50 rounded-xl p-3 space-y-1">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-500">Tu costo</span>
+                      <span className="font-semibold text-gray-700">${formatPrecio(costo)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-500 text-sm">Precio de venta</span>
+                      <span className="font-bold text-green-600 text-base">${formatPrecio(venta)}</span>
+                    </div>
+                  </div>
+                )}
+                {cfg.mostrar_stock && productoModal.stock_temporal != null && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-500">Stock</span>
+                    <span className="font-medium text-gray-700">{productoModal.stock_temporal}</span>
+                  </div>
+                )}
+                {cfg.mostrar_marca && productoModal.des_producto_marca && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-500">Marca</span>
+                    <span className="font-medium text-gray-700">{arreglarNombre(productoModal.des_producto_marca)}</span>
+                  </div>
+                )}
+                {cfg.mostrar_rubro && productoModal.des_producto_rubro && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-500">Rubro</span>
+                    <span className="font-medium text-gray-700">{arreglarNombre(productoModal.des_producto_rubro)}</span>
+                  </div>
+                )}
+                {cfg.mostrar_tipo && productoModal.des_producto_tipo && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-500">Tipo</span>
+                    <span className="font-medium text-gray-700">{arreglarNombre(productoModal.des_producto_tipo)}</span>
+                  </div>
+                )}
+                {obs && (
+                  <div className="text-sm text-gray-600 bg-gray-50 rounded-lg p-3">
+                    <p className="font-medium text-gray-500 text-xs mb-1">Observaciones</p>
+                    <p>{arreglarNombre(obs)}</p>
+                  </div>
+                )}
+                {pres && (
+                  <div className="text-sm text-gray-600 bg-gray-50 rounded-lg p-3">
+                    <p className="font-medium text-gray-500 text-xs mb-1">Presentación</p>
+                    <p>{arreglarNombre(pres)}</p>
+                  </div>
+                )}
+                <button onClick={() => setProductoModal(null)}
+                  className="w-full mt-2 py-2.5 bg-gray-100 text-gray-700 rounded-xl font-medium text-sm hover:bg-gray-200 transition-colors">
+                  Cerrar
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
