@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import CajonOfertas from './CajonOfertas';
 
 
@@ -66,6 +66,9 @@ export interface Oferta {
 }
 interface Opciones { marcas: string[]; rubros: string[]; tipos: string[]; }
 
+// === NUEVO (Mejora 4): alerta de oferta activa no aprovechada del todo ===
+interface AlertaOferta { oferta: Oferta; mensaje: string; }
+
 const API = 'https://sistema-pedidos-backend-2hec.onrender.com';
 
 function Catalogo() {
@@ -108,9 +111,35 @@ function Catalogo() {
     mostrar_precios: true, mostrar_stock: true,
     mostrar_marca: true, mostrar_rubro: true, mostrar_tipo: true,
     razon_social: '', habilitar_ofertas: false,
+    // === NUEVO: estos dos flags todavía no vienen de /configuracion (fuera
+    // de alcance tocar mayoristas.js en esta tarea) — quedan leídos
+    // defensivamente, listos para funcionar apenas se agreguen al SELECT.
+    habilitar_lector_barras: false,
+    habilitar_cross_selling: false,
   });
 
   const [ofertas, setOfertas] = useState<Oferta[]>([]);
+
+  // === NUEVO (Mejora 2): auto-abrir cajón de ofertas al venir de Mis Promociones ===
+  // Se calcula de forma síncrona (lazy initializer) porque CajonOfertas solo lee
+  // este valor como estado inicial propio — si llegara vía useEffect, ya sería
+  // tarde: CajonOfertas habría montado con el valor viejo.
+  const [autoAbrirOfertas] = useState(() => new URLSearchParams(window.location.search).get('ofertas') === '1');
+
+  // === NUEVO (Mejora 1): lector de código de barras ===
+  const [escanerAbierto, setEscanerAbierto] = useState(false);
+  const [escaneoSoportado, setEscaneoSoportado] = useState<boolean | null>(null);
+  const [errorEscaneo, setErrorEscaneo] = useState('');
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  // === NUEVO (Mejora 3): cross selling ===
+  const [crossSelling, setCrossSelling] = useState<Producto[]>([]);
+  const [cargandoCrossSelling, setCargandoCrossSelling] = useState(false);
+
+  // === NUEVO (Mejora 4): alertas de ofertas no aprovechadas al confirmar ===
+  const [alertasOfertas, setAlertasOfertas] = useState<AlertaOferta[]>([]);
+  const [modalAlertasAbierto, setModalAlertasAbierto] = useState(false);
 
   const hayFiltros = !!(filtroMarca || filtroRubro || filtroTipo);
 
@@ -166,6 +195,8 @@ function Catalogo() {
         mostrar_tipo: data.mostrar_tipo ?? true,
         razon_social: data.razon_social || '',
         habilitar_ofertas: data.habilitar_ofertas ?? false,
+        habilitar_lector_barras: data.habilitar_lector_barras ?? false,
+        habilitar_cross_selling: data.habilitar_cross_selling ?? false,
       }))
       .catch(() => {});
   }, [mayorista_id]);
@@ -177,6 +208,14 @@ function Catalogo() {
       .then(data => setOfertas(Array.isArray(data) ? data : []))
       .catch(() => {});
   }, [mayorista_id]);
+
+  // === NUEVO (Mejora 3): recalcula cross selling 1s después de cada cambio en el carrito ===
+  useEffect(() => {
+    if (!cfg.habilitar_cross_selling || !mayorista_id || carrito.length === 0) { setCrossSelling([]); return; }
+    const timer = setTimeout(() => cargarCrossSelling(), 1000);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line
+  }, [carrito, cfg.habilitar_cross_selling, mayorista_id]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -253,6 +292,180 @@ function Catalogo() {
   };
 
   const limpiarFiltros = () => { setFiltroMarca(''); setFiltroRubro(''); setFiltroTipo(''); setOrdenPrecio(''); setBusqueda(''); setPagina(1); };
+
+  // === NUEVO (Mejora 3): cross selling ===
+  const cargarCrossSelling = async () => {
+    const codigos = Array.from(new Set(carrito.map(i => i.producto.cod_producto).filter(Boolean)));
+    if (codigos.length === 0) { setCrossSelling([]); return; }
+    setCargandoCrossSelling(true);
+    try {
+      const res = await fetch(`${API}/api/productos/${mayorista_id}/cross-selling?codigos=${encodeURIComponent(codigos.join(','))}`);
+      const data = await res.json();
+      setCrossSelling(Array.isArray(data) ? data : []);
+    } catch { setCrossSelling([]); } finally { setCargandoCrossSelling(false); }
+  };
+
+  // === NUEVO (Mejora 1): lector de código de barras ===
+  const cerrarEscaner = () => {
+    setEscanerAbierto(false);
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    }
+  };
+
+  const procesarCodigoEscaneado = async (codigo: string) => {
+    cerrarEscaner();
+    try {
+      const res = await fetch(`${API}/api/productos/${mayorista_id}/buscar-ean/${encodeURIComponent(codigo)}`);
+      const data = await res.json();
+      if (data.producto) { setProductoModal(data.producto); return; }
+    } catch {}
+    // Modo texto: sin match por EAN (o Ivan no soporta ese campo) — buscamos el código como texto
+    setBusqueda(codigo);
+    setPagina(1);
+  };
+
+  const abrirEscaner = async () => {
+    setErrorEscaneo('');
+    setEscanerAbierto(true);
+    if (!('BarcodeDetector' in window)) {
+      setEscaneoSoportado(false);
+      return;
+    }
+    setEscaneoSoportado(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+      const BarcodeDetectorCtor = (window as any).BarcodeDetector;
+      const detector = new BarcodeDetectorCtor({ formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'upc_a', 'upc_e'] });
+      const detectar = async () => {
+        if (!videoRef.current || !streamRef.current) return;
+        try {
+          const codigosDetectados = await detector.detect(videoRef.current);
+          if (codigosDetectados.length > 0) { procesarCodigoEscaneado(codigosDetectados[0].rawValue); return; }
+        } catch {}
+        if (streamRef.current) requestAnimationFrame(detectar);
+      };
+      requestAnimationFrame(detectar);
+    } catch {
+      setErrorEscaneo('No se pudo acceder a la cámara. Podés escanear igual con un lector USB/Bluetooth: hacé clic en el buscador y escaneá directamente.');
+    }
+  };
+
+  // === NUEVO (Mejora 4): alertas de ofertas activas no aprovechadas del todo ===
+  const calcularAlertasOfertas = (): AlertaOferta[] => {
+    const alertas: AlertaOferta[] = [];
+    for (const oferta of ofertasActivas) {
+      if (alertas.length >= 5) break;
+      const idsGrupo = oferta.items.map(it => it.producto_id);
+      const enCarritoGrupo = carrito.filter(i => idsGrupo.includes(i.producto.id_producto) && !i.id.startsWith('regalo-'));
+      const totalGrupo = enCarritoGrupo.reduce((acc, i) => acc + i.cantidad, 0);
+
+      if (oferta.tipo === 1 || oferta.tipo === 2) {
+        if (enCarritoGrupo.length === 0) {
+          alertas.push({ oferta, mensaje: `No aprovechaste la oferta "${oferta.titulo}"` });
+        }
+      } else if (oferta.tipo === 3 && oferta.cantidad_minima) {
+        if (totalGrupo > 0 && totalGrupo < oferta.cantidad_minima) {
+          alertas.push({ oferta, mensaje: `Te faltan ${oferta.cantidad_minima - totalGrupo} unidades para el precio especial de "${oferta.titulo}"` });
+        }
+      } else if (oferta.tipo === 4 && oferta.cantidad_minima) {
+        if (totalGrupo > 0 && totalGrupo < oferta.cantidad_minima) {
+          alertas.push({ oferta, mensaje: `Te faltan ${oferta.cantidad_minima - totalGrupo} unidades para el regalo de "${oferta.titulo}"` });
+        }
+      } else if (oferta.tipo === 5 && oferta.cantidad_minima) {
+        const item = oferta.items[0];
+        if (item) {
+          const enCarrito = carrito.find(i => i.producto.id_producto === item.producto_id);
+          if (enCarrito && enCarrito.cantidad < oferta.cantidad_minima) {
+            alertas.push({ oferta, mensaje: `Agregá ${oferta.cantidad_minima - enCarrito.cantidad} más para el ${oferta.porcentaje_descuento}% de descuento en "${oferta.titulo}"` });
+          }
+        }
+      }
+    }
+    return alertas;
+  };
+
+  const agregarDesdeAlerta = (oferta: Oferta) => {
+    if (oferta.tipo === 1) {
+      setCarrito(prev => {
+        const nuevo = [...prev];
+        oferta.items.forEach(item => {
+          const id = `oferta-${oferta.id}-${item.id}`;
+          const cantidad = item.cantidad_minima || 1;
+          const idx = nuevo.findIndex(i => i.id === id);
+          if (idx >= 0) nuevo[idx] = { ...nuevo[idx], cantidad: nuevo[idx].cantidad + cantidad };
+          else nuevo.push({
+            id, cantidad, es_oferta: true, oferta_id: oferta.id, oferta_titulo: oferta.titulo, precio_oferta: item.precio || 0,
+            producto: { id_producto: item.producto_id, cod_producto: item.codigo, des_producto: item.descripcion, imagen_producto: '', precio_producto: item.precio || 0 },
+          });
+        });
+        return nuevo;
+      });
+    } else if (oferta.tipo === 2) {
+      const paquetes = oferta.cantidad_minima || 1;
+      const totalUnidadesCombo = oferta.items.reduce((acc, i) => acc + (i.cantidad || 0), 0);
+      if (totalUnidadesCombo === 0 || !oferta.precio) return;
+      const precioPorUnidad = oferta.precio / totalUnidadesCombo;
+      setCarrito(prev => {
+        const nuevo = [...prev];
+        oferta.items.forEach(item => {
+          const id = `oferta-${oferta.id}-${item.id}`;
+          const cantidad = (item.cantidad || 0) * paquetes;
+          const nuevoItem: ItemCarrito = {
+            id, cantidad, es_oferta: true, oferta_id: oferta.id, oferta_titulo: oferta.titulo, precio_oferta: precioPorUnidad,
+            producto: { id_producto: item.producto_id, cod_producto: item.codigo, des_producto: item.descripcion, imagen_producto: '', precio_producto: precioPorUnidad },
+          };
+          const idx = nuevo.findIndex(i => i.id === id);
+          if (idx >= 0) nuevo[idx] = nuevoItem; else nuevo.push(nuevoItem);
+        });
+        return nuevo;
+      });
+    } else if (oferta.tipo === 3 || oferta.tipo === 4) {
+      const item = oferta.items[0];
+      if (!item) return;
+      const idsGrupo = oferta.items.map(it => it.producto_id);
+      setCarrito(prev => {
+        const totalGrupo = prev.filter(i => idsGrupo.includes(i.producto.id_producto)).reduce((acc, i) => acc + i.cantidad, 0);
+        const faltante = Math.max(1, (oferta.cantidad_minima || 1) - totalGrupo);
+        const id = `prod-${item.producto_id}`;
+        const idx = prev.findIndex(i => i.id === id);
+        if (idx >= 0) {
+          const nuevo = [...prev];
+          nuevo[idx] = { ...nuevo[idx], cantidad: nuevo[idx].cantidad + faltante };
+          return nuevo;
+        }
+        return [...prev, { id, cantidad: faltante, producto: { id_producto: item.producto_id, cod_producto: item.codigo, des_producto: item.descripcion, imagen_producto: '', precio_producto: item.precio || 0 } }];
+      });
+    } else if (oferta.tipo === 5) {
+      const item = oferta.items[0];
+      if (!item) return;
+      setCarrito(prev => {
+        const id = `prod-${item.producto_id}`;
+        const cantidadObjetivo = oferta.cantidad_minima || 1;
+        const idx = prev.findIndex(i => i.id === id);
+        if (idx >= 0) {
+          const nuevo = [...prev];
+          nuevo[idx] = { ...nuevo[idx], cantidad: Math.max(nuevo[idx].cantidad, cantidadObjetivo) };
+          return nuevo;
+        }
+        return [...prev, { id, cantidad: cantidadObjetivo, producto: { id_producto: item.producto_id, cod_producto: item.codigo, des_producto: item.descripcion, imagen_producto: '', precio_producto: item.precio || 0 } }];
+      });
+    }
+  };
+
+  const confirmarEnviar = () => {
+    if (!cfg.habilitar_ofertas) { enviarPedido('enviado'); return; }
+    const alertas = calcularAlertasOfertas();
+    if (alertas.length === 0) { enviarPedido('enviado'); return; }
+    setAlertasOfertas(alertas);
+    setModalAlertasAbierto(true);
+  };
 
   const guardarDemanda = async (texto: string) => {
     if (!texto || texto.trim().length < 3 || !mayorista_id) return;
@@ -393,14 +606,24 @@ function Catalogo() {
         mayorista_id={mayorista_id}
         cliente={cliente}
         onAgregado={() => setCarritoAbierto(true)}
+        autoAbrir={autoAbrirOfertas}
       />
 
       {/* CATÁLOGO */}
       <div className="p-4">
-        <input type="text" placeholder="Buscar por código, descripción o marca. (mín. 3 caracteres)"
-          value={busqueda} onChange={e => { setBusqueda(e.target.value); setPagina(1); }}
-          className="w-full border border-gray-300 rounded-lg px-4 py-3 mb-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
-        />
+        <div className="flex gap-2 mb-3">
+          <input type="text" placeholder="Buscar por código, descripción o marca. (mín. 3 caracteres)"
+            value={busqueda} onChange={e => { setBusqueda(e.target.value); setPagina(1); }}
+            className="flex-1 border border-gray-300 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          {/* === NUEVO (Mejora 1): lector de código de barras === */}
+          {cfg.habilitar_lector_barras && (
+            <button onClick={abrirEscaner} title="Escanear código de barras"
+              className="px-4 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm font-medium whitespace-nowrap">
+              📷 Escanear
+            </button>
+          )}
+        </div>
         <div className="flex flex-wrap items-center gap-3 mb-4">
           {cfg.mostrar_marca && (
             <select value={filtroMarca} onChange={e => { setFiltroMarca(e.target.value); setPagina(1); }}
@@ -516,6 +739,35 @@ function Catalogo() {
               </div>
             )}
 
+            {/* === NUEVO (Mejora 3): cross selling === */}
+            {cfg.habilitar_cross_selling && carrito.length > 0 && (cargandoCrossSelling || crossSelling.length > 0) && (
+              <div className="mt-6 border-t pt-4">
+                <p className="text-sm font-semibold text-gray-700 mb-2">También te puede interesar</p>
+                {cargandoCrossSelling ? (
+                  <p className="text-sm text-gray-400">Buscando sugerencias...</p>
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                    {crossSelling.map(p => (
+                      <div key={p.id_producto} className="bg-white rounded-lg shadow-sm p-2">
+                        <div className="h-20 bg-gray-100 rounded flex items-center justify-center mb-1 overflow-hidden">
+                          {p.imagen_producto ? (
+                            <img src={`${API}/api/imagen?url=${encodeURIComponent(p.imagen_producto)}`} alt=""
+                              className="max-h-full max-w-full object-contain" />
+                          ) : <span className="text-xs text-gray-400">Sin imagen</span>}
+                        </div>
+                        <p className="text-xs text-gray-800 font-medium leading-tight">{arreglarNombre(p.des_producto)}</p>
+                        {cfg.mostrar_precios && <p className="text-xs text-blue-600 font-bold mt-0.5">${formatPrecio(p.precio_producto)}</p>}
+                        <button onClick={() => agregarAlCarrito(p)}
+                          className="mt-1 w-full bg-blue-600 hover:bg-blue-700 text-white text-xs py-1 rounded">
+                          + Agregar
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             {totalPaginas > 1 && (
               <div className="flex items-center justify-center gap-4 mt-6">
                 <button onClick={() => setPagina(p => Math.max(1, p - 1))} disabled={pagina === 1}
@@ -588,7 +840,7 @@ function Catalogo() {
                   className="w-full bg-gray-500 hover:bg-gray-600 text-white py-3 rounded-xl font-semibold transition-colors disabled:opacity-50">
                   💾 Guardar borrador
                 </button>
-                <button onClick={() => enviarPedido('enviado')} disabled={enviando}
+                <button onClick={confirmarEnviar} disabled={enviando}
                   className="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-xl font-semibold transition-colors disabled:opacity-50">
                   {enviando ? 'Enviando...' : '✅ Confirmar y enviar'}
                 </button>
@@ -690,6 +942,63 @@ function Catalogo() {
               <div className="pt-2 border-t">
                 <ControlCantidad producto={productoModal} />
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL ESCÁNER (Mejora 1) */}
+      {escanerAbierto && (
+        <div className="fixed inset-0 bg-black bg-opacity-80 z-[70] flex items-center justify-center p-4" onClick={cerrarEscaner}>
+          <div className="bg-white rounded-2xl p-4 w-full max-w-sm" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-bold text-gray-800">📷 Escanear código</h3>
+              <button onClick={cerrarEscaner} className="text-gray-400 text-2xl leading-none">×</button>
+            </div>
+            {escaneoSoportado === false ? (
+              <div className="text-center py-6">
+                <p className="text-sm text-gray-600 mb-2">Tu navegador no soporta escaneo por cámara.</p>
+                <p className="text-sm text-gray-500">Si tenés un lector de código de barras USB/Bluetooth, hacé clic en el buscador y escaneá directamente — funciona como un teclado.</p>
+              </div>
+            ) : errorEscaneo ? (
+              <p className="text-sm text-red-500 text-center py-6">{errorEscaneo}</p>
+            ) : (
+              <>
+                <video ref={videoRef} className="w-full rounded-lg bg-black" muted playsInline />
+                <p className="text-xs text-gray-400 text-center mt-2">Apuntá la cámara al código de barras</p>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* MODAL ALERTAS DE OFERTAS (Mejora 4) */}
+      {modalAlertasAbierto && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-[70] flex items-center justify-center p-4"
+          onClick={() => setModalAlertasAbierto(false)}>
+          <div className="bg-white rounded-2xl p-5 w-full max-w-md" onClick={e => e.stopPropagation()}>
+            <h3 className="text-lg font-bold text-gray-800 mb-1">¿Aprovechás antes de confirmar?</h3>
+            <p className="text-sm text-gray-500 mb-4">Estas ofertas están disponibles y todavía no las sumaste del todo:</p>
+            <div className="space-y-2 mb-4">
+              {alertasOfertas.map((a, idx) => (
+                <div key={idx} className="flex items-center justify-between gap-2 bg-orange-50 border border-orange-100 rounded-lg p-3">
+                  <p className="text-sm text-gray-700 flex-1">{a.mensaje}</p>
+                  <button onClick={() => agregarDesdeAlerta(a.oferta)}
+                    className="bg-orange-500 hover:bg-orange-600 text-white text-xs px-3 py-1.5 rounded-lg font-semibold whitespace-nowrap">
+                    Agregar
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-3">
+              <button onClick={() => setModalAlertasAbierto(false)}
+                className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 py-2.5 rounded-lg text-sm font-semibold">
+                Seguir revisando
+              </button>
+              <button onClick={() => { setModalAlertasAbierto(false); enviarPedido('enviado'); }}
+                className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2.5 rounded-lg text-sm font-semibold">
+                Confirmar igual
+              </button>
             </div>
           </div>
         </div>

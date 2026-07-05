@@ -10,13 +10,14 @@ interface Props {
   mayorista_id: number;
   cliente: { cuit?: string; nombre?: string };
   onAgregado: () => void;
+  autoAbrir?: boolean; // === NUEVO: abre el cajón ya abierto al montar ===
 }
 
 const formatPrecio = (n?: number | null) => (n || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const arreglarNombre = (txt?: string | null) => (txt || '').replace(/\uFFFD/g, 'Ñ');
 
-function CajonOfertas({ ofertas, carrito, setCarrito, mayorista_id, cliente, onAgregado }: Props) {
-  const [abierto, setAbierto] = useState(false);
+function CajonOfertas({ ofertas, carrito, setCarrito, mayorista_id, cliente, onAgregado, autoAbrir }: Props) {
+  const [abierto, setAbierto] = useState(!!autoAbrir);
   const [cantidadesItemOferta, setCantidadesItemOferta] = useState<Record<string, number>>({});
   const [paquetesOferta, setPaquetesOferta] = useState<Record<number, number>>({});
   const [consultaEnviada, setConsultaEnviada] = useState<Record<number, boolean>>({});
