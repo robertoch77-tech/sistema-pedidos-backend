@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from 'react';
-import MisMensajes from './MisMensajes'; // === NUEVO: chat con el mayorista ===
 
 const Logo = ({ size = 28 }: { size?: number }) => (
   <svg viewBox="0 0 80 80" width={size} height={size} style={{ display: 'block' }}>
@@ -107,11 +106,10 @@ function ClienteHome() {
     razon_social: '',
     habilitar_calculadora: false,
     habilitar_ctas_ctes: false,
-    habilitar_mensajes: false, // === NUEVO ===
+    habilitar_mensajes: false,
+    habilitar_mis_promociones: false,
   });
-  const [banners, setBanners] = useState<Banner[]>([]); // === NUEVO ===
-  // === NUEVO: chat — vista en el mismo lugar y badge de no leídos ===
-  const [vista, setVista] = useState<'home' | 'mensajes'>('home');
+  const [banners, setBanners] = useState<Banner[]>([]);
   const [mensajesNoLeidos, setMensajesNoLeidos] = useState(0);
 
   useEffect(() => {
@@ -122,20 +120,21 @@ function ClienteHome() {
         razon_social: data.razon_social || '',
         habilitar_calculadora: data.habilitar_calculadora ?? false,
         habilitar_ctas_ctes: data.habilitar_ctas_ctes ?? false,
-        habilitar_mensajes: data.habilitar_mensajes ?? false, // === NUEVO ===
+        habilitar_mensajes: data.habilitar_mensajes ?? false,
+        habilitar_mis_promociones: data.habilitar_mis_promociones ?? false,
       }))
       .catch(() => {});
   }, [mayorista_id]);
 
-  // === NUEVO: badge de mensajes no leídos del mayorista (se refresca al volver del chat) ===
+  // Badge de mensajes no leídos — se refresca cada vez que se monta /cliente
   useEffect(() => {
-    if (!mayorista_id || !cliente.cuit || !cfg.habilitar_mensajes || vista !== 'home') return;
+    if (!mayorista_id || !cliente.cuit || !cfg.habilitar_mensajes) return;
     fetch(`${API}/api/mensajes/${mayorista_id}/${encodeURIComponent(cliente.cuit)}/no-leidos`)
       .then(r => r.json())
       .then(data => setMensajesNoLeidos(data.total || 0))
       .catch(() => {});
     // eslint-disable-next-line
-  }, [mayorista_id, cfg.habilitar_mensajes, vista]);
+  }, [mayorista_id, cfg.habilitar_mensajes]);
 
   // === NUEVO: banners activos y vigentes (vacío si habilitar_banners=false) ===
   useEffect(() => {
@@ -192,11 +191,6 @@ function ClienteHome() {
     },
   ];
 
-  // === NUEVO: chat en el mismo lugar (sin ruta nueva) ===
-  if (vista === 'mensajes') {
-    return <MisMensajes onVolver={() => setVista('home')} />;
-  }
-
   return (
     <div className="min-h-screen bg-gray-100">
       {/* NAVBAR */}
@@ -238,10 +232,9 @@ function ClienteHome() {
               </a>
             ))}
 
-          {/* === NUEVO: card Mis Mensajes — solo con habilitar_mensajes=true === */}
           {cfg.habilitar_mensajes && (
-            <button onClick={() => setVista('mensajes')}
-              className="w-full flex items-center gap-4 p-4 rounded-xl border-2 transition-colors cursor-pointer bg-cyan-50 border-cyan-200 hover:bg-cyan-100 text-left">
+            <a href="/mis-mensajes"
+              className="flex items-center gap-4 p-4 rounded-xl border-2 transition-colors cursor-pointer bg-cyan-50 border-cyan-200 hover:bg-cyan-100">
               <span className="text-3xl text-cyan-600 relative">
                 💬
                 {mensajesNoLeidos > 0 && (
@@ -259,8 +252,30 @@ function ClienteHome() {
                 </p>
               </div>
               <span className="ml-auto text-gray-400 text-lg">›</span>
-            </button>
+            </a>
           )}
+
+          {cfg.habilitar_mis_promociones && (
+            <a href="/mis-promociones"
+              className="flex items-center gap-4 p-4 rounded-xl border-2 transition-colors cursor-pointer bg-orange-50 border-orange-200 hover:bg-orange-100">
+              <span className="text-3xl text-orange-500">🎁</span>
+              <div>
+                <p className="font-bold text-gray-800">Mis Promociones</p>
+                <p className="text-sm text-gray-500">Ofertas y descuentos especiales</p>
+              </div>
+              <span className="ml-auto text-gray-400 text-lg">›</span>
+            </a>
+          )}
+
+          <a href="/mis-tickets"
+            className="flex items-center gap-4 p-4 rounded-xl border-2 transition-colors cursor-pointer bg-yellow-50 border-yellow-200 hover:bg-yellow-100">
+            <span className="text-3xl text-yellow-600">🧾</span>
+            <div>
+              <p className="font-bold text-gray-800">Mis Tickets</p>
+              <p className="text-sm text-gray-500">Armá un ticket de venta para tu cliente</p>
+            </div>
+            <span className="ml-auto text-gray-400 text-lg">›</span>
+          </a>
         </div>
       </div>
 

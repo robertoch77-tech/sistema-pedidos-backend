@@ -8,6 +8,9 @@ import MisPrecios from './pages/MisPrecios';
 import CtasCtes from './pages/CtasCtes';
 import ClienteHome from './pages/ClienteHome';
 import Admin from './pages/Admin';
+import MisMensajes from './pages/MisMensajes';
+import MisPromociones from './pages/MisPromociones';
+import MisTickets from './pages/MisTickets';
 
 function RedirectToLogin() {
   const location = useLocation();
@@ -40,6 +43,15 @@ function App() {
         } />
         <Route path="/ctas-ctes" element={
           cliente ? <CtasCtes /> : <Navigate to="/login" />
+        } />
+        <Route path="/mis-mensajes" element={
+          cliente ? <MisMensajes onVolver={() => { window.location.href = '/cliente'; }} /> : <Navigate to="/login" />
+        } />
+        <Route path="/mis-promociones" element={
+          cliente ? <MisPromociones mayorista_id={JSON.parse(cliente).mayorista_id} onVolver={() => { window.location.href = '/cliente'; }} /> : <Navigate to="/login" />
+        } />
+        <Route path="/mis-tickets" element={
+          cliente ? <MisTickets /> : <Navigate to="/login" />
         } />
         <Route path="*" element={<RedirectToLogin />} />
       </Routes>

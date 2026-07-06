@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 const Logo = ({ size = 28 }: { size?: number }) => (
   <svg viewBox="0 0 80 80" width={size} height={size} style={{ display: 'block' }}>
@@ -53,6 +55,51 @@ function MisPedidos() {
   };
 
   const formatPrecio = (n?: number) => (n || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const generarComprobante = (pedido: Pedido) => {
+    const doc = new jsPDF();
+    doc.setFontSize(18);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Comprobante de pedido', 14, 16);
+
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(100);
+    let y = 23;
+    if (razonSocial) { doc.text(razonSocial, 14, y); y += 6; }
+    doc.setTextColor(0);
+    doc.text(`Pedido N°: ${pedido.numero_pedido}`, 14, y); y += 6;
+    doc.text(`Fecha: ${new Date(pedido.fecha_pedido).toLocaleDateString('es-AR')}`, 14, y); y += 6;
+    doc.text(`Cliente: ${cliente.nombre || ''}`, 14, y); y += 6;
+
+    const filas = (pedido.items || [])
+      .filter((i: any) => i.nombre)
+      .map((i: any) => [
+        i.nombre,
+        String(i.cantidad),
+        `$${formatPrecio(i.precio_unitario * i.cantidad)}`,
+      ]);
+
+    autoTable(doc, {
+      head: [['Producto', 'Cant.', 'Subtotal']],
+      body: filas,
+      startY: y + 2,
+      styles: { fontSize: 9 },
+      headStyles: { fillColor: [22, 163, 74] },
+      columnStyles: {
+        0: { cellWidth: 120 },
+        1: { cellWidth: 20, halign: 'center' },
+        2: { cellWidth: 40, halign: 'right' },
+      },
+    });
+
+    const finalY = (doc as any).lastAutoTable.finalY + 8;
+    doc.setFontSize(13);
+    doc.setFont('helvetica', 'bold');
+    doc.text(`Total estimado: $${formatPrecio(pedido.total_estimado)}`, 14, finalY);
+
+    doc.save(`comprobante-pedido-${pedido.numero_pedido}.pdf`);
+  };
 
   const pedidosFiltrados = pedidos.filter(p => {
     const coincideFecha = filtroFecha ? new Date(p.fecha_pedido).toLocaleDateString('es-AR').includes(filtroFecha) : true;
@@ -152,6 +199,12 @@ function MisPedidos() {
                         className="mt-3 w-full bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg text-sm font-semibold flex items-center justify-center">
                         ✏️ Editar borrador
                       </a>
+                    )}
+                    {(pedido.estado === 'enviado' || pedido.estado === 'impreso') && (
+                      <button onClick={() => generarComprobante(pedido)}
+                        className="mt-3 w-full bg-gray-100 hover:bg-gray-200 text-gray-700 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2">
+                        🧾 Descargar comprobante
+                      </button>
                     )}
                   </div>
                 )}
