@@ -74,6 +74,8 @@ app.use('/api/ofertas', require('./routes/ofertas'));
 app.use('/api/productos-solicitados', require('./routes/productos-solicitados'));
 const bannersRouter = require('./routes/banners');
 app.use('/api/banners', bannersRouter);
+const mensajesRouter = require('./routes/mensajes');
+app.use('/api/mensajes', mensajesRouter);
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {

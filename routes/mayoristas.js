@@ -32,7 +32,7 @@ router.get('/:id/configuracion', async (req, res) => {
               orden_pdf, config_habilitada, pedir_clave, tamanio_hoja, items_por_hoja,
               numero_pedido_inicio, habilitar_ctas_ctes, razon_social, habilitar_demanda, habilitar_ofertas, habilitar_productos_solicitados,
               habilitar_descuentos_por_cliente,
-              habilitar_lector_barras, habilitar_cross_selling
+              habilitar_lector_barras, habilitar_cross_selling, habilitar_mensajes
        FROM mayoristas WHERE id=$1`, [id]
     );
     if (!resultado.rows[0]) return res.status(404).json({ mensaje: 'Mayorista no encontrado' });
