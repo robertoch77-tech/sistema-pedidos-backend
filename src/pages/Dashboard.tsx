@@ -385,6 +385,319 @@ function Banners() {
   );
 }
 
+// === NUEVO: chat mayorista ↔ clientes ===
+
+interface HiloMensajes {
+  cliente_cuit: string;
+  cliente_nombre: string;
+  ultimo_mensaje: string;
+  ultima_fecha: string;
+  no_leidos: number;
+}
+
+interface MensajeChat {
+  id: number;
+  mayorista_id: number;
+  cliente_cuit: string;
+  cliente_nombre: string;
+  texto: string;
+  origen: 'cliente' | 'mayorista';
+  leido: boolean;
+  fecha: string;
+}
+
+interface ClienteIvan {
+  id_cliente: number;
+  doc_cliente: string;
+  nom_fan_cliente: string;
+  raz_soc_cliente: string;
+  es_activo: boolean;
+}
+
+const arreglarNombreChat = (txt?: string) => (txt || '').replace(/�/g, 'Ñ');
+
+const formatFechaChat = (fecha: string) => {
+  const d = new Date(fecha);
+  const hoy = new Date();
+  const esHoy = d.toDateString() === hoy.toDateString();
+  const hora = d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+  return esHoy ? hora : `${d.toLocaleDateString('es-AR')} ${hora}`;
+};
+
+function Mensajes({ onNoLeidosChange }: { onNoLeidosChange: () => void }) {
+  const mayorista = JSON.parse(localStorage.getItem('mayorista') || '{}');
+
+  const [hilos, setHilos] = useState<HiloMensajes[]>([]);
+  const [cargandoHilos, setCargandoHilos] = useState(true);
+  const [hiloAbierto, setHiloAbierto] = useState<{ cuit: string; nombre: string } | null>(null);
+  const [mensajes, setMensajes] = useState<MensajeChat[]>([]);
+  const [cargandoHilo, setCargandoHilo] = useState(false);
+  const [texto, setTexto] = useState('');
+  const [enviando, setEnviando] = useState(false);
+  const finRef = React.useRef<HTMLDivElement | null>(null);
+
+  // Nueva conversación — buscador de clientes de Ivan (mismo patrón que Clientes)
+  const [buscadorAbierto, setBuscadorAbierto] = useState(false);
+  const [busquedaCliente, setBusquedaCliente] = useState('');
+  const [resultadosCliente, setResultadosCliente] = useState<ClienteIvan[]>([]);
+  const [buscandoCliente, setBuscandoCliente] = useState(false);
+
+  const cargarHilos = async () => {
+    try {
+      const res = await fetch(`${API}/api/mensajes/${mayorista.id}`);
+      const data = await res.json();
+      setHilos(Array.isArray(data) ? data : []);
+    } catch {} finally { setCargandoHilos(false); }
+  };
+
+  useEffect(() => {
+    cargarHilos();
+    const interval = setInterval(cargarHilos, 30000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line
+  }, []);
+
+  const cargarHiloAbierto = async (cuit: string, marcarLeidos: boolean) => {
+    try {
+      const res = await fetch(`${API}/api/mensajes/${mayorista.id}/${encodeURIComponent(cuit)}`);
+      const data = await res.json();
+      if (Array.isArray(data)) setMensajes(data);
+      if (marcarLeidos) {
+        await fetch(`${API}/api/mensajes/${mayorista.id}/${encodeURIComponent(cuit)}/leidos?lector=mayorista`, { method: 'PUT' });
+        cargarHilos();
+        onNoLeidosChange();
+      }
+    } catch {}
+  };
+
+  // Polling cada 15s del hilo abierto — marca leídos porque el hilo está a la vista
+  useEffect(() => {
+    if (!hiloAbierto) return;
+    const interval = setInterval(() => cargarHiloAbierto(hiloAbierto.cuit, true), 15000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line
+  }, [hiloAbierto]);
+
+  useEffect(() => {
+    finRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [mensajes.length, cargandoHilo]);
+
+  // Buscador de clientes con debounce — busca en viewClientes de Ivan
+  useEffect(() => {
+    if (!buscadorAbierto || busquedaCliente.trim().length < 3) { setResultadosCliente([]); return; }
+    const timer = setTimeout(async () => {
+      setBuscandoCliente(true);
+      try {
+        const res = await fetch(`${API}/api/clientes/${mayorista.id}?busqueda=${encodeURIComponent(busquedaCliente.trim())}&pagina=1`);
+        const data = await res.json();
+        setResultadosCliente(data.clientes || []);
+      } catch {} finally { setBuscandoCliente(false); }
+    }, 400);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line
+  }, [busquedaCliente, buscadorAbierto]);
+
+  const abrirHilo = async (cuit: string, nombre: string) => {
+    setHiloAbierto({ cuit, nombre });
+    setMensajes([]);
+    setBuscadorAbierto(false);
+    setBusquedaCliente(''); setResultadosCliente([]);
+    setCargandoHilo(true);
+    await cargarHiloAbierto(cuit, true);
+    setCargandoHilo(false);
+  };
+
+  const volverALista = () => {
+    setHiloAbierto(null);
+    setMensajes([]);
+    cargarHilos();
+    onNoLeidosChange();
+  };
+
+  const enviar = async () => {
+    const t = texto.trim();
+    if (!t || enviando || !hiloAbierto) return;
+    setEnviando(true);
+    const local: MensajeChat = {
+      id: -Date.now(),
+      mayorista_id: mayorista.id,
+      cliente_cuit: hiloAbierto.cuit,
+      cliente_nombre: hiloAbierto.nombre,
+      texto: t,
+      origen: 'mayorista',
+      leido: false,
+      fecha: new Date().toISOString(),
+    };
+    setMensajes(prev => [...prev, local]);
+    setTexto('');
+    try {
+      const res = await fetch(`${API}/api/mensajes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mayorista_id: mayorista.id,
+          cliente_cuit: hiloAbierto.cuit,
+          cliente_nombre: hiloAbierto.nombre,
+          texto: t,
+          origen: 'mayorista',
+        }),
+      });
+      const guardado = await res.json();
+      if (guardado && guardado.id) {
+        setMensajes(prev => prev.map(m => (m.id === local.id ? guardado : m)));
+      }
+      cargarHilos();
+    } catch {} finally { setEnviando(false); }
+  };
+
+  const listaHilos = (
+    <div className="flex flex-col h-full">
+      <div className="p-3 border-b">
+        <button onClick={() => { setBuscadorAbierto(true); setBusquedaCliente(''); setResultadosCliente([]); }}
+          className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg text-sm font-semibold">
+          ➕ Nueva conversación
+        </button>
+      </div>
+      <div className="flex-1 overflow-y-auto">
+        {cargandoHilos ? (
+          <div className="text-center py-12 text-gray-400 text-sm">Cargando...</div>
+        ) : hilos.length === 0 ? (
+          <div className="text-center py-12 text-gray-400 text-sm px-4">
+            No hay conversaciones todavía. Iniciá una con "Nueva conversación".
+          </div>
+        ) : (
+          hilos.map(h => (
+            <button key={h.cliente_cuit} onClick={() => abrirHilo(h.cliente_cuit, h.cliente_nombre)}
+              className={`w-full text-left px-4 py-3 border-b border-gray-100 hover:bg-gray-50 transition-colors ${
+                hiloAbierto?.cuit === h.cliente_cuit ? 'bg-blue-50' : ''
+              }`}>
+              <div className="flex items-center justify-between gap-2">
+                <p className="font-semibold text-gray-800 text-sm truncate">{arreglarNombreChat(h.cliente_nombre) || h.cliente_cuit}</p>
+                <span className="text-[10px] text-gray-400 flex-shrink-0">{formatFechaChat(h.ultima_fecha)}</span>
+              </div>
+              <div className="flex items-center justify-between gap-2 mt-0.5">
+                <p className="text-xs text-gray-500 truncate">{h.ultimo_mensaje}</p>
+                {h.no_leidos > 0 && (
+                  <span className="bg-red-500 text-white text-[10px] min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center font-bold flex-shrink-0">
+                    {h.no_leidos}
+                  </span>
+                )}
+              </div>
+            </button>
+          ))
+        )}
+      </div>
+    </div>
+  );
+
+  const panelHilo = !hiloAbierto ? (
+    <div className="h-full hidden md:flex items-center justify-center text-gray-400 text-sm">
+      Elegí una conversación o iniciá una nueva
+    </div>
+  ) : (
+    <div className="flex flex-col h-full">
+      <div className="px-4 py-3 border-b bg-white flex items-center gap-3 flex-shrink-0">
+        <button onClick={volverALista} className="md:hidden text-gray-500 hover:text-gray-700 text-lg">←</button>
+        <div className="min-w-0">
+          <p className="font-semibold text-gray-800 text-sm truncate">{arreglarNombreChat(hiloAbierto.nombre) || hiloAbierto.cuit}</p>
+          <p className="text-xs text-gray-400">CUIT {hiloAbierto.cuit}</p>
+        </div>
+        <button onClick={volverALista} className="hidden md:block ml-auto text-xs text-gray-400 hover:text-gray-600">
+          Cerrar
+        </button>
+      </div>
+      <div className="flex-1 overflow-y-auto p-4 space-y-2 bg-gray-50">
+        {cargandoHilo ? (
+          <div className="text-center py-12 text-gray-400 text-sm">Cargando mensajes...</div>
+        ) : mensajes.length === 0 ? (
+          <div className="text-center py-12 text-gray-400 text-sm">
+            Sin mensajes todavía. ¡Escribile a {arreglarNombreChat(hiloAbierto.nombre) || 'este cliente'}!
+          </div>
+        ) : (
+          mensajes.map(m => (
+            <div key={m.id} className={`flex ${m.origen === 'mayorista' ? 'justify-end' : 'justify-start'}`}>
+              <div className={`max-w-[80%] md:max-w-[65%] rounded-2xl px-4 py-2 shadow-sm ${
+                m.origen === 'mayorista'
+                  ? 'bg-blue-600 text-white rounded-br-sm'
+                  : 'bg-white text-gray-800 rounded-bl-sm border border-gray-100'
+              }`}>
+                <p className="text-sm whitespace-pre-wrap break-words">{m.texto}</p>
+                <p className={`text-[10px] mt-1 text-right ${m.origen === 'mayorista' ? 'text-blue-200' : 'text-gray-400'}`}>
+                  {formatFechaChat(m.fecha)}
+                </p>
+              </div>
+            </div>
+          ))
+        )}
+        <div ref={finRef} />
+      </div>
+      <div className="bg-white border-t p-3 flex gap-2 flex-shrink-0">
+        <input
+          type="text"
+          value={texto}
+          onChange={e => setTexto(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') enviar(); }}
+          placeholder="Escribí tu mensaje..."
+          className="flex-1 border border-gray-300 rounded-full px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+        <button onClick={enviar} disabled={!texto.trim() || enviando}
+          className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-5 py-2 rounded-full text-sm font-semibold">
+          Enviar
+        </button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="p-6 h-[calc(100vh-140px)] flex flex-col">
+      <h2 className="text-2xl font-bold text-gray-800 mb-4 flex-shrink-0">💬 Mensajes</h2>
+
+      <div className="bg-white rounded-xl shadow-sm flex-1 overflow-hidden flex min-h-0">
+        {/* Lista de hilos — en celular se oculta cuando hay hilo abierto */}
+        <div className={`${hiloAbierto ? 'hidden md:flex' : 'flex'} flex-col w-full md:w-80 md:border-r flex-shrink-0`}>
+          {listaHilos}
+        </div>
+        {/* Hilo — en celular ocupa todo cuando está abierto */}
+        <div className={`${hiloAbierto ? 'flex' : 'hidden md:flex'} flex-col flex-1 min-w-0`}>
+          {panelHilo}
+        </div>
+      </div>
+
+      {/* MODAL NUEVA CONVERSACIÓN */}
+      {buscadorAbierto && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+          onClick={() => setBuscadorAbierto(false)}>
+          <div className="bg-white rounded-xl shadow-lg w-full max-w-md p-4" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-bold text-gray-800">Nueva conversación</h3>
+              <button onClick={() => setBuscadorAbierto(false)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+            </div>
+            <input type="text" autoFocus
+              placeholder="Buscar cliente por CUIT o nombre (mín. 3 caracteres)"
+              value={busquedaCliente} onChange={e => setBusquedaCliente(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            {buscandoCliente && <p className="text-xs text-gray-400 mt-2">Buscando...</p>}
+            {resultadosCliente.length > 0 && (
+              <div className="mt-2 border border-gray-200 rounded-lg max-h-64 overflow-y-auto">
+                {resultadosCliente.map(c => {
+                  const nombre = arreglarNombreChat(c.nom_fan_cliente || c.raz_soc_cliente);
+                  return (
+                    <button key={c.id_cliente} onClick={() => abrirHilo(c.doc_cliente, nombre)}
+                      className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 border-b border-gray-100 last:border-0">
+                      <p className="font-medium text-gray-800 truncate">{nombre}</p>
+                      <p className="text-xs text-gray-400 font-mono">{c.doc_cliente}</p>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Dashboard() {
   const mayorista = JSON.parse(localStorage.getItem('mayorista') || '{}');
   const [menuAbierto, setMenuAbierto] = useState(false);
@@ -398,6 +711,35 @@ function Dashboard() {
   // === NUEVO: el flag habilitar_banners no viene en el login ni en /configuracion,
   // se consulta al endpoint propio de banners ===
   const [bannersHabilitado, setBannersHabilitado] = useState(false);
+  // === NUEVO: chat — flag desde /configuracion y badge de no leídos ===
+  const [mensajesHabilitado, setMensajesHabilitado] = useState(false);
+  const [mensajesNoLeidos, setMensajesNoLeidos] = useState(0);
+
+  useEffect(() => {
+    if (!mayorista.id) return;
+    fetch(`${API}/api/mayoristas/${mayorista.id}/configuracion`)
+      .then(r => r.json())
+      .then(data => setMensajesHabilitado(data.habilitar_mensajes ?? false))
+      .catch(() => {});
+    // eslint-disable-next-line
+  }, []);
+
+  // Badge de mensajes no leídos — mismo patrón de polling 30s que pedidos
+  const fetchMensajesNoLeidos = async () => {
+    try {
+      const res = await fetch(`${API}/api/mensajes/${mayorista.id}/no-leidos/count`);
+      const data = await res.json();
+      setMensajesNoLeidos(data.total || 0);
+    } catch {}
+  };
+
+  useEffect(() => {
+    if (!mayorista.id || !mensajesHabilitado) return;
+    fetchMensajesNoLeidos();
+    const interval = setInterval(fetchMensajesNoLeidos, 30000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line
+  }, [mensajesHabilitado]);
 
   useEffect(() => {
     if (paginaActual === 'dashboard') cargarStats();
@@ -449,6 +791,7 @@ function Dashboard() {
     productos: 'Productos', clientes: 'Clientes', pedidos: 'Pedidos',
     demanda: 'Demanda', ofertas: 'Ofertas',
     'productos-solicitados': 'Más/Menos solicitados', configuracion: 'Configuración',
+    banners: 'Banners', mensajes: 'Mensajes', // === NUEVO ===
   };
 
   const navegar = (key: string) => { setPaginaActual(key); setSubseccionLabel(''); setMenuAbierto(false); };
@@ -464,6 +807,8 @@ function Dashboard() {
     ...(mayorista.habilitar_productos_solicitados ? [{ icon: '📈', label: 'Más/Menos solicitados', key: 'productos-solicitados' }] : []),
     // === NUEVO ===
     ...(bannersHabilitado ? [{ icon: '🖼️', label: 'Banners', key: 'banners' }] : []),
+    // === NUEVO ===
+    ...(mensajesHabilitado ? [{ icon: '💬', label: 'Mensajes', key: 'mensajes', badge: mensajesNoLeidos }] : []),
     { icon: '⚙️', label: 'Configuración',  key: 'configuracion' },
   ];
 
@@ -477,6 +822,7 @@ function Dashboard() {
       case 'ofertas':       return <Ofertas />;
       case 'productos-solicitados': return <ProductosSolicitados />; // === NUEVO ===
       case 'banners':       return <Banners />; // === NUEVO ===
+      case 'mensajes':      return <Mensajes onNoLeidosChange={fetchMensajesNoLeidos} />; // === NUEVO ===
       default: return (
         <main className="flex-1 p-6">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">

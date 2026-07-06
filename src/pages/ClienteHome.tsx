@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import MisMensajes from './MisMensajes'; // === NUEVO: chat con el mayorista ===
 
 const Logo = ({ size = 28 }: { size?: number }) => (
   <svg viewBox="0 0 80 80" width={size} height={size} style={{ display: 'block' }}>
@@ -106,8 +107,12 @@ function ClienteHome() {
     razon_social: '',
     habilitar_calculadora: false,
     habilitar_ctas_ctes: false,
+    habilitar_mensajes: false, // === NUEVO ===
   });
   const [banners, setBanners] = useState<Banner[]>([]); // === NUEVO ===
+  // === NUEVO: chat — vista en el mismo lugar y badge de no leídos ===
+  const [vista, setVista] = useState<'home' | 'mensajes'>('home');
+  const [mensajesNoLeidos, setMensajesNoLeidos] = useState(0);
 
   useEffect(() => {
     if (!mayorista_id) return;
@@ -117,9 +122,20 @@ function ClienteHome() {
         razon_social: data.razon_social || '',
         habilitar_calculadora: data.habilitar_calculadora ?? false,
         habilitar_ctas_ctes: data.habilitar_ctas_ctes ?? false,
+        habilitar_mensajes: data.habilitar_mensajes ?? false, // === NUEVO ===
       }))
       .catch(() => {});
   }, [mayorista_id]);
+
+  // === NUEVO: badge de mensajes no leídos del mayorista (se refresca al volver del chat) ===
+  useEffect(() => {
+    if (!mayorista_id || !cliente.cuit || !cfg.habilitar_mensajes || vista !== 'home') return;
+    fetch(`${API}/api/mensajes/${mayorista_id}/${encodeURIComponent(cliente.cuit)}/no-leidos`)
+      .then(r => r.json())
+      .then(data => setMensajesNoLeidos(data.total || 0))
+      .catch(() => {});
+    // eslint-disable-next-line
+  }, [mayorista_id, cfg.habilitar_mensajes, vista]);
 
   // === NUEVO: banners activos y vigentes (vacío si habilitar_banners=false) ===
   useEffect(() => {
@@ -176,6 +192,11 @@ function ClienteHome() {
     },
   ];
 
+  // === NUEVO: chat en el mismo lugar (sin ruta nueva) ===
+  if (vista === 'mensajes') {
+    return <MisMensajes onVolver={() => setVista('home')} />;
+  }
+
   return (
     <div className="min-h-screen bg-gray-100">
       {/* NAVBAR */}
@@ -216,6 +237,30 @@ function ClienteHome() {
                 <span className="ml-auto text-gray-400 text-lg">›</span>
               </a>
             ))}
+
+          {/* === NUEVO: card Mis Mensajes — solo con habilitar_mensajes=true === */}
+          {cfg.habilitar_mensajes && (
+            <button onClick={() => setVista('mensajes')}
+              className="w-full flex items-center gap-4 p-4 rounded-xl border-2 transition-colors cursor-pointer bg-cyan-50 border-cyan-200 hover:bg-cyan-100 text-left">
+              <span className="text-3xl text-cyan-600 relative">
+                💬
+                {mensajesNoLeidos > 0 && (
+                  <span className="absolute -top-1 -right-2 bg-red-500 text-white text-xs min-w-[20px] h-5 px-1 rounded-full flex items-center justify-center font-bold">
+                    {mensajesNoLeidos}
+                  </span>
+                )}
+              </span>
+              <div>
+                <p className="font-bold text-gray-800">Mis Mensajes</p>
+                <p className="text-sm text-gray-500">
+                  {mensajesNoLeidos > 0
+                    ? `Tenés ${mensajesNoLeidos} mensaje${mensajesNoLeidos !== 1 ? 's' : ''} sin leer`
+                    : 'Chateá con tu proveedor'}
+                </p>
+              </div>
+              <span className="ml-auto text-gray-400 text-lg">›</span>
+            </button>
+          )}
         </div>
       </div>
 
