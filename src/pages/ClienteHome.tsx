@@ -56,7 +56,7 @@ function CarruselBanners({ banners }: { banners: Banner[] }) {
         <img src={`${API}/api/imagen?url=${encodeURIComponent(banner.imagen_url)}`}
           alt={banner.titulo || 'Banner'}
           onError={() => setRotas(prev => new Set(prev).add(banner.id))}
-          className="w-full h-full object-cover"
+          className="w-full h-full object-contain p-2"
         />
       )}
       {(banner.titulo || banner.descripcion) && (
@@ -69,7 +69,7 @@ function CarruselBanners({ banners }: { banners: Banner[] }) {
   );
 
   return (
-    <div className="relative rounded-xl overflow-hidden shadow-sm mb-6 h-40 sm:h-56 bg-gray-100">
+    <div className="relative rounded-xl overflow-hidden shadow-sm mb-6 h-48 sm:h-64 bg-gray-50">
       {banner.link_destino ? (
         <a href={banner.link_destino} className="block w-full h-full relative">{contenido}</a>
       ) : (
@@ -146,8 +146,9 @@ function ClienteHome() {
   }, [mayorista_id]);
 
   const cerrarSesion = () => {
+    const codigoMayorista = localStorage.getItem('codigo_mayorista');
     localStorage.removeItem('cliente');
-    window.location.href = '/login';
+    window.location.href = codigoMayorista ? `/?m=${codigoMayorista}` : '/login';
   };
 
   const secciones = [

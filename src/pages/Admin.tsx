@@ -381,7 +381,18 @@ function Admin() {
       await navigator.clipboard.writeText(texto);
       setCopiadoId(id);
       setTimeout(() => setCopiadoId(null), 2000);
-    } catch {}
+    } catch {
+      const el = document.createElement('textarea');
+      el.value = texto;
+      el.style.position = 'fixed';
+      el.style.opacity = '0';
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand('copy');
+      document.body.removeChild(el);
+      setCopiadoId(id);
+      setTimeout(() => setCopiadoId(null), 2000);
+    }
   };
 
   const abrirRegenerar = (mayoristaId: number) => setRegenerarModal({ mayoristaId, paso: 1, texto: '' });

@@ -26,6 +26,7 @@ interface Oferta {
   porcentaje_descuento: number | null;
   fecha_inicio: string | null;
   fecha_fin: string | null;
+  imagen_url: string | null;
   activa: boolean;
   items: OfertaItem[];
 }
@@ -45,6 +46,7 @@ interface ProductoBusqueda {
   cod_producto: string;
   des_producto: string;
   precio_producto: number;
+  imagen_producto?: string;
 }
 
 const tipoInfo: Record<number, { label: string; ayuda: string }> = {
@@ -68,6 +70,7 @@ const emptyForm = {
   codigo_gratis: '',
   descripcion_gratis: '',
   cantidad_gratis: '',
+  imagen_url: '',
   items: [] as OfertaItem[],
 };
 
@@ -95,6 +98,12 @@ function Ofertas() {
   const [busquedaGratis, setBusquedaGratis] = useState('');
   const [resultadosGratis, setResultadosGratis] = useState<ProductoBusqueda[]>([]);
   const [buscandoGratis, setBuscandoGratis] = useState(false);
+
+  const [origenImagen, setOrigenImagen] = useState<'ivan' | 'url'>('ivan');
+  const [busquedaImagen, setBusquedaImagen] = useState('');
+  const [resultadosImagen, setResultadosImagen] = useState<ProductoBusqueda[]>([]);
+  const [buscandoImagen, setBuscandoImagen] = useState(false);
+  const [previewImagenRota, setPreviewImagenRota] = useState(false);
 
   useEffect(() => { cargarOfertas(); cargarConsultas(); }, []);
 
@@ -141,12 +150,26 @@ function Ofertas() {
     return () => clearTimeout(timer);
   }, [busquedaGratis]);
 
+  useEffect(() => {
+    if (origenImagen !== 'ivan' || busquedaImagen.trim().length < 3) { setResultadosImagen([]); return; }
+    const timer = setTimeout(async () => {
+      setBuscandoImagen(true);
+      try {
+        const res = await fetch(`${API}/api/productos/${mayorista.id}?busqueda=${encodeURIComponent(busquedaImagen.trim())}&pagina=1`);
+        const data = await res.json();
+        setResultadosImagen(data.productos || []);
+      } catch {} finally { setBuscandoImagen(false); }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [busquedaImagen, origenImagen]);
+
   const abrirNueva = () => {
     setForm({ ...emptyForm });
     setEditandoId(null);
     setError('');
     setBusquedaProducto(''); setResultadosProducto([]);
     setBusquedaGratis(''); setResultadosGratis([]);
+    setOrigenImagen('ivan'); setBusquedaImagen(''); setResultadosImagen([]); setPreviewImagenRota(false);
     setVista('form');
   };
 
@@ -164,12 +187,14 @@ function Ofertas() {
       codigo_gratis: oferta.codigo_gratis || '',
       descripcion_gratis: oferta.descripcion_gratis || '',
       cantidad_gratis: oferta.cantidad_gratis != null ? String(oferta.cantidad_gratis) : '',
+      imagen_url: oferta.imagen_url || '',
       items: (oferta.items || []).map(i => ({ ...i })),
     });
     setEditandoId(oferta.id);
     setError('');
     setBusquedaProducto(''); setResultadosProducto([]);
     setBusquedaGratis(''); setResultadosGratis([]);
+    setOrigenImagen('ivan'); setBusquedaImagen(''); setResultadosImagen([]); setPreviewImagenRota(false);
     setVista('form');
   };
 
@@ -230,6 +255,7 @@ function Ofertas() {
       porcentaje_descuento: form.porcentaje_descuento !== '' ? parseFloat(form.porcentaje_descuento) : null,
       fecha_inicio: form.fecha_inicio || null,
       fecha_fin: form.fecha_fin || null,
+      imagen_url: form.imagen_url || null,
       items: form.items.map(i => ({
         producto_id: i.producto_id,
         codigo: i.codigo,
@@ -321,7 +347,13 @@ function Ofertas() {
               {ofertas.map(o => (
                 <div key={o.id} className="bg-white rounded-xl shadow-sm p-4">
                   <div className="flex items-start justify-between">
-                    <div>
+                    <div className="flex items-start gap-3">
+                      {o.imagen_url && (
+                        <img src={`${API}/api/imagen?url=${encodeURIComponent(o.imagen_url)}`}
+                          alt={o.titulo}
+                          className="w-14 h-14 object-contain rounded-lg border border-gray-100 bg-gray-50 flex-shrink-0" />
+                      )}
+                      <div>
                       <p className="font-semibold text-gray-800">{o.titulo}</p>
                       <p className="text-xs text-gray-500">{tipoInfo[o.tipo]?.label}</p>
                       {o.descripcion && <p className="text-sm text-gray-600 mt-1">{o.descripcion}</p>}
@@ -331,6 +363,7 @@ function Ofertas() {
                           <> · Vigencia: {o.fecha_inicio || '...'} a {o.fecha_fin || '...'}</>
                         )}
                       </p>
+                      </div>
                     </div>
                     <div className="flex flex-col items-end gap-2">
                       <span className={`text-xs px-2 py-1 rounded-full font-semibold ${
@@ -548,6 +581,70 @@ function Ofertas() {
               </div>
             </div>
           )}
+
+          {/* Imagen opcional */}
+          <div className="mb-4 border-t pt-4">
+            <p className="text-sm font-medium text-gray-700 mb-2">Imagen (opcional)</p>
+            <div className="flex gap-2 mb-3">
+              <button onClick={() => { setOrigenImagen('ivan'); setForm(prev => ({ ...prev, imagen_url: '' })); setPreviewImagenRota(false); setBusquedaImagen(''); setResultadosImagen([]); }}
+                className={`text-xs px-3 py-1.5 rounded-lg font-medium border ${origenImagen === 'ivan' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300'}`}>
+                Buscar producto
+              </button>
+              <button onClick={() => { setOrigenImagen('url'); setForm(prev => ({ ...prev, imagen_url: '' })); setPreviewImagenRota(false); setBusquedaImagen(''); setResultadosImagen([]); }}
+                className={`text-xs px-3 py-1.5 rounded-lg font-medium border ${origenImagen === 'url' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300'}`}>
+                Pegar URL
+              </button>
+            </div>
+
+            {origenImagen === 'ivan' && (
+              <>
+                <input type="text" placeholder="Buscar por código o descripción (mín. 3 caracteres)"
+                  value={busquedaImagen} onChange={e => setBusquedaImagen(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                {buscandoImagen && <p className="text-xs text-gray-400 mt-1">Buscando...</p>}
+                {resultadosImagen.length > 0 && (
+                  <div className="mt-2 border border-gray-200 rounded-lg max-h-48 overflow-y-auto">
+                    {resultadosImagen.map(p => (
+                      <button key={p.id_producto} onClick={() => {
+                        setForm(prev => ({ ...prev, imagen_url: p.imagen_producto || '' }));
+                        setPreviewImagenRota(false);
+                        setBusquedaImagen(''); setResultadosImagen([]);
+                      }} className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 border-b border-gray-100 last:border-0 flex items-center gap-2">
+                        {p.imagen_producto && (
+                          <img src={`${API}/api/imagen?url=${encodeURIComponent(p.imagen_producto)}`}
+                            alt="" className="w-8 h-8 object-contain rounded flex-shrink-0" />
+                        )}
+                        <span>{arreglarNombre(p.des_producto)} <span className="text-gray-400 font-mono text-xs">({p.cod_producto})</span></span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+
+            {origenImagen === 'url' && (
+              <input type="text" placeholder="https://..."
+                value={form.imagen_url} onChange={e => { setForm(prev => ({ ...prev, imagen_url: e.target.value })); setPreviewImagenRota(false); }}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            )}
+
+            {form.imagen_url && !previewImagenRota && (
+              <div className="mt-3 flex items-center gap-3">
+                <img src={`${API}/api/imagen?url=${encodeURIComponent(form.imagen_url)}`}
+                  alt="Preview" onError={() => setPreviewImagenRota(true)}
+                  className="w-20 h-20 object-contain rounded-lg border border-gray-200 bg-gray-50" />
+                <button onClick={() => { setForm(prev => ({ ...prev, imagen_url: '' })); setPreviewImagenRota(false); }}
+                  className="text-xs text-red-500 hover:underline">Quitar imagen</button>
+              </div>
+            )}
+            {form.imagen_url && previewImagenRota && (
+              <div className="mt-2 flex items-center gap-2">
+                <span className="text-xs text-red-500">No se pudo cargar la imagen</span>
+                <button onClick={() => { setForm(prev => ({ ...prev, imagen_url: '' })); setPreviewImagenRota(false); }}
+                  className="text-xs text-gray-500 hover:underline">Limpiar</button>
+              </div>
+            )}
+          </div>
 
           {error && <p className="text-red-500 text-sm mb-3">{error}</p>}
 
