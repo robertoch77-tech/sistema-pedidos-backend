@@ -108,9 +108,11 @@ function ClienteHome() {
     habilitar_ctas_ctes: false,
     habilitar_mensajes: false,
     habilitar_mis_promociones: false,
+    habilitar_notificaciones: false,
   });
   const [banners, setBanners] = useState<Banner[]>([]);
   const [mensajesNoLeidos, setMensajesNoLeidos] = useState(0);
+  const [notificacionesNoLeidas, setNotificacionesNoLeidas] = useState(0);
 
   useEffect(() => {
     if (!mayorista_id) return;
@@ -122,6 +124,7 @@ function ClienteHome() {
         habilitar_ctas_ctes: data.habilitar_ctas_ctes ?? false,
         habilitar_mensajes: data.habilitar_mensajes ?? false,
         habilitar_mis_promociones: data.habilitar_mis_promociones ?? false,
+        habilitar_notificaciones: data.habilitar_notificaciones ?? false,
       }))
       .catch(() => {});
   }, [mayorista_id]);
@@ -135,6 +138,21 @@ function ClienteHome() {
       .catch(() => {});
     // eslint-disable-next-line
   }, [mayorista_id, cfg.habilitar_mensajes]);
+
+  // Polling de notificaciones no leídas cada 60s
+  useEffect(() => {
+    if (!mayorista_id || !cliente.cuit || !cfg.habilitar_notificaciones) return;
+    const fetchCount = () => {
+      fetch(`${API}/api/notificaciones/cliente/${mayorista_id}/${encodeURIComponent(cliente.cuit)}/count`)
+        .then(r => r.json())
+        .then(data => setNotificacionesNoLeidas(data.total || 0))
+        .catch(() => {});
+    };
+    fetchCount();
+    const interval = setInterval(fetchCount, 60000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line
+  }, [mayorista_id, cfg.habilitar_notificaciones]);
 
   // === NUEVO: banners activos y vigentes (vacío si habilitar_banners=false) ===
   useEffect(() => {
@@ -205,9 +223,21 @@ function ClienteHome() {
             <p className="text-xs text-gray-400 leading-none mt-0.5">Panel Cliente</p>
           </div>
         </div>
-        <button onClick={cerrarSesion} className="text-sm text-red-500 hover:text-red-700 font-medium">
-          Cerrar sesión
-        </button>
+        <div className="flex items-center gap-3">
+          {cfg.habilitar_notificaciones && (
+            <a href="/mis-notificaciones" className="relative text-gray-500 hover:text-blue-600">
+              <span className="text-xl">🔔</span>
+              {notificacionesNoLeidas > 0 && (
+                <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs min-w-[18px] h-[18px] px-0.5 rounded-full flex items-center justify-center font-bold leading-none">
+                  {notificacionesNoLeidas}
+                </span>
+              )}
+            </a>
+          )}
+          <button onClick={cerrarSesion} className="text-sm text-red-500 hover:text-red-700 font-medium">
+            Cerrar sesión
+          </button>
+        </div>
       </nav>
 
       {/* CONTENIDO */}

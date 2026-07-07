@@ -11,6 +11,7 @@ import Admin from './pages/Admin';
 import MisMensajes from './pages/MisMensajes';
 import MisPromociones from './pages/MisPromociones';
 import MisTickets from './pages/MisTickets';
+import MisNotificaciones from './pages/MisNotificaciones';
 
 function RedirectToLogin() {
   const location = useLocation();
@@ -52,6 +53,9 @@ function App() {
         } />
         <Route path="/mis-tickets" element={
           cliente ? <MisTickets /> : <Navigate to="/login" />
+        } />
+        <Route path="/mis-notificaciones" element={
+          cliente ? <MisNotificaciones /> : <Navigate to="/login" />
         } />
         <Route path="*" element={<RedirectToLogin />} />
       </Routes>
