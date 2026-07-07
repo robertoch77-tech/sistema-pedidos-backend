@@ -24,6 +24,8 @@ function Configuracion() {
     orden_pdf: 'codigo',
     habilitar_calculadora: false, descuento_1: 0, descuento_2: 0, descuento_3: 0, iva: 21,
     habilitar_ctas_ctes: false,
+    habilitar_medios_de_pago: false, medios_de_pago: '',
+    habilitar_notificaciones: false,
   });
 
   useEffect(() => {
@@ -48,6 +50,9 @@ function Configuracion() {
           descuento_3: data.descuento_3 || 0,
           iva: data.iva ?? 21,
           habilitar_ctas_ctes: data.habilitar_ctas_ctes ?? false,
+          habilitar_medios_de_pago: data.habilitar_medios_de_pago ?? false,
+          medios_de_pago: data.medios_de_pago || '',
+          habilitar_notificaciones: data.habilitar_notificaciones ?? false,
         });
       })
       .catch(() => {});
@@ -222,6 +227,33 @@ function Configuracion() {
               <p className="text-sm text-gray-500">Los clientes podrán consultar e imprimir su cuenta corriente</p>
             </div>
             <Switch activo={config.habilitar_ctas_ctes} onClick={() => setConfig(prev => ({ ...prev, habilitar_ctas_ctes: !prev.habilitar_ctas_ctes }))} />
+          </div>
+          <hr />
+          <div>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="font-medium text-gray-800">Mostrar medios de pago</p>
+                <p className="text-sm text-gray-500">El cliente verá cómo pagar al consultar su cuenta corriente</p>
+              </div>
+              <Switch activo={config.habilitar_medios_de_pago} onClick={() => setConfig(prev => ({ ...prev, habilitar_medios_de_pago: !prev.habilitar_medios_de_pago }))} />
+            </div>
+            {config.habilitar_medios_de_pago && (
+              <div className="mt-3">
+                <label className="text-sm font-medium text-gray-700 block mb-1">Medios de pago</label>
+                <textarea value={config.medios_de_pago}
+                  onChange={e => setConfig(prev => ({ ...prev, medios_de_pago: e.target.value }))}
+                  rows={4} placeholder="Ej: Transferencia al CBU 0000000... | Alias: MiEmpresa | Efectivo en el local..."
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
+              </div>
+            )}
+          </div>
+          <hr />
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-medium text-gray-800">Notificaciones a clientes</p>
+              <p className="text-sm text-gray-500">Enviá avisos y novedades a tus clientes</p>
+            </div>
+            <Switch activo={config.habilitar_notificaciones} onClick={() => setConfig(prev => ({ ...prev, habilitar_notificaciones: !prev.habilitar_notificaciones }))} />
           </div>
           <button onClick={guardar} disabled={guardando}
             className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl font-semibold transition-colors disabled:opacity-50">

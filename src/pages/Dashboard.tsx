@@ -698,6 +698,173 @@ function Mensajes({ onNoLeidosChange }: { onNoLeidosChange: () => void }) {
   );
 }
 
+interface NotificacionAdmin {
+  id: number;
+  titulo: string;
+  mensaje: string;
+  tipo: string;
+  leida: boolean;
+  fecha: string;
+  cliente_cuit: string | null;
+}
+
+interface ClienteBusqueda {
+  doc_cliente: string;
+  nom_fan_cliente: string;
+  raz_soc_cliente: string;
+}
+
+function Notificaciones() {
+  const mayorista = JSON.parse(localStorage.getItem('mayorista') || '{}');
+
+  const [notificaciones, setNotificaciones] = useState<NotificacionAdmin[]>([]);
+  const [cargando, setCargando] = useState(false);
+  const [enviando, setEnviando] = useState(false);
+  const [msgEnvio, setMsgEnvio] = useState('');
+
+  const [titulo, setTitulo] = useState('');
+  const [mensaje, setMensaje] = useState('');
+  const [destinatario, setDestinatario] = useState<'todos' | 'especifico'>('todos');
+  const [busquedaCliente, setBusquedaCliente] = useState('');
+  const [resultadosClientes, setResultadosClientes] = useState<ClienteBusqueda[]>([]);
+  const [buscandoCliente, setBuscandoCliente] = useState(false);
+  const [clienteSeleccionado, setClienteSeleccionado] = useState<ClienteBusqueda | null>(null);
+
+  useEffect(() => { cargar(); }, []);
+
+  const cargar = async () => {
+    setCargando(true);
+    try {
+      const res = await fetch(`${API}/api/notificaciones/${mayorista.id}`);
+      const data = await res.json();
+      setNotificaciones(Array.isArray(data) ? data : []);
+    } catch {} finally { setCargando(false); }
+  };
+
+  useEffect(() => {
+    if (destinatario !== 'especifico' || busquedaCliente.trim().length < 3) { setResultadosClientes([]); return; }
+    const timer = setTimeout(async () => {
+      setBuscandoCliente(true);
+      try {
+        const res = await fetch(`${API}/api/clientes/${mayorista.id}?busqueda=${encodeURIComponent(busquedaCliente.trim())}`);
+        const data = await res.json();
+        setResultadosClientes(Array.isArray(data) ? data.slice(0, 8) : []);
+      } catch {} finally { setBuscandoCliente(false); }
+    }, 400);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line
+  }, [busquedaCliente, destinatario]);
+
+  const enviar = async () => {
+    if (!titulo.trim() || !mensaje.trim()) { setMsgEnvio('Completá título y mensaje.'); return; }
+    if (destinatario === 'especifico' && !clienteSeleccionado) { setMsgEnvio('Seleccioná un cliente.'); return; }
+    setEnviando(true); setMsgEnvio('');
+    try {
+      const body = {
+        mayorista_id: mayorista.id,
+        cliente_cuit: destinatario === 'especifico' ? clienteSeleccionado!.doc_cliente : null,
+        titulo: titulo.trim(),
+        mensaje: mensaje.trim(),
+        tipo: 'general',
+      };
+      const res = await fetch(`${API}/api/notificaciones`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error('Error');
+      setTitulo(''); setMensaje('');
+      setClienteSeleccionado(null); setBusquedaCliente('');
+      setMsgEnvio('✅ Notificación enviada');
+      cargar();
+    } catch { setMsgEnvio('Error al enviar.'); } finally { setEnviando(false); }
+  };
+
+  const formatFecha = (f: string) => new Date(f).toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+  return (
+    <div className="p-6 max-w-2xl">
+      <h2 className="text-2xl font-bold text-gray-800 mb-6">🔔 Notificaciones</h2>
+
+      <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
+        <h3 className="text-sm font-semibold text-gray-700 mb-4">📨 Enviar notificación</h3>
+        <div className="space-y-3">
+          <input type="text" placeholder="Título" value={titulo} onChange={e => setTitulo(e.target.value)}
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          <textarea placeholder="Mensaje" value={mensaje} onChange={e => setMensaje(e.target.value)}
+            rows={3} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
+          <div className="flex gap-2">
+            <button onClick={() => { setDestinatario('todos'); setClienteSeleccionado(null); setBusquedaCliente(''); }}
+              className={`flex-1 py-2 rounded-lg text-sm font-medium border-2 transition-colors ${destinatario === 'todos' ? 'border-blue-600 bg-blue-50 text-blue-600' : 'border-gray-200 text-gray-600'}`}>
+              👥 Todos los clientes
+            </button>
+            <button onClick={() => setDestinatario('especifico')}
+              className={`flex-1 py-2 rounded-lg text-sm font-medium border-2 transition-colors ${destinatario === 'especifico' ? 'border-blue-600 bg-blue-50 text-blue-600' : 'border-gray-200 text-gray-600'}`}>
+              👤 Cliente específico
+            </button>
+          </div>
+          {destinatario === 'especifico' && (
+            <div>
+              {clienteSeleccionado ? (
+                <div className="flex items-center gap-2 bg-blue-50 rounded-lg p-2">
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-gray-800">{clienteSeleccionado.nom_fan_cliente || clienteSeleccionado.raz_soc_cliente}</p>
+                    <p className="text-xs text-gray-500 font-mono">{clienteSeleccionado.doc_cliente}</p>
+                  </div>
+                  <button onClick={() => { setClienteSeleccionado(null); setBusquedaCliente(''); }} className="text-red-500 text-sm px-2">✕</button>
+                </div>
+              ) : (
+                <>
+                  <input type="text" placeholder="Buscar por CUIT o nombre (mín. 3 caracteres)"
+                    value={busquedaCliente} onChange={e => setBusquedaCliente(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  {buscandoCliente && <p className="text-xs text-gray-400 mt-1">Buscando...</p>}
+                  {resultadosClientes.length > 0 && (
+                    <div className="mt-1 border border-gray-200 rounded-lg max-h-40 overflow-y-auto">
+                      {resultadosClientes.map(c => (
+                        <button key={c.doc_cliente} onClick={() => { setClienteSeleccionado(c); setBusquedaCliente(''); setResultadosClientes([]); }}
+                          className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 border-b border-gray-100 last:border-0">
+                          <span className="text-gray-800">{c.nom_fan_cliente || c.raz_soc_cliente}</span>
+                          <span className="text-gray-400 font-mono text-xs ml-2">{c.doc_cliente}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+          {msgEnvio && <p className="text-sm text-gray-700">{msgEnvio}</p>}
+          <button onClick={enviar} disabled={enviando}
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg text-sm font-semibold disabled:opacity-50">
+            {enviando ? 'Enviando...' : '📨 Enviar notificación'}
+          </button>
+        </div>
+      </div>
+
+      <h3 className="text-sm font-semibold text-gray-600 mb-3">Historial de envíos</h3>
+      {cargando ? (
+        <div className="text-center py-8 text-gray-400">Cargando...</div>
+      ) : notificaciones.length === 0 ? (
+        <div className="text-center py-8 text-gray-400">No hay notificaciones enviadas todavía</div>
+      ) : (
+        <div className="space-y-2">
+          {notificaciones.map(n => (
+            <div key={n.id} className="bg-white rounded-xl shadow-sm p-4">
+              <div className="flex items-start justify-between gap-2">
+                <p className="font-semibold text-gray-800 text-sm">{n.titulo}</p>
+                <span className="text-xs text-gray-400 flex-shrink-0">{formatFecha(n.fecha)}</span>
+              </div>
+              <p className="text-sm text-gray-600 mt-1">{n.mensaje}</p>
+              <p className="text-xs text-gray-400 mt-1">
+                {n.cliente_cuit ? `Para: ${n.cliente_cuit}` : 'Para: todos los clientes'}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Dashboard() {
   const mayorista = JSON.parse(localStorage.getItem('mayorista') || '{}');
   const [menuAbierto, setMenuAbierto] = useState(false);
@@ -708,18 +875,19 @@ function Dashboard() {
   });
   const [pedidosSinImprimir, setPedidosSinImprimir] = useState<any[]>([]);
   const [subseccionLabel, setSubseccionLabel] = useState('');
-  // === NUEVO: el flag habilitar_banners no viene en el login ni en /configuracion,
-  // se consulta al endpoint propio de banners ===
   const [bannersHabilitado, setBannersHabilitado] = useState(false);
-  // === NUEVO: chat — flag desde /configuracion y badge de no leídos ===
   const [mensajesHabilitado, setMensajesHabilitado] = useState(false);
   const [mensajesNoLeidos, setMensajesNoLeidos] = useState(0);
+  const [notificacionesHabilitado, setNotificacionesHabilitado] = useState(false);
 
   useEffect(() => {
     if (!mayorista.id) return;
     fetch(`${API}/api/mayoristas/${mayorista.id}/configuracion`)
       .then(r => r.json())
-      .then(data => setMensajesHabilitado(data.habilitar_mensajes ?? false))
+      .then(data => {
+        setMensajesHabilitado(data.habilitar_mensajes ?? false);
+        setNotificacionesHabilitado(data.habilitar_notificaciones ?? false);
+      })
       .catch(() => {});
     // eslint-disable-next-line
   }, []);
@@ -791,7 +959,7 @@ function Dashboard() {
     productos: 'Productos', clientes: 'Clientes', pedidos: 'Pedidos',
     demanda: 'Demanda', ofertas: 'Ofertas',
     'productos-solicitados': 'Más/Menos solicitados', configuracion: 'Configuración',
-    banners: 'Banners', mensajes: 'Mensajes', // === NUEVO ===
+    banners: 'Banners', mensajes: 'Mensajes', notificaciones: 'Notificaciones',
   };
 
   const navegar = (key: string) => { setPaginaActual(key); setSubseccionLabel(''); setMenuAbierto(false); };
@@ -809,6 +977,7 @@ function Dashboard() {
     ...(bannersHabilitado ? [{ icon: '🖼️', label: 'Banners', key: 'banners' }] : []),
     // === NUEVO ===
     ...(mensajesHabilitado ? [{ icon: '💬', label: 'Mensajes', key: 'mensajes', badge: mensajesNoLeidos }] : []),
+    ...(notificacionesHabilitado ? [{ icon: '🔔', label: 'Notificaciones', key: 'notificaciones' }] : []),
     { icon: '⚙️', label: 'Configuración',  key: 'configuracion' },
   ];
 
@@ -822,7 +991,8 @@ function Dashboard() {
       case 'ofertas':       return <Ofertas />;
       case 'productos-solicitados': return <ProductosSolicitados />; // === NUEVO ===
       case 'banners':       return <Banners />; // === NUEVO ===
-      case 'mensajes':      return <Mensajes onNoLeidosChange={fetchMensajesNoLeidos} />; // === NUEVO ===
+      case 'mensajes':      return <Mensajes onNoLeidosChange={fetchMensajesNoLeidos} />;
+      case 'notificaciones': return <Notificaciones />;
       default: return (
         <main className="flex-1 p-6">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">

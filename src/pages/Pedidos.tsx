@@ -13,6 +13,7 @@ interface Pedido {
   observaciones: string;
   cliente_nombre: string;
   cliente_cuit: string;
+  fecha_entrega_estimada?: string | null;
   items: any[];
 }
 
@@ -97,6 +98,20 @@ function Pedidos() {
       await fetch(`${API}/api/pedidos/${id}/imprimir`, { method: 'PUT' });
       setPedidos(prev => prev.map(p => p.id === id ? { ...p, estado: 'impreso' } : p));
     } catch (e) { console.error(e); }
+  };
+
+  const [fechasEntrega, setFechasEntrega] = useState<Record<number, string>>({});
+  const [guardandoFecha, setGuardandoFecha] = useState<number | null>(null);
+
+  const guardarFechaEntrega = async (id: number) => {
+    setGuardandoFecha(id);
+    try {
+      await fetch(`${API}/api/pedidos/${id}/fecha-entrega`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fecha_entrega_estimada: fechasEntrega[id] || null }),
+      });
+      setPedidos(prev => prev.map(p => p.id === id ? { ...p, fecha_entrega_estimada: fechasEntrega[id] || null } : p));
+    } catch (e) { console.error(e); } finally { setGuardandoFecha(null); }
   };
 
   const generarPDF = async (pedido: Pedido) => {
@@ -358,6 +373,22 @@ function Pedidos() {
                       ))}
                     </div>
                     {pedido.observaciones && <p className="text-sm text-gray-500 mt-3">Obs: {pedido.observaciones}</p>}
+                    {(pedido.estado === 'enviado' || pedido.estado === 'impreso') && (
+                      <div className="mt-3 bg-gray-50 rounded-lg p-3 flex flex-wrap items-end gap-2">
+                        <div className="flex-1 min-w-[160px]">
+                          <label className="text-xs text-gray-500 block mb-1">📦 Fecha de entrega estimada</label>
+                          <input type="date"
+                            defaultValue={pedido.fecha_entrega_estimada?.substring(0, 10) || ''}
+                            onChange={e => setFechasEntrega(prev => ({ ...prev, [pedido.id]: e.target.value }))}
+                            className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                        </div>
+                        <button onClick={() => guardarFechaEntrega(pedido.id)}
+                          disabled={guardandoFecha === pedido.id}
+                          className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-50">
+                          {guardandoFecha === pedido.id ? 'Guardando...' : '💾 Guardar fecha'}
+                        </button>
+                      </div>
+                    )}
                     {pedido.estado === 'enviado' && (
                       <button onClick={() => generarPDF(pedido)}
                         className="mt-3 w-full bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg text-sm font-semibold">

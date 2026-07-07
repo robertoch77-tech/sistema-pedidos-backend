@@ -33,12 +33,18 @@ function CtasCtes() {
   const [mostrarFiltroFechas, setMostrarFiltroFechas] = useState(false);
   const [razonSocial, setRazonSocial] = useState('');
   const [modoVista, setModoVista] = useState<'deuda' | 'fechas' | null>(null);
+  const [habilitarMediosDePago, setHabilitarMediosDePago] = useState(false);
+  const [mediosDePago, setMediosDePago] = useState('');
 
   useEffect(() => {
     if (!mayorista_id) return;
     fetch(`${API}/api/mayoristas/${mayorista_id}/configuracion`)
       .then(r => r.json())
-      .then(data => setRazonSocial(data.razon_social || ''))
+      .then(data => {
+        setRazonSocial(data.razon_social || '');
+        setHabilitarMediosDePago(data.habilitar_medios_de_pago ?? false);
+        setMediosDePago(data.medios_de_pago || '');
+      })
       .catch(() => {});
   }, [mayorista_id]);
 
@@ -252,6 +258,13 @@ function CtasCtes() {
           </div>
         )}
       </div>
+
+      {habilitarMediosDePago && mediosDePago && (
+        <div className="mx-4 mb-4 bg-white rounded-xl shadow-sm p-4">
+          <p className="text-sm font-semibold text-teal-700 mb-2">💳 Cómo pagar</p>
+          <p className="text-sm text-gray-700 whitespace-pre-line">{mediosDePago}</p>
+        </div>
+      )}
 
       <footer className="bg-white border-t text-center py-2 text-xs text-gray-400 mt-4">
         Gestión Integral Pedidos

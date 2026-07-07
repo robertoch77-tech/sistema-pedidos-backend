@@ -17,8 +17,20 @@ const Logo = ({ size = 28 }: { size?: number }) => (
 
 interface Pedido {
   id: number; numero_pedido: string; fecha_pedido: string;
-  total_estimado: number; estado: string; items: any[];
+  total_estimado: number; estado: string; fecha_entrega_estimada?: string | null; items: any[];
 }
+
+const colorFechaEntrega = (fecha: string): string => {
+  const hoy = new Date().toISOString().substring(0, 10);
+  if (fecha.substring(0, 10) > hoy) return 'text-green-600';
+  if (fecha.substring(0, 10) === hoy) return 'text-orange-500';
+  return 'text-red-500';
+};
+
+const formatFechaEntrega = (fecha: string): string => {
+  const d = new Date(fecha + 'T12:00:00');
+  return d.toLocaleDateString('es-AR', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });
+};
 
 const API = 'https://sistema-pedidos-backend-2hec.onrender.com';
 
@@ -194,6 +206,11 @@ function MisPedidos() {
   </div>
 ))}
                     </div>
+                    {pedido.fecha_entrega_estimada && (
+                      <p className={`text-sm font-medium mt-3 ${colorFechaEntrega(pedido.fecha_entrega_estimada)}`}>
+                        📦 Entrega estimada: {formatFechaEntrega(pedido.fecha_entrega_estimada)}
+                      </p>
+                    )}
                     {pedido.estado === 'borrador' && (
                       <a href={`/catalogo?editar=${pedido.id}`}
                         className="mt-3 w-full bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg text-sm font-semibold flex items-center justify-center">
