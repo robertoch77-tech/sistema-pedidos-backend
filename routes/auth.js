@@ -153,7 +153,7 @@ router.post('/login-cliente', async (req, res) => {
       token,
       cliente: {
         id: cliente.id_cliente,
-        nombre: cliente.nom_fan_cliente || cliente.raz_soc_cliente,
+        nombre: cliente.raz_soc_cliente || cliente.nom_fan_cliente,
         cuit: cliente.doc_cliente,
         mayorista_id: conexion.mayorista_id,
         ver_stock: cfg.rows[0]?.mostrar_stock ?? true,

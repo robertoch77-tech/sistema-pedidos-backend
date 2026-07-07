@@ -118,7 +118,7 @@ router.post('/', async (req, res) => {
       precio, cantidad_minima,
       producto_gratis_id, codigo_gratis, descripcion_gratis, cantidad_gratis,
       porcentaje_descuento,
-      fecha_inicio, fecha_fin, items
+      fecha_inicio, fecha_fin, imagen_url, items
     } = req.body;
 
     if (!mayorista_id || !tipo || !titulo)
@@ -128,12 +128,12 @@ router.post('/', async (req, res) => {
       `INSERT INTO ofertas
         (mayorista_id, tipo, titulo, descripcion, precio, cantidad_minima,
          producto_gratis_id, codigo_gratis, descripcion_gratis, cantidad_gratis,
-         porcentaje_descuento, fecha_inicio, fecha_fin, activa)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,true)
+         porcentaje_descuento, fecha_inicio, fecha_fin, imagen_url, activa)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,true)
        RETURNING *`,
       [mayorista_id, tipo, titulo.trim(), descripcion || '', precio || null, cantidad_minima || null,
        producto_gratis_id || null, codigo_gratis || null, descripcion_gratis || null, cantidad_gratis || null,
-       porcentaje_descuento || null, fecha_inicio || null, fecha_fin || null]
+       porcentaje_descuento || null, fecha_inicio || null, fecha_fin || null, imagen_url || null]
     );
     const oferta_id = oferta.rows[0].id;
 
@@ -162,18 +162,18 @@ router.put('/:id', async (req, res) => {
       precio, cantidad_minima,
       producto_gratis_id, codigo_gratis, descripcion_gratis, cantidad_gratis,
       porcentaje_descuento,
-      fecha_inicio, fecha_fin, items
+      fecha_inicio, fecha_fin, imagen_url, items
     } = req.body;
 
     const oferta = await pool.query(
       `UPDATE ofertas SET
          tipo=$1, titulo=$2, descripcion=$3, precio=$4, cantidad_minima=$5,
          producto_gratis_id=$6, codigo_gratis=$7, descripcion_gratis=$8, cantidad_gratis=$9,
-         porcentaje_descuento=$10, fecha_inicio=$11, fecha_fin=$12
-       WHERE id=$13 RETURNING *`,
+         porcentaje_descuento=$10, fecha_inicio=$11, fecha_fin=$12, imagen_url=$13
+       WHERE id=$14 RETURNING *`,
       [tipo, titulo.trim(), descripcion || '', precio || null, cantidad_minima || null,
        producto_gratis_id || null, codigo_gratis || null, descripcion_gratis || null, cantidad_gratis || null,
-       porcentaje_descuento || null, fecha_inicio || null, fecha_fin || null, id]
+       porcentaje_descuento || null, fecha_inicio || null, fecha_fin || null, imagen_url || null, id]
     );
     if (!oferta.rows[0]) return res.status(404).json({ mensaje: 'No encontrada' });
 
