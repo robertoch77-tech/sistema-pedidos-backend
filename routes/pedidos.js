@@ -257,6 +257,23 @@ router.post('/', async (req, res) => {
   }
 });
 
+// Actualizar fecha de entrega estimada
+router.put('/:id/fecha-entrega', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { fecha_entrega_estimada } = req.body;
+    const resultado = await pool.query(
+      `UPDATE pedidos_web SET fecha_entrega_estimada=$1 WHERE id=$2 RETURNING *`,
+      [fecha_entrega_estimada || null, id]
+    );
+    if (!resultado.rows[0]) return res.status(404).json({ mensaje: 'No encontrado' });
+    res.json(resultado.rows[0]);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ mensaje: 'Error del servidor' });
+  }
+});
+
 // Actualizar pedido (editar borrador)
 router.put('/:id', async (req, res) => {
   try {
