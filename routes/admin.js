@@ -207,6 +207,16 @@ router.put('/mayoristas/:id/toggle-cotizaciones', checkAdmin, async (req, res) =
   } catch (error) { res.status(500).json({ mensaje: 'Error del servidor' }); }
 });
 
+router.put('/mayoristas/:id/toggle-novedades', checkAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const resultado = await pool.query(
+      'UPDATE mayoristas SET habilitar_novedades = NOT habilitar_novedades WHERE id=$1 RETURNING id, nombre, habilitar_novedades', [id]
+    );
+    res.json(resultado.rows[0]);
+  } catch (error) { res.status(500).json({ mensaje: 'Error del servidor' }); }
+});
+
 router.put('/mayoristas/:id/toggle-pedido-sugerido', checkAdmin, async (req, res) => {
   try {
     const { id } = req.params;
