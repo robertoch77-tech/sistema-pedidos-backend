@@ -2,17 +2,18 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 
-// Guardar búsqueda sin resultado
+// Guardar búsqueda sin resultado (o nuevo tipo de demanda)
 router.post('/', async (req, res) => {
   try {
-    const { mayorista_id, busqueda, cliente_nombre } = req.body;
-    if (!mayorista_id || !busqueda || busqueda.trim().length < 3) {
+    const { mayorista_id, busqueda, cliente_nombre, tipo } = req.body;
+    if (!mayorista_id || !busqueda || busqueda.trim().length < 2) {
       return res.json({ ok: false });
     }
+    const tipofinal = tipo || 'no_encontrado';
     await pool.query(
-      `INSERT INTO demanda_no_satisfecha (mayorista_id, busqueda, cliente_nombre)
-       VALUES ($1, $2, $3)`,
-      [mayorista_id, busqueda.trim().toLowerCase(), cliente_nombre || '']
+      `INSERT INTO demanda_no_satisfecha (mayorista_id, busqueda, cliente_nombre, tipo)
+       VALUES ($1, $2, $3, $4)`,
+      [mayorista_id, busqueda.trim().toLowerCase(), cliente_nombre || '', tipofinal]
     );
     res.json({ ok: true });
   } catch (error) {
@@ -25,7 +26,7 @@ router.post('/', async (req, res) => {
 router.get('/:mayorista_id', async (req, res) => {
   try {
     const { mayorista_id } = req.params;
-    const { fecha_desde, fecha_hasta, busqueda } = req.query;
+    const { fecha_desde, fecha_hasta, busqueda, tipo } = req.query;
     const condiciones = ['mayorista_id = $1'];
     const params = [mayorista_id];
     let i = 2;
@@ -33,16 +34,18 @@ router.get('/:mayorista_id', async (req, res) => {
     if (fecha_desde) { condiciones.push(`fecha >= ($${i}::date AT TIME ZONE 'America/Argentina/Buenos_Aires')`); params.push(fecha_desde); i++; }
     if (fecha_hasta) { condiciones.push(`fecha < (($${i}::date + interval '1 day') AT TIME ZONE 'America/Argentina/Buenos_Aires')`); params.push(fecha_hasta); i++; }
     if (busqueda) { condiciones.push(`busqueda ILIKE $${i}`); params.push(`%${busqueda}%`); i++; }
+    if (tipo) { condiciones.push(`tipo = $${i}`); params.push(tipo); i++; }
 
     const resultado = await pool.query(
-      `SELECT 
+      `SELECT
          busqueda,
+         tipo,
          COUNT(*) as veces,
          MAX(fecha) as ultima_vez,
          array_agg(DISTINCT cliente_nombre) FILTER (WHERE cliente_nombre != '') as clientes
        FROM demanda_no_satisfecha
        WHERE ${condiciones.join(' AND ')}
-       GROUP BY busqueda
+       GROUP BY busqueda, tipo
        ORDER BY veces DESC, ultima_vez DESC
        LIMIT 200`,
       params

@@ -78,6 +78,10 @@ const mensajesRouter = require('./routes/mensajes');
 app.use('/api/mensajes', mensajesRouter);
 const notificacionesRouter = require('./routes/notificaciones');
 app.use('/api/notificaciones', notificacionesRouter);
+const historialRouter = require('./routes/historial');
+app.use('/api/historial', historialRouter);
+const novedadesRouter = require('./routes/novedades');
+app.use('/api/novedades', novedadesRouter);
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
