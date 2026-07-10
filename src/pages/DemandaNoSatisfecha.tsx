@@ -1,12 +1,137 @@
 import React, { useState } from 'react';
+import * as XLSX from 'xlsx';
 
 const API = 'https://sistema-pedidos-backend-2hec.onrender.com';
 
+type TipoTab = 'no_encontrado' | 'removido_carrito' | 'visto_no_comprado' | 'resumen';
+
 interface Demanda {
   busqueda: string;
+  tipo: string;
   veces: number;
   ultima_vez: string;
   clientes: string[];
+}
+
+type SortKey = 'busqueda' | 'veces' | 'ultima_vez';
+type SortDir = 'asc' | 'desc';
+
+const TABS: { id: TipoTab; label: string; color: string; activeBg: string; activeText: string }[] = [
+  { id: 'no_encontrado',     label: '🔍 No encontrados',      color: 'border-blue-500',   activeBg: 'bg-blue-500',   activeText: 'text-white' },
+  { id: 'removido_carrito',  label: '🛒 Removidos del carrito', color: 'border-orange-500', activeBg: 'bg-orange-500', activeText: 'text-white' },
+  { id: 'visto_no_comprado', label: '👁️ Vistos sin comprar',   color: 'border-purple-500', activeBg: 'bg-purple-500', activeText: 'text-white' },
+  { id: 'resumen',           label: '📊 Resumen',              color: 'border-gray-500',   activeBg: 'bg-gray-700',   activeText: 'text-white' },
+];
+
+function ClientesCelda({ clientes }: { clientes: string[] }) {
+  const [expandido, setExpandido] = useState(false);
+  const lista = (clientes || []).filter(Boolean);
+  if (lista.length === 0) return <span className="text-gray-400">—</span>;
+  if (lista.length <= 2 || expandido) return (
+    <span>
+      {lista.join(', ')}
+      {lista.length > 2 && (
+        <button onClick={() => setExpandido(false)} className="ml-1 text-blue-500 text-xs underline">menos</button>
+      )}
+    </span>
+  );
+  return (
+    <span>
+      {lista.slice(0, 2).join(', ')}
+      <button onClick={() => setExpandido(true)} className="ml-1 text-blue-500 text-xs underline">+{lista.length - 2} más</button>
+    </span>
+  );
+}
+
+function TablaFilas({
+  filas,
+  maxVeces,
+  onAtendida,
+}: {
+  filas: Demanda[];
+  maxVeces: number;
+  onAtendida: (busqueda: string, tipo: string) => void;
+}) {
+  const [sortKey, setSortKey] = useState<SortKey>('veces');
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortKey(key); setSortDir('desc'); }
+  };
+
+  const sorted = [...filas].sort((a, b) => {
+    let cmp = 0;
+    if (sortKey === 'veces') cmp = a.veces - b.veces;
+    else if (sortKey === 'busqueda') cmp = a.busqueda.localeCompare(b.busqueda);
+    else cmp = new Date(a.ultima_vez).getTime() - new Date(b.ultima_vez).getTime();
+    return sortDir === 'asc' ? cmp : -cmp;
+  });
+
+  const SortBtn = ({ col, label }: { col: SortKey; label: string }) => (
+    <th
+      className="px-4 py-3 text-left font-medium cursor-pointer select-none hover:bg-blue-700 transition-colors"
+      onClick={() => toggleSort(col)}
+    >
+      {label} {sortKey === col ? (sortDir === 'asc' ? '▲' : '▼') : <span className="opacity-40">↕</span>}
+    </th>
+  );
+
+  return (
+    <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="bg-blue-600 text-white text-xs">
+              <SortBtn col="busqueda" label="Búsqueda" />
+              <SortBtn col="veces" label="Veces" />
+              <SortBtn col="ultima_vez" label="Última vez" />
+              <th className="px-4 py-3 text-left font-medium">Clientes</th>
+              <th className="px-4 py-3 text-center font-medium">Acción</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((d, idx) => {
+              const esMayor = d.veces === maxVeces && maxVeces > 0;
+              const pct = maxVeces > 0 ? Math.round((d.veces / maxVeces) * 100) : 0;
+              const badgeColor =
+                pct >= 80 ? 'bg-red-100 text-red-700' :
+                pct >= 50 ? 'bg-orange-100 text-orange-700' :
+                'bg-gray-100 text-gray-600';
+
+              return (
+                <tr key={idx}
+                  className={`${esMayor ? 'bg-yellow-50' : idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'} transition-colors`}
+                >
+                  <td className={`px-4 py-3 font-semibold text-gray-800 ${esMayor ? 'text-yellow-700' : ''}`}>
+                    {esMayor && <span className="mr-1">⭐</span>}
+                    {d.busqueda}
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    <span className={`px-2 py-1 rounded-full text-xs font-bold ${badgeColor}`}>{d.veces}</span>
+                  </td>
+                  <td className="px-4 py-3 text-gray-500 text-xs">
+                    {new Date(d.ultima_vez).toLocaleDateString('es-AR')}
+                  </td>
+                  <td className="px-4 py-3 text-gray-600 text-xs max-w-[200px]">
+                    <ClientesCelda clientes={d.clientes} />
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    <button
+                      onClick={() => onAtendida(d.busqueda, d.tipo)}
+                      className="text-xs bg-green-100 hover:bg-green-200 text-green-700 px-2 py-1 rounded-lg font-medium"
+                    >
+                      ✓ Atendida
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 }
 
 function DemandaNoSatisfecha() {
@@ -19,6 +144,7 @@ function DemandaNoSatisfecha() {
   const [fechaHasta, setFechaHasta] = useState('');
   const [borrando, setBorrando] = useState(false);
   const [mostrado, setMostrado] = useState(false);
+  const [tabActiva, setTabActiva] = useState<TipoTab>('no_encontrado');
 
   const cargar = async () => {
     if (!fechaDesde || !fechaHasta) {
@@ -39,18 +165,14 @@ function DemandaNoSatisfecha() {
     } catch { setDemanda([]); } finally { setCargando(false); }
   };
 
-  const marcarAtendida = async (busqueda: string) => {
+  const marcarAtendida = async (busqueda: string, tipo: string) => {
     try {
-      const params = new URLSearchParams();
-      params.append('busqueda', busqueda);
-      params.append('fecha_desde', fechaDesde);
-      params.append('fecha_hasta', fechaHasta);
       await fetch(`${API}/api/demanda/${mayorista.id}/atender`, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ busqueda })
       });
-      setDemanda(prev => prev.filter(d => d.busqueda !== busqueda));
+      setDemanda(prev => prev.filter(d => !(d.busqueda === busqueda && d.tipo === tipo)));
     } catch {}
   };
 
@@ -66,11 +188,13 @@ function DemandaNoSatisfecha() {
   const imprimir = () => {
     const ventana = window.open('', '_blank');
     if (!ventana) return;
-    const totalBusquedas = demanda.reduce((acc, d) => acc + Number(d.veces), 0);
-    const clientesUnicos = demanda.flatMap(d => d.clientes || []).filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).length;
-    const filas = demanda.map(d => `
+    const datos = tabActiva === 'resumen' ? demanda : demanda.filter(d => d.tipo === tabActiva);
+    const totalBusquedas = datos.reduce((acc, d) => acc + Number(d.veces), 0);
+    const clientesUnicos = datos.flatMap(d => d.clientes || []).filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).length;
+    const filas = datos.map(d => `
       <tr>
         <td style="font-weight:bold">${d.busqueda}</td>
+        <td style="text-align:center">${d.tipo}</td>
         <td style="text-align:center">${d.veces}</td>
         <td>${new Date(d.ultima_vez).toLocaleDateString('es-AR')}</td>
         <td>${(d.clientes || []).filter(Boolean).join(', ')}</td>
@@ -99,13 +223,14 @@ function DemandaNoSatisfecha() {
         <h2>📊 Demanda No Satisfecha</h2>
         <div class="periodo">Período: ${fechaDesde} al ${fechaHasta} · Emitido: ${new Date().toLocaleDateString('es-AR')}</div>
         <div class="resumen">
-          <div class="resumen-item"><div class="resumen-num">${demanda.length}</div><div class="resumen-label">Búsquedas distintas</div></div>
+          <div class="resumen-item"><div class="resumen-num">${datos.length}</div><div class="resumen-label">Búsquedas distintas</div></div>
           <div class="resumen-item"><div class="resumen-num">${totalBusquedas}</div><div class="resumen-label">Total búsquedas</div></div>
           <div class="resumen-item"><div class="resumen-num">${clientesUnicos}</div><div class="resumen-label">Clientes</div></div>
         </div>
         <table>
           <thead><tr>
             <th>Búsqueda</th>
+            <th style="text-align:center">Tipo</th>
             <th style="text-align:center">Veces</th>
             <th>Última vez</th>
             <th>Clientes</th>
@@ -118,21 +243,57 @@ function DemandaNoSatisfecha() {
     ventana.document.close();
   };
 
+  const exportarExcel = () => {
+    const datos = tabActiva === 'resumen' ? demanda : demanda.filter(d => d.tipo === tabActiva);
+    const filas = datos.map(d => ({
+      Búsqueda: d.busqueda,
+      Tipo: d.tipo,
+      Veces: d.veces,
+      'Última vez': new Date(d.ultima_vez).toLocaleDateString('es-AR'),
+      Clientes: (d.clientes || []).filter(Boolean).join(', '),
+    }));
+    const ws = XLSX.utils.json_to_sheet(filas);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Demanda');
+    XLSX.writeFile(wb, `demanda-${tabActiva}-${fechaDesde}-${fechaHasta}.xlsx`);
+  };
+
+  // Datos filtrados por tab
+  const filasTab = (tipo: TipoTab) =>
+    tipo === 'resumen' ? demanda : demanda.filter(d => d.tipo === tipo);
+
   const totalBusquedas = demanda.reduce((acc, d) => acc + Number(d.veces), 0);
- const clientesUnicos = demanda.flatMap(d => d.clientes || []).filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).length;
+  const clientesUnicos = demanda.flatMap(d => d.clientes || []).filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).length;
+
+  const conteo = {
+    no_encontrado:     demanda.filter(d => d.tipo === 'no_encontrado').reduce((a, d) => a + d.veces, 0),
+    removido_carrito:  demanda.filter(d => d.tipo === 'removido_carrito').reduce((a, d) => a + d.veces, 0),
+    visto_no_comprado: demanda.filter(d => d.tipo === 'visto_no_comprado').reduce((a, d) => a + d.veces, 0),
+  };
+  const tipoMayor = Object.entries(conteo).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+
+  const filasActivas = filasTab(tabActiva);
+  const maxVecesActiva = Math.max(0, ...filasActivas.map(d => d.veces));
 
   return (
     <div className="p-6">
+      {/* ENCABEZADO */}
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-bold text-gray-800">📊 Demanda No Satisfecha</h2>
         <div className="flex gap-2">
-          {demanda.length > 0 && (
+          {mostrado && demanda.length > 0 && (
+            <button onClick={exportarExcel}
+              className="text-sm bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium">
+              ⬇ Excel
+            </button>
+          )}
+          {mostrado && demanda.length > 0 && (
             <button onClick={imprimir}
               className="text-sm bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded-lg font-medium">
               🖨️ Imprimir
             </button>
           )}
-          {demanda.length > 0 && (
+          {mostrado && demanda.length > 0 && (
             <button onClick={borrarTodo} disabled={borrando}
               className="text-sm bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg font-medium disabled:opacity-50">
               🗑️ Limpiar todo
@@ -167,25 +328,37 @@ function DemandaNoSatisfecha() {
         </div>
       </div>
 
-      {/* RESUMEN */}
+      {/* RESUMEN CARDS */}
       {mostrado && demanda.length > 0 && (
-        <div className="grid grid-cols-3 gap-4 mb-4">
-          <div className="bg-white rounded-xl shadow-sm p-4 text-center">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
+          <div className="bg-white rounded-xl shadow-sm p-4 text-center col-span-1">
             <p className="text-2xl font-bold text-blue-600">{demanda.length}</p>
             <p className="text-xs text-gray-500 mt-1">Búsquedas distintas</p>
           </div>
-          <div className="bg-white rounded-xl shadow-sm p-4 text-center">
+          <div className="bg-white rounded-xl shadow-sm p-4 text-center col-span-1">
             <p className="text-2xl font-bold text-orange-500">{totalBusquedas}</p>
-            <p className="text-xs text-gray-500 mt-1">Total búsquedas</p>
+            <p className="text-xs text-gray-500 mt-1">Total registros</p>
           </div>
-          <div className="bg-white rounded-xl shadow-sm p-4 text-center">
+          <div className="bg-white rounded-xl shadow-sm p-4 text-center col-span-1">
             <p className="text-2xl font-bold text-purple-600">{clientesUnicos}</p>
             <p className="text-xs text-gray-500 mt-1">Clientes distintos</p>
+          </div>
+          <div className={`bg-white rounded-xl shadow-sm p-4 text-center col-span-1 ${tipoMayor === 'no_encontrado' ? 'ring-2 ring-blue-400' : ''}`}>
+            <p className="text-2xl font-bold text-blue-500">{conteo.no_encontrado}</p>
+            <p className="text-xs text-gray-500 mt-1">🔍 No encontrados</p>
+          </div>
+          <div className={`bg-white rounded-xl shadow-sm p-4 text-center col-span-1 ${tipoMayor === 'removido_carrito' ? 'ring-2 ring-orange-400' : ''}`}>
+            <p className="text-2xl font-bold text-orange-500">{conteo.removido_carrito}</p>
+            <p className="text-xs text-gray-500 mt-1">🛒 Removidos</p>
+          </div>
+          <div className={`bg-white rounded-xl shadow-sm p-4 text-center col-span-1 ${tipoMayor === 'visto_no_comprado' ? 'ring-2 ring-purple-400' : ''}`}>
+            <p className="text-2xl font-bold text-purple-500">{conteo.visto_no_comprado}</p>
+            <p className="text-xs text-gray-500 mt-1">👁️ Vistos</p>
           </div>
         </div>
       )}
 
-      {/* RESULTADOS */}
+      {/* ESTADO VACÍO INICIAL */}
       {!mostrado ? (
         <div className="text-center py-20 text-gray-400">
           <div className="text-6xl mb-4">📊</div>
@@ -195,53 +368,45 @@ function DemandaNoSatisfecha() {
         <div className="text-center py-12 text-gray-400">Cargando...</div>
       ) : demanda.length === 0 ? (
         <div className="text-center py-12 text-gray-400">
-          <p className="text-lg">No hay búsquedas sin resultado en ese período</p>
+          <p className="text-lg">No hay registros en ese período</p>
         </div>
       ) : (
-        <div className="bg-white rounded-xl shadow-sm overflow-hidden">
-          <div className="px-4 py-3 bg-gray-50 border-b">
-            <span className="text-xs text-gray-500">{demanda.length} búsquedas distintas — ordenadas por frecuencia</span>
+        <>
+          {/* TABS */}
+          <div className="flex gap-1 mb-4 flex-wrap">
+            {TABS.map(tab => (
+              <button key={tab.id} onClick={() => setTabActiva(tab.id)}
+                className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors border-2 ${
+                  tabActiva === tab.id
+                    ? `${tab.activeBg} ${tab.activeText} ${tab.color}`
+                    : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
+                }`}>
+                {tab.label}
+                <span className={`ml-2 text-xs px-1.5 py-0.5 rounded-full ${tabActiva === tab.id ? 'bg-white bg-opacity-30' : 'bg-gray-100'}`}>
+                  {filasTab(tab.id).length}
+                </span>
+              </button>
+            ))}
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-blue-600 text-white">
-                  <th className="px-4 py-3 text-left font-medium">Búsqueda</th>
-                  <th className="px-4 py-3 text-center font-medium">Veces</th>
-                  <th className="px-4 py-3 text-left font-medium">Última vez</th>
-                  <th className="px-4 py-3 text-left font-medium">Clientes</th>
-                  <th className="px-4 py-3 text-center font-medium">Acción</th>
-                </tr>
-              </thead>
-              <tbody>
-                {demanda.map((d, idx) => (
-                  <tr key={idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                    <td className="px-4 py-3 font-semibold text-gray-800">{d.busqueda}</td>
-                    <td className="px-4 py-3 text-center">
-                      <span className={`px-2 py-1 rounded-full text-xs font-bold ${
-                        d.veces >= 5 ? 'bg-red-100 text-red-700' :
-                        d.veces >= 3 ? 'bg-orange-100 text-orange-700' :
-                        'bg-gray-100 text-gray-600'
-                      }`}>{d.veces}</span>
-                    </td>
-                    <td className="px-4 py-3 text-gray-500 text-xs">
-                      {new Date(d.ultima_vez).toLocaleDateString('es-AR')}
-                    </td>
-                    <td className="px-4 py-3 text-gray-600 text-xs">
-                      {(d.clientes || []).filter(Boolean).join(', ') || '—'}
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <button onClick={() => marcarAtendida(d.busqueda)}
-                        className="text-xs bg-green-100 hover:bg-green-200 text-green-700 px-2 py-1 rounded-lg font-medium">
-                        ✓ Atendida
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+
+          {/* CONTENIDO TAB */}
+          {filasActivas.length === 0 ? (
+            <div className="text-center py-12 text-gray-400">
+              <p>No hay registros de este tipo en el período seleccionado</p>
+            </div>
+          ) : (
+            <>
+              <div className="px-1 pb-2 text-xs text-gray-400">
+                {filasActivas.length} búsquedas distintas — ordená haciendo click en los encabezados
+              </div>
+              <TablaFilas
+                filas={filasActivas}
+                maxVeces={maxVecesActiva}
+                onAtendida={marcarAtendida}
+              />
+            </>
+          )}
+        </>
       )}
     </div>
   );

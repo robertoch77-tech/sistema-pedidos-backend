@@ -22,14 +22,15 @@ interface Producto {
   cod_producto: string;
   des_producto: string;
   precio_producto?: number;
-  stock_temporal?: number;
-  des_producto_marca?: string;
 }
 
-interface ItemTicket {
-  producto: Producto;
+interface ItemVenta {
+  id: string;
+  nombre: string;
+  codigo: string;
   cantidad: number;
-  precioVenta: number;
+  precio: number;
+  esLibre: boolean;
 }
 
 interface ClienteFinal {
@@ -46,7 +47,7 @@ const formatPrecio = (n: number) =>
 
 const arreglarNombre = (txt?: string) => (txt || '').replace(/�/g, 'Ñ');
 
-function MisTickets() {
+function CalculadoraVenta() {
   const cliente = JSON.parse(localStorage.getItem('cliente') || '{}');
   const mayorista_id = cliente.mayorista_id;
 
@@ -63,31 +64,35 @@ function MisTickets() {
     iva: 21,
   });
 
+  // Buscador catálogo
   const [busqueda, setBusqueda] = useState('');
   const [resultados, setResultados] = useState<Producto[]>([]);
-  const [cargando, setCargando] = useState(false);
-  const [items, setItems] = useState<ItemTicket[]>([]);
+  const [cargandoBusqueda, setCargandoBusqueda] = useState(false);
   const [mostrarResultados, setMostrarResultados] = useState(false);
+
+  // Items de la venta
+  const [items, setItems] = useState<ItemVenta[]>([]);
+
+  // Producto libre
+  const [libreNombre, setLibreNombre] = useState('');
+  const [librePrecio, setLibrePrecio] = useState('');
+  const [mostrarFormLibre, setMostrarFormLibre] = useState(false);
+
+  // Precio editable
+  const [precioEditando, setPrecioEditando] = useState<string | null>(null);
+  const [precioTemporal, setPrecioTemporal] = useState('');
 
   // Cliente final
   const [clienteFinal, setClienteFinal] = useState<ClienteFinal>({ nombre: '', cuit: '', direccion: '', telefono: '' });
   const [clienteFinalAbierto, setClienteFinalAbierto] = useState(false);
 
-  // Precio editable
-  const [precioEditando, setPrecioEditando] = useState<number | null>(null);
-  const [precioTemporal, setPrecioTemporal] = useState('');
-
   // Forma de pago
   const [formaPago, setFormaPago] = useState('');
   const [montoRecibido, setMontoRecibido] = useState('');
 
-  // Tamaño hoja
+  // Tamaño hoja y observaciones
   const [tamHoja, setTamHoja] = useState<'A4' | 'A5'>('A4');
-
-  // Observaciones
   const [observaciones, setObservaciones] = useState('');
-
-  // Guardado en historial
   const [guardado, setGuardado] = useState(false);
 
   useEffect(() => {
@@ -108,13 +113,13 @@ function MisTickets() {
     const q = busqueda.trim();
     if (q.length < 2) { setResultados([]); setMostrarResultados(false); return; }
     const timer = setTimeout(async () => {
-      setCargando(true);
+      setCargandoBusqueda(true);
       try {
         const res = await fetch(`${API}/api/productos/${mayorista_id}?busqueda=${encodeURIComponent(q)}&pagina=1`);
         const data = await res.json();
         setResultados(data.productos || []);
         setMostrarResultados(true);
-      } catch {} finally { setCargando(false); }
+      } catch {} finally { setCargandoBusqueda(false); }
     }, 400);
     return () => clearTimeout(timer);
     // eslint-disable-next-line
@@ -129,15 +134,28 @@ function MisTickets() {
     return costo * (1 + ganancia / 100);
   };
 
-  const agregarProducto = (p: Producto) => {
-    const idx = items.findIndex(i => i.producto.id_producto === p.id_producto);
-    if (idx >= 0) {
-      setItems(prev => prev.map((i, j) => j === idx ? { ...i, cantidad: i.cantidad + 1 } : i));
+  const setGanancia = (v: number) => {
+    setGananciaState(v);
+    localStorage.setItem('mis_precios_ganancia', String(v));
+    setItems(prev => prev.map(i => {
+      if (i.esLibre) return i;
+      return i;
+    }));
+  };
+
+  const agregarDesdeCatalogo = (p: Producto) => {
+    const id = `cat-${p.id_producto}`;
+    const existe = items.find(i => i.id === id);
+    if (existe) {
+      setItems(prev => prev.map(i => i.id === id ? { ...i, cantidad: i.cantidad + 1 } : i));
     } else {
       setItems(prev => [...prev, {
-        producto: p,
+        id,
+        nombre: p.des_producto,
+        codigo: p.cod_producto,
         cantidad: 1,
-        precioVenta: calcularPrecioVenta(p.precio_producto || 0),
+        precio: calcularPrecioVenta(p.precio_producto || 0),
+        esLibre: false,
       }]);
     }
     setBusqueda('');
@@ -145,81 +163,49 @@ function MisTickets() {
     setMostrarResultados(false);
   };
 
-  const cambiarCantidad = (id: number, delta: number) => {
+  const agregarLibre = () => {
+    const nombre = libreNombre.trim();
+    const precio = parseFloat(librePrecio.replace(',', '.')) || 0;
+    if (!nombre) return;
+    const id = `libre-${Date.now()}`;
+    setItems(prev => [...prev, { id, nombre, codigo: '', cantidad: 1, precio, esLibre: true }]);
+    setLibreNombre('');
+    setLibrePrecio('');
+    setMostrarFormLibre(false);
+  };
+
+  const cambiarCantidad = (id: string, delta: number) => {
     setItems(prev => {
-      const updated = prev.map(i => i.producto.id_producto === id
-        ? { ...i, cantidad: i.cantidad + delta }
-        : i);
+      const updated = prev.map(i => i.id === id ? { ...i, cantidad: i.cantidad + delta } : i);
       return updated.filter(i => i.cantidad > 0);
     });
   };
 
-  const setGanancia = (v: number) => {
-    setGananciaState(v);
-    localStorage.setItem('mis_precios_ganancia', String(v));
-    setItems(prev => prev.map(i => ({
-      ...i,
-      precioVenta: (() => {
-        const neto = (i.producto.precio_producto || 0)
-          * (1 - cfg.descuento_1 / 100)
-          * (1 - cfg.descuento_2 / 100)
-          * (1 - cfg.descuento_3 / 100);
-        const costo = neto * (1 + cfg.iva / 100);
-        return costo * (1 + v / 100);
-      })(),
-    })));
-  };
-
-  const confirmarEdicionPrecio = (idx: number) => {
+  const confirmarEdicionPrecio = (id: string) => {
     const val = parseFloat(precioTemporal.replace(',', '.'));
     if (!isNaN(val) && val >= 0) {
-      setItems(prev => prev.map((i, j) => j === idx ? { ...i, precioVenta: val } : i));
+      setItems(prev => prev.map(i => i.id === id ? { ...i, precio: val } : i));
     }
     setPrecioEditando(null);
     setPrecioTemporal('');
   };
 
-  const total = items.reduce((acc, i) => acc + i.precioVenta * i.cantidad, 0);
+  const total = items.reduce((acc, i) => acc + i.precio * i.cantidad, 0);
   const montoNum = parseFloat(montoRecibido.replace(',', '.')) || 0;
   const vuelto = formaPago === 'Efectivo' && montoNum > 0 ? Math.max(0, montoNum - total) : null;
 
-  const guardarEnHistorial = async (numero_correlativo: number) => {
-    try {
-      await fetch(`${API}/api/historial`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mayorista_id,
-          cliente_cuit: cliente.cuit,
-          tipo: 'ticket',
-          cliente_final_nombre: clienteFinal.nombre || null,
-          cliente_final_cuit: clienteFinal.cuit || null,
-          cliente_final_direccion: clienteFinal.direccion || null,
-          cliente_final_telefono: clienteFinal.telefono || null,
-          forma_pago: formaPago || null,
-          monto_recibido: montoNum || null,
-          vuelto: vuelto,
-          items: items.map(i => ({
-            id_producto: i.producto.id_producto,
-            cod_producto: i.producto.cod_producto,
-            nombre: i.producto.des_producto,
-            cantidad: i.cantidad,
-            precio_unitario: i.precioVenta,
-          })),
-          total,
-          ganancia_porcentaje: ganancia,
-          observaciones: observaciones || null,
-          numero_correlativo,
-        }),
-      });
-    } catch {}
+  const limpiar = () => {
+    setItems([]);
+    setClienteFinal({ nombre: '', cuit: '', direccion: '', telefono: '' });
+    setFormaPago('');
+    setMontoRecibido('');
+    setObservaciones('');
   };
 
   const generarPDF = async () => {
     if (items.length === 0) return;
 
-    // Obtener número correlativo primero (provisional, el real viene del backend)
-    let numCorrelativo = Date.now();
+    let numCorrelativo: number = Date.now();
     try {
       const res = await fetch(`${API}/api/historial`, {
         method: 'POST',
@@ -227,7 +213,7 @@ function MisTickets() {
         body: JSON.stringify({
           mayorista_id,
           cliente_cuit: cliente.cuit,
-          tipo: 'ticket',
+          tipo: 'venta',
           cliente_final_nombre: clienteFinal.nombre || null,
           cliente_final_cuit: clienteFinal.cuit || null,
           cliente_final_direccion: clienteFinal.direccion || null,
@@ -236,11 +222,12 @@ function MisTickets() {
           monto_recibido: montoNum || null,
           vuelto: vuelto,
           items: items.map(i => ({
-            id_producto: i.producto.id_producto,
-            cod_producto: i.producto.cod_producto,
-            nombre: i.producto.des_producto,
+            id_producto: i.esLibre ? null : parseInt(i.id.replace('cat-', '')),
+            cod_producto: i.codigo,
+            nombre: i.nombre,
             cantidad: i.cantidad,
-            precio_unitario: i.precioVenta,
+            precio_unitario: i.precio,
+            es_libre: i.esLibre,
           })),
           total,
           ganancia_porcentaje: ganancia,
@@ -260,13 +247,10 @@ function MisTickets() {
     const ancho = tamHoja === 'A5' ? 148 : 210;
     const mg = 14;
 
-    doc.setFontSize(16);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Ticket de Venta', mg, 16);
+    doc.setFontSize(16); doc.setFont('helvetica', 'bold');
+    doc.text('Comprobante de Venta', mg, 16);
 
-    doc.setFontSize(9);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(100);
+    doc.setFontSize(9); doc.setFont('helvetica', 'normal'); doc.setTextColor(100);
     let y = 22;
     if (cfg.razon_social) { doc.text(cfg.razon_social, mg, y); y += 5; }
     doc.text(`N° ${numCorrelativo}  ·  Fecha: ${new Date().toLocaleDateString('es-AR')}`, mg, y);
@@ -287,14 +271,14 @@ function MisTickets() {
     autoTable(doc, {
       head: [['Producto', 'Cant.', 'P. Unitario', 'Subtotal']],
       body: items.map(i => [
-        arreglarNombre(i.producto.des_producto),
+        arreglarNombre(i.nombre),
         String(i.cantidad),
-        `$${formatPrecio(i.precioVenta)}`,
-        `$${formatPrecio(i.precioVenta * i.cantidad)}`,
+        `$${formatPrecio(i.precio)}`,
+        `$${formatPrecio(i.precio * i.cantidad)}`,
       ]),
       startY: y,
       styles: { fontSize: 9 },
-      headStyles: { fillColor: [202, 138, 4] },
+      headStyles: { fillColor: [79, 70, 229] },
       columnStyles: {
         0: { cellWidth: ancho - mg * 2 - 18 - 38 - 38 },
         1: { cellWidth: 18, halign: 'center' },
@@ -309,18 +293,14 @@ function MisTickets() {
     finalY += 7;
 
     doc.setFontSize(9); doc.setFont('helvetica', 'normal');
-    if (formaPago) {
-      doc.text(`Forma de pago: ${formaPago}`, mg, finalY); finalY += 5;
-    }
+    if (formaPago) { doc.text(`Forma de pago: ${formaPago}`, mg, finalY); finalY += 5; }
     if (formaPago === 'Efectivo' && montoNum > 0) {
       doc.text(`Monto recibido: $${formatPrecio(montoNum)}`, mg, finalY); finalY += 5;
       doc.text(`Vuelto: $${formatPrecio(vuelto || 0)}`, mg, finalY); finalY += 5;
     }
-    if (observaciones) {
-      doc.text(`Obs: ${observaciones}`, mg, finalY); finalY += 5;
-    }
+    if (observaciones) { doc.text(`Obs: ${observaciones}`, mg, finalY); }
 
-    doc.save(`ticket-${numCorrelativo}-${new Date().toISOString().substring(0, 10)}.pdf`);
+    doc.save(`venta-${numCorrelativo}-${new Date().toISOString().substring(0, 10)}.pdf`);
   };
 
   return (
@@ -333,7 +313,7 @@ function MisTickets() {
             <p className="text-xs text-gray-400 leading-none">
               Gestión Integral Pedidos{cfg.razon_social ? ` | ${cfg.razon_social}` : ''}
             </p>
-            <h1 className="text-lg font-bold text-yellow-600">🧾 Mis Tickets</h1>
+            <h1 className="text-lg font-bold text-indigo-600">🖩 Calculadora de Venta</h1>
           </div>
         </div>
         <a href="/cliente" className="text-sm text-gray-500 hover:text-gray-700 font-medium">← Volver</a>
@@ -348,9 +328,9 @@ function MisTickets() {
             type="number" min={0} max={500} step={1}
             value={ganancia}
             onChange={e => setGanancia(Math.max(0, parseFloat(e.target.value) || 0))}
-            className="w-24 border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-center focus:outline-none focus:ring-2 focus:ring-yellow-400"
+            className="w-24 border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-center focus:outline-none focus:ring-2 focus:ring-indigo-400"
           />
-          <p className="text-xs text-gray-400">Mismo % que Mis Precios</p>
+          <p className="text-xs text-gray-400">Aplica sobre precios del catálogo</p>
         </div>
 
         {/* CLIENTE FINAL — colapsable */}
@@ -377,7 +357,7 @@ function MisTickets() {
                     value={clienteFinal[f.key]}
                     onChange={e => setClienteFinal(prev => ({ ...prev, [f.key]: e.target.value }))}
                     placeholder={f.placeholder}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
                   />
                 </div>
               ))}
@@ -385,27 +365,27 @@ function MisTickets() {
           )}
         </div>
 
-        {/* BUSCADOR */}
-        <div className="relative mb-4">
+        {/* BUSCADOR CATÁLOGO */}
+        <div className="relative mb-3">
           <input
             type="text"
-            placeholder="Buscá un producto para agregar al ticket..."
+            placeholder="Buscá un producto del catálogo..."
             value={busqueda}
             onChange={e => setBusqueda(e.target.value)}
-            className="w-full border border-gray-300 rounded-xl px-4 py-3 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-yellow-400"
+            className="w-full border border-gray-300 rounded-xl px-4 py-3 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
           />
-          {cargando && (
+          {cargandoBusqueda && (
             <span className="absolute right-3 top-3 text-xs text-gray-400">Buscando...</span>
           )}
           {mostrarResultados && resultados.length > 0 && (
             <div className="absolute z-20 left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-64 overflow-y-auto">
               {resultados.map(p => (
-                <button key={p.id_producto} onClick={() => agregarProducto(p)}
-                  className="w-full text-left px-4 py-2.5 hover:bg-yellow-50 border-b border-gray-100 last:border-0">
+                <button key={p.id_producto} onClick={() => agregarDesdeCatalogo(p)}
+                  className="w-full text-left px-4 py-2.5 hover:bg-indigo-50 border-b border-gray-100 last:border-0">
                   <span className="font-medium text-gray-800 text-sm">{arreglarNombre(p.des_producto)}</span>
                   <span className="text-xs text-gray-400 ml-2 font-mono">{p.cod_producto}</span>
                   {p.precio_producto ? (
-                    <span className="float-right text-xs text-yellow-700 font-semibold">
+                    <span className="float-right text-xs text-indigo-700 font-semibold">
                       Venta: ${formatPrecio(calcularPrecioVenta(p.precio_producto))}
                     </span>
                   ) : null}
@@ -415,17 +395,62 @@ function MisTickets() {
           )}
         </div>
 
-        {/* LISTA DE ITEMS */}
+        {/* PRODUCTO LIBRE */}
+        <div className="mb-4">
+          {!mostrarFormLibre ? (
+            <button
+              onClick={() => setMostrarFormLibre(true)}
+              className="w-full border-2 border-dashed border-gray-300 hover:border-indigo-400 text-gray-500 hover:text-indigo-600 rounded-xl py-2.5 text-sm font-medium transition-colors">
+              ➕ Agregar producto libre
+            </button>
+          ) : (
+            <div className="bg-white rounded-xl shadow-sm p-4 flex flex-wrap gap-2 items-end">
+              <div className="flex-[2] min-w-[150px]">
+                <label className="text-xs text-gray-500 block mb-1">Nombre</label>
+                <input
+                  type="text"
+                  value={libreNombre}
+                  onChange={e => setLibreNombre(e.target.value)}
+                  placeholder="Descripción del producto"
+                  autoFocus
+                  onKeyDown={e => e.key === 'Enter' && agregarLibre()}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                />
+              </div>
+              <div className="flex-1 min-w-[100px]">
+                <label className="text-xs text-gray-500 block mb-1">Precio</label>
+                <input
+                  type="text"
+                  value={librePrecio}
+                  onChange={e => setLibrePrecio(e.target.value)}
+                  placeholder="0.00"
+                  onKeyDown={e => e.key === 'Enter' && agregarLibre()}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                />
+              </div>
+              <button onClick={agregarLibre}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-semibold">
+                Agregar
+              </button>
+              <button onClick={() => { setMostrarFormLibre(false); setLibreNombre(''); setLibrePrecio(''); }}
+                className="bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-2 rounded-lg text-sm">
+                Cancelar
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* TABLA DE ITEMS */}
         {items.length === 0 ? (
           <div className="text-center py-16 text-gray-400">
-            <div className="text-5xl mb-3">🧾</div>
-            <p className="text-lg">Buscá productos para armar el ticket</p>
+            <div className="text-5xl mb-3">🖩</div>
+            <p className="text-lg">Buscá productos del catálogo o agregá productos libres</p>
           </div>
         ) : (
           <>
             <div className="bg-white rounded-xl shadow-sm overflow-hidden mb-4">
               <table className="w-full text-sm">
-                <thead className="bg-yellow-50 text-gray-600 text-xs uppercase">
+                <thead className="bg-indigo-50 text-gray-600 text-xs uppercase">
                   <tr>
                     <th className="text-left px-4 py-2">Producto</th>
                     <th className="px-2 py-2 text-center">Cant.</th>
@@ -435,45 +460,46 @@ function MisTickets() {
                   </tr>
                 </thead>
                 <tbody>
-                  {items.map((i, idx) => (
-                    <tr key={i.producto.id_producto} className="border-t border-gray-100">
+                  {items.map(i => (
+                    <tr key={i.id} className="border-t border-gray-100">
                       <td className="px-4 py-3">
-                        <p className="font-medium text-gray-800">{arreglarNombre(i.producto.des_producto)}</p>
-                        <p className="text-xs text-gray-400 font-mono">{i.producto.cod_producto}</p>
+                        <p className="font-medium text-gray-800">{arreglarNombre(i.nombre)}</p>
+                        {i.codigo && <p className="text-xs text-gray-400 font-mono">{i.codigo}</p>}
+                        {i.esLibre && <span className="text-xs bg-indigo-100 text-indigo-600 px-1.5 py-0.5 rounded-full font-medium">Libre</span>}
                       </td>
                       <td className="px-2 py-3">
                         <div className="flex items-center justify-center gap-1">
-                          <button onClick={() => cambiarCantidad(i.producto.id_producto, -1)}
+                          <button onClick={() => cambiarCantidad(i.id, -1)}
                             className="w-6 h-6 rounded bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold text-sm leading-none">−</button>
                           <span className="w-7 text-center font-semibold">{i.cantidad}</span>
-                          <button onClick={() => cambiarCantidad(i.producto.id_producto, 1)}
+                          <button onClick={() => cambiarCantidad(i.id, 1)}
                             className="w-6 h-6 rounded bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold text-sm leading-none">+</button>
                         </div>
                       </td>
                       <td className="px-4 py-3 text-right">
-                        {precioEditando === idx ? (
+                        {precioEditando === i.id ? (
                           <input
                             type="text"
                             value={precioTemporal}
                             onChange={e => setPrecioTemporal(e.target.value)}
-                            onBlur={() => confirmarEdicionPrecio(idx)}
-                            onKeyDown={e => { if (e.key === 'Enter') confirmarEdicionPrecio(idx); if (e.key === 'Escape') setPrecioEditando(null); }}
+                            onBlur={() => confirmarEdicionPrecio(i.id)}
+                            onKeyDown={e => { if (e.key === 'Enter') confirmarEdicionPrecio(i.id); if (e.key === 'Escape') setPrecioEditando(null); }}
                             autoFocus
-                            className="w-24 text-right border border-yellow-400 rounded px-2 py-1 text-sm focus:outline-none"
+                            className="w-24 text-right border border-indigo-400 rounded px-2 py-1 text-sm focus:outline-none"
                           />
                         ) : (
                           <button
-                            onClick={() => { setPrecioEditando(idx); setPrecioTemporal(String(i.precioVenta.toFixed(2))); }}
+                            onClick={() => { setPrecioEditando(i.id); setPrecioTemporal(String(i.precio.toFixed(2))); }}
                             title="Click para editar precio"
-                            className="text-gray-700 hover:text-yellow-600 hover:underline transition-colors"
+                            className="text-gray-700 hover:text-indigo-600 hover:underline transition-colors"
                           >
-                            ${formatPrecio(i.precioVenta)}
+                            ${formatPrecio(i.precio)}
                           </button>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-right font-semibold text-gray-800">${formatPrecio(i.precioVenta * i.cantidad)}</td>
+                      <td className="px-4 py-3 text-right font-semibold text-gray-800">${formatPrecio(i.precio * i.cantidad)}</td>
                       <td className="px-2 py-3 text-center">
-                        <button onClick={() => setItems(prev => prev.filter(x => x.producto.id_producto !== i.producto.id_producto))}
+                        <button onClick={() => setItems(prev => prev.filter(x => x.id !== i.id))}
                           className="text-red-400 hover:text-red-600 text-base leading-none">×</button>
                       </td>
                     </tr>
@@ -481,10 +507,9 @@ function MisTickets() {
                 </tbody>
               </table>
 
-              {/* TOTAL */}
-              <div className="bg-yellow-50 px-4 py-3 flex justify-between items-center border-t border-yellow-100">
+              <div className="bg-indigo-50 px-4 py-3 flex justify-between items-center border-t border-indigo-100">
                 <span className="font-semibold text-gray-700">Total</span>
-                <span className="text-xl font-bold text-yellow-700">${formatPrecio(total)}</span>
+                <span className="text-xl font-bold text-indigo-700">${formatPrecio(total)}</span>
               </div>
             </div>
 
@@ -497,8 +522,8 @@ function MisTickets() {
                     onClick={() => setFormaPago(prev => prev === fp ? '' : fp)}
                     className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
                       formaPago === fp
-                        ? 'bg-yellow-500 text-white border-yellow-500'
-                        : 'bg-white text-gray-600 border-gray-300 hover:border-yellow-400'
+                        ? 'bg-indigo-600 text-white border-indigo-600'
+                        : 'bg-white text-gray-600 border-gray-300 hover:border-indigo-400'
                     }`}>
                     {fp}
                   </button>
@@ -513,7 +538,7 @@ function MisTickets() {
                       value={montoRecibido}
                       onChange={e => setMontoRecibido(e.target.value)}
                       placeholder="$0.00"
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400"
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
                     />
                   </div>
                   {vuelto !== null && (
@@ -535,12 +560,12 @@ function MisTickets() {
                 value={observaciones}
                 onChange={e => setObservaciones(e.target.value)}
                 rows={2}
-                placeholder="Ej: pago en 2 cuotas, entregar el martes..."
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400 resize-none"
+                placeholder="Notas adicionales..."
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-none"
               />
             </div>
 
-            {/* TAMAÑO HOJA + BOTONES */}
+            {/* TAMAÑO + BOTONES */}
             <div className="flex items-center gap-3 mb-4">
               <p className="text-sm text-gray-600 font-medium">Tamaño:</p>
               {(['A4', 'A5'] as const).map(t => (
@@ -557,19 +582,19 @@ function MisTickets() {
             </div>
 
             <div className="flex gap-3">
-              <button onClick={() => { setItems([]); setClienteFinal({ nombre: '', cuit: '', direccion: '', telefono: '' }); setFormaPago(''); setMontoRecibido(''); setObservaciones(''); }}
+              <button onClick={limpiar}
                 className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 py-3 rounded-xl text-sm font-semibold">
                 🗑️ Limpiar
               </button>
               <button onClick={generarPDF}
-                className="flex-2 flex-grow-[2] bg-yellow-500 hover:bg-yellow-600 text-white py-3 rounded-xl text-sm font-semibold">
-                🖨️ Imprimir ticket (PDF)
+                className="flex-2 flex-grow-[2] bg-indigo-600 hover:bg-indigo-700 text-white py-3 rounded-xl text-sm font-semibold">
+                🖨️ Generar comprobante (PDF)
               </button>
             </div>
 
             {guardado && (
               <div className="mt-3 bg-green-50 border border-green-200 text-green-700 text-sm rounded-xl px-4 py-3 text-center font-medium">
-                ✅ Ticket guardado en historial
+                ✅ Venta guardada en historial
               </div>
             )}
           </>
@@ -583,4 +608,4 @@ function MisTickets() {
   );
 }
 
-export default MisTickets;
+export default CalculadoraVenta;

@@ -12,6 +12,10 @@ import MisMensajes from './pages/MisMensajes';
 import MisPromociones from './pages/MisPromociones';
 import MisTickets from './pages/MisTickets';
 import MisNotificaciones from './pages/MisNotificaciones';
+import CalculadoraVenta from './pages/CalculadoraVenta';
+import MiHistorial from './pages/MiHistorial';
+import Presupuesto from './pages/Presupuesto';
+import MisNovedades from './pages/MisNovedades';
 
 function RedirectToLogin() {
   const location = useLocation();
@@ -56,6 +60,18 @@ function App() {
         } />
         <Route path="/mis-notificaciones" element={
           cliente ? <MisNotificaciones /> : <Navigate to="/login" />
+        } />
+        <Route path="/calculadora-venta" element={
+          cliente ? <CalculadoraVenta /> : <Navigate to="/login" />
+        } />
+        <Route path="/mi-historial" element={
+          cliente ? <MiHistorial /> : <Navigate to="/login" />
+        } />
+        <Route path="/presupuesto" element={
+          cliente ? <Presupuesto /> : <Navigate to="/login" />
+        } />
+        <Route path="/mis-novedades" element={
+          cliente ? <MisNovedades /> : <Navigate to="/login" />
         } />
         <Route path="*" element={<RedirectToLogin />} />
       </Routes>

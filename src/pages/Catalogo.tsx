@@ -132,6 +132,7 @@ function Catalogo() {
   const [errorEscaneo, setErrorEscaneo] = useState('');
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const vistoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // === NUEVO (Mejora 3): cross selling ===
   const [crossSelling, setCrossSelling] = useState<Producto[]>([]);
@@ -216,6 +217,21 @@ function Catalogo() {
     return () => clearTimeout(timer);
     // eslint-disable-next-line
   }, [carrito, cfg.habilitar_cross_selling, mayorista_id]);
+
+  // visto_no_comprado: 30s tras abrir modal sin agregar al carrito
+  useEffect(() => {
+    if (vistoTimerRef.current) { clearTimeout(vistoTimerRef.current); vistoTimerRef.current = null; }
+    if (!productoModal) return;
+    const texto = `${productoModal.cod_producto} ${productoModal.des_producto}`;
+    const yaEnCarrito = carrito.some(i => i.producto.id_producto === productoModal.id_producto);
+    if (yaEnCarrito) return;
+    vistoTimerRef.current = setTimeout(() => {
+      const sigueEnCarrito = carrito.some(i => i.producto.id_producto === productoModal.id_producto);
+      if (!sigueEnCarrito) registrarDemanda(texto, 'visto_no_comprado');
+    }, 30000);
+    return () => { if (vistoTimerRef.current) { clearTimeout(vistoTimerRef.current); vistoTimerRef.current = null; } };
+    // eslint-disable-next-line
+  }, [productoModal]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -467,8 +483,8 @@ function Catalogo() {
     setModalAlertasAbierto(true);
   };
 
-  const guardarDemanda = async (texto: string) => {
-    if (!texto || texto.trim().length < 3 || !mayorista_id) return;
+  const registrarDemanda = async (texto: string, tipo: string) => {
+    if (!texto || texto.trim().length < 2 || !mayorista_id) return;
     try {
       await fetch(`${API}/api/demanda`, {
         method: 'POST',
@@ -476,11 +492,14 @@ function Catalogo() {
         body: JSON.stringify({
           mayorista_id,
           busqueda: texto.trim(),
-          cliente_nombre: cliente.nombre || ''
+          cliente_nombre: cliente.nombre || '',
+          tipo,
         })
       });
     } catch {}
   };
+
+  const guardarDemanda = (texto: string) => registrarDemanda(texto, 'no_encontrado');
 
   const agregarAlCarrito = (producto: Producto) => {
     const id = `prod-${producto.id_producto}`;
@@ -492,8 +511,18 @@ function Catalogo() {
   };
 
   const cambiarCantidad = (id: string, cantidad: number) => {
-    if (cantidad <= 0) setCarrito(prev => prev.filter(i => i.id !== id));
-    else setCarrito(prev => prev.map(i => i.id === id ? { ...i, cantidad } : i));
+    if (cantidad <= 0) {
+      setCarrito(prev => {
+        const item = prev.find(i => i.id === id);
+        if (item && item.cantidad > 0 && !item.es_oferta) {
+          const texto = `${item.producto.cod_producto} ${item.producto.des_producto}`;
+          registrarDemanda(texto, 'removido_carrito');
+        }
+        return prev.filter(i => i.id !== id);
+      });
+    } else {
+      setCarrito(prev => prev.map(i => i.id === id ? { ...i, cantidad } : i));
+    }
   };
 
   const enviarPedido = async (estado: 'borrador' | 'enviado') => {

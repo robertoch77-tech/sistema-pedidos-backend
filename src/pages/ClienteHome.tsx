@@ -109,10 +109,15 @@ function ClienteHome() {
     habilitar_mensajes: false,
     habilitar_mis_promociones: false,
     habilitar_notificaciones: false,
+    habilitar_calculadora_venta: false,
+    habilitar_historial_ventas: false,
+    habilitar_cotizaciones: false,
+    habilitar_novedades: false,
   });
   const [banners, setBanners] = useState<Banner[]>([]);
   const [mensajesNoLeidos, setMensajesNoLeidos] = useState(0);
   const [notificacionesNoLeidas, setNotificacionesNoLeidas] = useState(0);
+  const [cantidadNovedades, setCantidadNovedades] = useState(0);
 
   useEffect(() => {
     if (!mayorista_id) return;
@@ -125,6 +130,10 @@ function ClienteHome() {
         habilitar_mensajes: data.habilitar_mensajes ?? false,
         habilitar_mis_promociones: data.habilitar_mis_promociones ?? false,
         habilitar_notificaciones: data.habilitar_notificaciones ?? false,
+        habilitar_calculadora_venta: data.habilitar_calculadora_venta ?? false,
+        habilitar_historial_ventas: data.habilitar_historial_ventas ?? false,
+        habilitar_cotizaciones: data.habilitar_cotizaciones ?? false,
+        habilitar_novedades: data.habilitar_novedades ?? false,
       }))
       .catch(() => {});
   }, [mayorista_id]);
@@ -162,6 +171,16 @@ function ClienteHome() {
       .then(data => setBanners(Array.isArray(data) ? data : []))
       .catch(() => {});
   }, [mayorista_id]);
+
+  // Novedades activas — para mostrar badge con cantidad
+  useEffect(() => {
+    if (!mayorista_id || !cfg.habilitar_novedades) return;
+    fetch(`${API}/api/novedades/cliente/${mayorista_id}`)
+      .then(r => r.json())
+      .then(data => setCantidadNovedades(Array.isArray(data) ? data.length : 0))
+      .catch(() => {});
+    // eslint-disable-next-line
+  }, [mayorista_id, cfg.habilitar_novedades]);
 
   const cerrarSesion = () => {
     const codigoMayorista = localStorage.getItem('codigo_mayorista');
@@ -307,6 +326,61 @@ function ClienteHome() {
             </div>
             <span className="ml-auto text-gray-400 text-lg">›</span>
           </a>
+
+          {cfg.habilitar_calculadora_venta && (
+            <a href="/calculadora-venta"
+              className="flex items-center gap-4 p-4 rounded-xl border-2 transition-colors cursor-pointer bg-indigo-50 border-indigo-200 hover:bg-indigo-100">
+              <span className="text-3xl text-indigo-600">🖩</span>
+              <div>
+                <p className="font-bold text-gray-800">Calculadora de Venta</p>
+                <p className="text-sm text-gray-500">Armá un comprobante con productos libres o del catálogo</p>
+              </div>
+              <span className="ml-auto text-gray-400 text-lg">›</span>
+            </a>
+          )}
+
+          {cfg.habilitar_historial_ventas && (
+            <a href="/mi-historial"
+              className="flex items-center gap-4 p-4 rounded-xl border-2 transition-colors cursor-pointer bg-slate-50 border-slate-200 hover:bg-slate-100">
+              <span className="text-3xl text-slate-600">📋</span>
+              <div>
+                <p className="font-bold text-gray-800">Mi Historial</p>
+                <p className="text-sm text-gray-500">Consultá y reimprimí tickets y ventas anteriores</p>
+              </div>
+              <span className="ml-auto text-gray-400 text-lg">›</span>
+            </a>
+          )}
+
+          {cfg.habilitar_novedades && cantidadNovedades > 0 && (
+            <a href="/mis-novedades"
+              className="flex items-center gap-4 p-4 rounded-xl border-2 transition-colors cursor-pointer bg-blue-50 border-blue-200 hover:bg-blue-100">
+              <span className="text-3xl text-blue-600 relative">
+                🆕
+                <span className="absolute -top-1 -right-2 bg-red-500 text-white text-xs min-w-[20px] h-5 px-1 rounded-full flex items-center justify-center font-bold">
+                  {cantidadNovedades}
+                </span>
+              </span>
+              <div>
+                <p className="font-bold text-gray-800">Novedades</p>
+                <p className="text-sm text-gray-500">
+                  {cantidadNovedades} producto{cantidadNovedades !== 1 ? 's' : ''} nuevo{cantidadNovedades !== 1 ? 's' : ''} para vos
+                </p>
+              </div>
+              <span className="ml-auto text-gray-400 text-lg">›</span>
+            </a>
+          )}
+
+          {cfg.habilitar_cotizaciones && (
+            <a href="/presupuesto"
+              className="flex items-center gap-4 p-4 rounded-xl border-2 transition-colors cursor-pointer bg-emerald-50 border-emerald-200 hover:bg-emerald-100">
+              <span className="text-3xl text-emerald-600">📄</span>
+              <div>
+                <p className="font-bold text-gray-800">Presupuestos</p>
+                <p className="text-sm text-gray-500">Creá y enviá presupuestos a clientes o proveedores</p>
+              </div>
+              <span className="ml-auto text-gray-400 text-lg">›</span>
+            </a>
+          )}
         </div>
       </div>
 

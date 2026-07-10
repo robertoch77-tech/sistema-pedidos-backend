@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 const Logo = ({ size = 28 }: { size?: number }) => (
   <svg viewBox="0 0 80 80" width={size} height={size} style={{ display: 'block' }}>
@@ -21,6 +23,28 @@ interface CtaCte {
 }
 
 const API = 'https://sistema-pedidos-backend-2hec.onrender.com';
+
+const HOY = new Date();
+HOY.setHours(0, 0, 0, 0);
+
+function parseFechaVenc(f: string): Date | null {
+  if (!f) return null;
+  const d = new Date(f);
+  d.setHours(0, 0, 0, 0);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function diasDiff(fecha: Date): number {
+  return Math.round((HOY.getTime() - fecha.getTime()) / 86400000);
+}
+
+function fmt2(n: number) {
+  return n.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function fmtFecha(f: string) {
+  return new Date(f).toLocaleDateString('es-AR');
+}
 
 function CtasCtes() {
   const cliente = JSON.parse(localStorage.getItem('cliente') || '{}');
@@ -77,19 +101,36 @@ function CtasCtes() {
     cargarCtasCte(ctaFechaDesde, ctaFechaHasta, false);
   };
 
+  // ── CÁLCULOS DE RESUMEN ──────────────────────────────────────────────────
   const totalDeuda = ctasCtes.reduce((acc, m) => acc + Math.max(0, m.saldo || 0), 0);
 
+  const deudaVencida = ctasCtes.reduce((acc, m) => {
+    const fv = parseFechaVenc(m.fecha_venc);
+    return fv && fv < HOY ? acc + Math.max(0, m.saldo || 0) : acc;
+  }, 0);
+
+  const deudaAVencer = ctasCtes.reduce((acc, m) => {
+    const fv = parseFechaVenc(m.fecha_venc);
+    return fv && fv >= HOY ? acc + Math.max(0, m.saldo || 0) : acc;
+  }, 0);
+
+  const comprobantesVencidos = ctasCtes.filter(m => {
+    const fv = parseFechaVenc(m.fecha_venc);
+    return fv && fv < HOY;
+  }).length;
+
+  // ── IMPRIMIR (ventana) ────────────────────────────────────────────────────
   const imprimirCtasCte = () => {
     const ventana = window.open('', '_blank');
     if (!ventana) return;
     const filas = ctasCtes.map(m => `
       <tr>
-        <td>${new Date(m.fecha_comp).toLocaleDateString('es-AR')}</td>
-        <td>${m.fecha_venc ? new Date(m.fecha_venc).toLocaleDateString('es-AR') : '—'}</td>
+        <td>${fmtFecha(m.fecha_comp)}</td>
+        <td>${m.fecha_venc ? fmtFecha(m.fecha_venc) : '—'}</td>
         <td>${m.tipo || ''}</td>
         <td>${m.letra || ''}${m.letra ? '-' : ''}${m.nro_suc_comprobante || ''}-${m.nro_comprobante || ''}</td>
-        <td style="text-align:right">${(m.importe || 0).toLocaleString('es-AR', { minimumFractionDigits: 2 })}</td>
-        <td style="text-align:right; font-weight:bold; color: ${(m.saldo || 0) > 0 ? '#b91c1c' : '#065f46'}">${(m.saldo || 0).toLocaleString('es-AR', { minimumFractionDigits: 2 })}</td>
+        <td style="text-align:right">${fmt2(m.importe || 0)}</td>
+        <td style="text-align:right; font-weight:bold; color: ${(m.saldo || 0) > 0 ? '#b91c1c' : '#065f46'}">${fmt2(m.saldo || 0)}</td>
       </tr>
     `).join('');
     ventana.document.write(`
@@ -101,7 +142,13 @@ function CtasCtes() {
         h2 { color: #0f766e; margin-bottom: 4px; }
         .info { margin: 2px 0; color: #555; font-size: 12px; }
         .periodo { margin-top: 8px; font-size: 11px; color: #888; }
-        .total-deuda { margin-top: 12px; background: #fef2f2; border: 1px solid #fecaca; padding: 10px 14px; border-radius: 8px; font-size: 14px; font-weight: bold; color: #b91c1c; }
+        .cards { display:flex; gap:12px; margin: 12px 0; }
+        .card { flex:1; padding:10px 14px; border-radius:8px; font-size:12px; }
+        .card-red { background:#fef2f2; border:1px solid #fecaca; color:#b91c1c; }
+        .card-green { background:#f0fdf4; border:1px solid #bbf7d0; color:#065f46; }
+        .card-blue { background:#eff6ff; border:1px solid #bfdbfe; color:#1d4ed8; }
+        .card-orange { background:#fff7ed; border:1px solid #fed7aa; color:#c2410c; }
+        .card-val { font-size:15px; font-weight:bold; }
         table { width: 100%; border-collapse: collapse; margin-top: 16px; }
         th { background: #0f766e; color: white; padding: 8px; text-align: left; font-size: 11px; }
         td { padding: 6px 8px; border-bottom: 1px solid #e5e7eb; font-size: 11px; }
@@ -115,7 +162,24 @@ function CtasCtes() {
         <p class="info">CUIT: ${cliente.cuit}</p>
         <p class="periodo">Período: ${ctaFechaDesde || '—'} al ${ctaFechaHasta || '—'}</p>
         <p class="periodo">Fecha de emisión: ${new Date().toLocaleDateString('es-AR')}</p>
-        <div class="total-deuda">Total deuda: $${totalDeuda.toLocaleString('es-AR', { minimumFractionDigits: 2 })}</div>
+        <div class="cards">
+          <div class="card ${totalDeuda > 0 ? 'card-red' : 'card-green'}">
+            <div>💰 Total deuda</div>
+            <div class="card-val">$${fmt2(totalDeuda)}</div>
+          </div>
+          <div class="card card-red">
+            <div>⚠️ Deuda vencida</div>
+            <div class="card-val">$${fmt2(deudaVencida)}</div>
+          </div>
+          <div class="card card-blue">
+            <div>📅 A vencer</div>
+            <div class="card-val">$${fmt2(deudaAVencer)}</div>
+          </div>
+          <div class="card card-orange">
+            <div>📋 Comp. vencidos</div>
+            <div class="card-val">${comprobantesVencidos}</div>
+          </div>
+        </div>
         <table>
           <thead><tr>
             <th>Fecha</th><th>Vencimiento</th><th>Tipo</th><th>Comprobante</th>
@@ -128,6 +192,78 @@ function CtasCtes() {
     `);
     ventana.document.close();
   };
+
+  // ── DESCARGAR PDF ─────────────────────────────────────────────────────────
+  const descargarPDF = () => {
+    const doc = new jsPDF({ format: 'a4' });
+    const mg = 14;
+    let y = 14;
+
+    // Membrete
+    doc.setFontSize(14); doc.setFont('helvetica', 'bold'); doc.setTextColor(13, 43, 107);
+    doc.text(razonSocial || 'Gestión Integral Pedidos', mg, y); y += 6;
+    doc.setFontSize(9); doc.setFont('helvetica', 'normal'); doc.setTextColor(120);
+    doc.text('Gestión Integral Pedidos', mg, y); y += 6;
+    doc.setTextColor(0);
+    doc.setFontSize(12); doc.setFont('helvetica', 'bold'); doc.setTextColor(15, 118, 110);
+    doc.text('Cuenta Corriente', mg, y); y += 6;
+    doc.setFontSize(9); doc.setFont('helvetica', 'normal'); doc.setTextColor(0);
+    doc.text(`Cliente: ${cliente.nombre || ''}`, mg, y); y += 4;
+    doc.text(`CUIT: ${cliente.cuit || ''}`, mg, y); y += 4;
+    doc.text(`Fecha de emisión: ${new Date().toLocaleDateString('es-AR')}`, mg, y); y += 8;
+
+    // Cards de resumen
+    const cardW = (210 - mg * 2 - 9) / 4;
+    const cards = [
+      { label: '💰 Total deuda',       valor: `$${fmt2(totalDeuda)}`,         r: 220, g: 38,  b: 38  },
+      { label: '⚠️ Deuda vencida',     valor: `$${fmt2(deudaVencida)}`,        r: 185, g: 28,  b: 28  },
+      { label: '📅 A vencer',           valor: `$${fmt2(deudaAVencer)}`,        r: 29,  g: 78,  b: 216 },
+      { label: '📋 Comp. vencidos',    valor: String(comprobantesVencidos),     r: 194, g: 65,  b: 12  },
+    ];
+    cards.forEach((c, i) => {
+      const x = mg + i * (cardW + 3);
+      doc.setFillColor(245, 245, 245);
+      doc.roundedRect(x, y, cardW, 14, 2, 2, 'F');
+      doc.setFontSize(7); doc.setFont('helvetica', 'normal'); doc.setTextColor(80);
+      doc.text(c.label, x + 2, y + 5);
+      doc.setFontSize(9); doc.setFont('helvetica', 'bold'); doc.setTextColor(c.r, c.g, c.b);
+      doc.text(c.valor, x + 2, y + 11);
+    });
+    y += 20;
+
+    // Tabla
+    autoTable(doc, {
+      head: [['Fecha', 'Vencimiento', 'Tipo', 'Comprobante', 'Importe', 'Saldo']],
+      body: ctasCtes.map(m => [
+        fmtFecha(m.fecha_comp),
+        m.fecha_venc ? fmtFecha(m.fecha_venc) : '—',
+        m.tipo || '—',
+        `${m.letra || ''}${m.letra ? '-' : ''}${m.nro_suc_comprobante}-${m.nro_comprobante}`,
+        `$${fmt2(m.importe || 0)}`,
+        `$${fmt2(m.saldo || 0)}`,
+      ]),
+      startY: y,
+      styles: { fontSize: 8 },
+      headStyles: { fillColor: [15, 118, 110] },
+      columnStyles: {
+        4: { halign: 'right' },
+        5: { halign: 'right', fontStyle: 'bold' },
+      },
+      didParseCell: (data) => {
+        if (data.section === 'body' && data.column.index === 5) {
+          const row = ctasCtes[data.row.index];
+          if (row && (row.saldo || 0) > 0) data.cell.styles.textColor = [185, 28, 28];
+          else data.cell.styles.textColor = [6, 95, 70];
+        }
+      },
+    });
+
+    const fechaHoy = new Date().toISOString().split('T')[0];
+    doc.save(`estado-cuenta-${fechaHoy}.pdf`);
+  };
+
+  // ── RENDER ────────────────────────────────────────────────────────────────
+  const hayDatos = ctasCtes.length > 0;
 
   return (
     <div className="min-h-screen bg-gray-100">
@@ -147,24 +283,30 @@ function CtasCtes() {
 
       <div className="p-4">
         {/* BOTONES PRINCIPALES */}
-        <div className="flex gap-3 mb-4">
+        <div className="flex gap-3 mb-4 flex-wrap">
           <button onClick={verDeudaActual} disabled={cargando}
-            className={`flex-1 px-4 py-3 rounded-xl text-sm font-semibold transition-colors disabled:opacity-50 ${
+            className={`flex-1 min-w-[130px] px-4 py-3 rounded-xl text-sm font-semibold transition-colors disabled:opacity-50 ${
               modoVista === 'deuda' ? 'bg-teal-700 text-white' : 'bg-teal-600 hover:bg-teal-700 text-white'
             }`}>
             {cargando && modoVista === 'deuda' ? 'Cargando...' : '📒 Ver deuda actual'}
           </button>
           <button onClick={() => setMostrarFiltroFechas(v => !v)}
-            className={`flex-1 px-4 py-3 rounded-xl text-sm font-semibold transition-colors ${
+            className={`flex-1 min-w-[130px] px-4 py-3 rounded-xl text-sm font-semibold transition-colors ${
               mostrarFiltroFechas ? 'bg-gray-700 text-white' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
             }`}>
             📅 Buscar por fechas
           </button>
-          {ctasCtes.length > 0 && (
-            <button onClick={imprimirCtasCte}
-              className="bg-gray-600 hover:bg-gray-700 text-white px-4 py-3 rounded-xl text-sm font-semibold transition-colors">
-              🖨️ Imprimir
-            </button>
+          {hayDatos && (
+            <>
+              <button onClick={imprimirCtasCte}
+                className="bg-gray-600 hover:bg-gray-700 text-white px-4 py-3 rounded-xl text-sm font-semibold transition-colors">
+                🖨️ Imprimir
+              </button>
+              <button onClick={descargarPDF}
+                className="bg-teal-700 hover:bg-teal-800 text-white px-4 py-3 rounded-xl text-sm font-semibold transition-colors">
+                ⬇ PDF
+              </button>
+            </>
           )}
         </div>
 
@@ -190,23 +332,40 @@ function CtasCtes() {
           </div>
         )}
 
-        {/* TOTAL DEUDA */}
-        {ctasCtes.length > 0 && totalDeuda > 0 && (
-          <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-4 flex items-center justify-between">
-            <div>
-              <p className="text-xs text-red-500 font-medium">Total deuda</p>
-              <p className="text-2xl font-bold text-red-600">${totalDeuda.toLocaleString('es-AR', { minimumFractionDigits: 2 })}</p>
+        {/* CARDS DE RESUMEN — solo cuando hay datos */}
+        {hayDatos && (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+            {/* Total deuda */}
+            <div className={`rounded-xl p-4 border-2 ${
+              totalDeuda > 0
+                ? 'bg-red-50 border-red-200'
+                : 'bg-green-50 border-green-200'
+            }`}>
+              <p className={`text-xs font-medium mb-1 ${totalDeuda > 0 ? 'text-red-500' : 'text-green-600'}`}>
+                💰 Total deuda
+              </p>
+              <p className={`text-xl font-bold ${totalDeuda > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                ${fmt2(totalDeuda)}
+              </p>
             </div>
-            <span className="text-3xl">⚠️</span>
-          </div>
-        )}
-        {ctasCtes.length > 0 && totalDeuda === 0 && (
-          <div className="bg-green-50 border border-green-200 rounded-xl p-4 mb-4 flex items-center justify-between">
-            <div>
-              <p className="text-xs text-green-600 font-medium">Sin deuda</p>
-              <p className="text-2xl font-bold text-green-600">$0,00</p>
+
+            {/* Deuda vencida */}
+            <div className="bg-red-50 border-2 border-red-200 rounded-xl p-4">
+              <p className="text-xs font-medium text-red-500 mb-1">⚠️ Deuda vencida</p>
+              <p className="text-xl font-bold text-red-600">${fmt2(deudaVencida)}</p>
             </div>
-            <span className="text-3xl">✅</span>
+
+            {/* A vencer */}
+            <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-4">
+              <p className="text-xs font-medium text-blue-500 mb-1">📅 A vencer</p>
+              <p className="text-xl font-bold text-blue-600">${fmt2(deudaAVencer)}</p>
+            </div>
+
+            {/* Comprobantes vencidos */}
+            <div className="bg-orange-50 border-2 border-orange-200 rounded-xl p-4">
+              <p className="text-xs font-medium text-orange-500 mb-1">📋 Comp. vencidos</p>
+              <p className="text-xl font-bold text-orange-600">{comprobantesVencidos}</p>
+            </div>
           </div>
         )}
 
@@ -237,18 +396,47 @@ function CtasCtes() {
                   </tr>
                 </thead>
                 <tbody>
-                  {ctasCtes.map((m, idx) => (
-                    <tr key={idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                      <td className="px-4 py-3 text-gray-600">{new Date(m.fecha_comp).toLocaleDateString('es-AR')}</td>
-                      <td className="px-4 py-3 text-gray-600">{m.fecha_venc ? new Date(m.fecha_venc).toLocaleDateString('es-AR') : '—'}</td>
-                      <td className="px-4 py-3 text-gray-800">{m.tipo || '—'}</td>
-                      <td className="px-4 py-3 text-gray-600 font-mono text-xs">{m.letra}{m.letra ? '-' : ''}{m.nro_suc_comprobante}-{m.nro_comprobante}</td>
-                      <td className="px-4 py-3 text-right text-gray-800">${(m.importe || 0).toLocaleString('es-AR', { minimumFractionDigits: 2 })}</td>
-                      <td className={`px-4 py-3 text-right font-bold ${(m.saldo || 0) > 0 ? 'text-red-600' : 'text-teal-700'}`}>
-                        ${(m.saldo || 0).toLocaleString('es-AR', { minimumFractionDigits: 2 })}
-                      </td>
-                    </tr>
-                  ))}
+                  {ctasCtes.map((m, idx) => {
+                    const fv = parseFechaVenc(m.fecha_venc);
+                    const vencido = fv !== null && fv < HOY;
+                    const proxVencer = fv !== null && fv >= HOY && diasDiff(fv) >= -6;
+                    // diasDiff con fecha futura es negativo (HOY - fv < 0)
+                    const diasHastaVencer = fv ? Math.round((fv.getTime() - HOY.getTime()) / 86400000) : null;
+                    const diasAtrasado = fv ? diasDiff(fv) : null;
+
+                    let rowBg = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50';
+                    if (vencido) rowBg = 'bg-red-50';
+                    else if (proxVencer) rowBg = 'bg-yellow-50';
+
+                    return (
+                      <tr key={idx} className={rowBg}>
+                        <td className="px-4 py-3 text-gray-600">{fmtFecha(m.fecha_comp)}</td>
+                        <td className="px-4 py-3">
+                          <span className="text-gray-600">
+                            {m.fecha_venc ? fmtFecha(m.fecha_venc) : '—'}
+                          </span>
+                          {vencido && diasAtrasado !== null && (
+                            <div className="text-xs text-red-500 mt-0.5">
+                              Vencido hace {diasAtrasado} día{diasAtrasado !== 1 ? 's' : ''}
+                            </div>
+                          )}
+                          {!vencido && proxVencer && diasHastaVencer !== null && (
+                            <div className="text-xs text-orange-500 mt-0.5">
+                              Vence en {diasHastaVencer} día{diasHastaVencer !== 1 ? 's' : ''}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-gray-800">{m.tipo || '—'}</td>
+                        <td className="px-4 py-3 text-gray-600 font-mono text-xs">
+                          {m.letra}{m.letra ? '-' : ''}{m.nro_suc_comprobante}-{m.nro_comprobante}
+                        </td>
+                        <td className="px-4 py-3 text-right text-gray-800">${fmt2(m.importe || 0)}</td>
+                        <td className={`px-4 py-3 text-right font-bold ${(m.saldo || 0) > 0 ? 'text-red-600' : 'text-teal-700'}`}>
+                          ${fmt2(m.saldo || 0)}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

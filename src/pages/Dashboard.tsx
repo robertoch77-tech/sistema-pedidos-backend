@@ -385,6 +385,247 @@ function Banners() {
   );
 }
 
+// === NOVEDADES ===
+
+interface Novedad {
+  id: number;
+  mayorista_id: number;
+  producto_id: number | null;
+  producto_codigo: string | null;
+  producto_nombre: string;
+  imagen_url: string | null;
+  precio: number | null;
+  fecha_hasta: string | null;
+  activa: boolean;
+  creada_en: string;
+}
+
+interface ProductoBusquedaNovedad {
+  id_producto: number;
+  cod_producto: string;
+  des_producto: string;
+  imagen_producto: string;
+  precio_lista: number;
+}
+
+const arreglarNombreNovedad = (txt?: string) => (txt || '').replace(/�/g, 'Ñ');
+const proxyImgNovedad = (url: string) => `${API}/api/imagen?url=${encodeURIComponent(url)}`;
+
+function Novedades() {
+  const mayorista = JSON.parse(localStorage.getItem('mayorista') || '{}');
+
+  const [novedades, setNovedades] = useState<Novedad[]>([]);
+  const [cargando, setCargando] = useState(false);
+  const [guardando, setGuardando] = useState(false);
+  const [error, setError] = useState('');
+
+  const [busqueda, setBusqueda] = useState('');
+  const [resultados, setResultados] = useState<ProductoBusquedaNovedad[]>([]);
+  const [buscando, setBuscando] = useState(false);
+  const [productoSel, setProductoSel] = useState<ProductoBusquedaNovedad | null>(null);
+  const [fechaHasta, setFechaHasta] = useState('');
+  const [previewRota, setPreviewRota] = useState(false);
+
+  useEffect(() => { cargar(); /* eslint-disable-next-line */ }, []);
+
+  const cargar = async () => {
+    setCargando(true);
+    try {
+      const res = await fetch(`${API}/api/novedades/${mayorista.id}`);
+      const data = await res.json();
+      setNovedades(Array.isArray(data) ? data : []);
+    } catch {} finally { setCargando(false); }
+  };
+
+  useEffect(() => {
+    if (busqueda.trim().length < 3) { setResultados([]); return; }
+    const timer = setTimeout(async () => {
+      setBuscando(true);
+      try {
+        const res = await fetch(`${API}/api/productos/${mayorista.id}?busqueda=${encodeURIComponent(busqueda.trim())}&pagina=1`);
+        const data = await res.json();
+        setResultados(data.productos || []);
+      } catch {} finally { setBuscando(false); }
+    }, 400);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line
+  }, [busqueda]);
+
+  const seleccionar = (p: ProductoBusquedaNovedad) => {
+    setProductoSel(p);
+    setPreviewRota(false);
+    setBusqueda('');
+    setResultados([]);
+    setError('');
+  };
+
+  const agregar = async () => {
+    if (!productoSel) { setError('Seleccioná un producto'); return; }
+    setGuardando(true); setError('');
+    try {
+      const body = {
+        mayorista_id: mayorista.id,
+        producto_id: productoSel.id_producto,
+        producto_codigo: productoSel.cod_producto,
+        producto_nombre: productoSel.des_producto,
+        imagen_url: productoSel.imagen_producto || null,
+        precio: productoSel.precio_lista || null,
+        fecha_hasta: fechaHasta || null,
+        activa: true,
+      };
+      const res = await fetch(`${API}/api/novedades`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error();
+      setProductoSel(null);
+      setFechaHasta('');
+      setBusqueda('');
+      setResultados([]);
+      cargar();
+    } catch { setError('Error al agregar la novedad'); } finally { setGuardando(false); }
+  };
+
+  const toggle = async (id: number) => {
+    try {
+      await fetch(`${API}/api/novedades/${id}/toggle`, { method: 'PUT' });
+      setNovedades(prev => prev.map(n => n.id === id ? { ...n, activa: !n.activa } : n));
+    } catch {}
+  };
+
+  const eliminar = async (id: number) => {
+    if (!window.confirm('¿Eliminar esta novedad?')) return;
+    try {
+      await fetch(`${API}/api/novedades/${id}`, { method: 'DELETE' });
+      setNovedades(prev => prev.filter(n => n.id !== id));
+    } catch {}
+  };
+
+  const vigenciaLabel = (n: Novedad) => {
+    if (!n.fecha_hasta) return null;
+    const hoy = new Date().toISOString().substring(0, 10);
+    const fh = n.fecha_hasta.substring(0, 10);
+    return fh >= hoy
+      ? { txt: `Hasta ${new Date(fh + 'T12:00:00').toLocaleDateString('es-AR')}`, cls: 'text-green-600' }
+      : { txt: `Venció ${new Date(fh + 'T12:00:00').toLocaleDateString('es-AR')}`, cls: 'text-red-500' };
+  };
+
+  return (
+    <div className="p-6 max-w-3xl">
+      <h2 className="text-2xl font-bold text-gray-800 mb-6">🆕 Novedades</h2>
+
+      {/* BUSCADOR */}
+      <div className="bg-white rounded-xl shadow-sm p-5 mb-6">
+        <h3 className="text-sm font-semibold text-gray-700 mb-3">Agregar producto como novedad</h3>
+        {!productoSel ? (
+          <>
+            <input type="text" placeholder="Buscar producto por código o descripción (mín. 3 caracteres)"
+              value={busqueda} onChange={e => setBusqueda(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            {buscando && <p className="text-xs text-gray-400 mt-1">Buscando...</p>}
+            {resultados.length > 0 && (
+              <div className="mt-2 border border-gray-200 rounded-lg max-h-48 overflow-y-auto">
+                {resultados.map(p => (
+                  <button key={p.id_producto} onClick={() => seleccionar(p)}
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 border-b border-gray-100 last:border-0 flex items-center gap-2">
+                    {p.imagen_producto ? (
+                      <img src={proxyImgNovedad(p.imagen_producto)} alt=""
+                        onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                        className="w-8 h-8 object-contain flex-shrink-0" />
+                    ) : <span className="w-8 h-8 flex-shrink-0 text-gray-300 text-center leading-8">—</span>}
+                    <span className="truncate">
+                      {arreglarNombreNovedad(p.des_producto)}
+                      <span className="text-gray-400 font-mono text-xs ml-1">({p.cod_producto})</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="space-y-3">
+            <div className="flex items-start gap-3 bg-blue-50 rounded-lg p-3">
+              {productoSel.imagen_producto && !previewRota ? (
+                <img src={proxyImgNovedad(productoSel.imagen_producto)} alt=""
+                  onError={() => setPreviewRota(true)}
+                  className="w-16 h-16 object-contain flex-shrink-0 rounded" />
+              ) : (
+                <div className="w-16 h-16 flex-shrink-0 bg-gray-100 rounded flex items-center justify-center text-gray-400 text-2xl">📦</div>
+              )}
+              <div className="flex-1 min-w-0">
+                <p className="font-semibold text-gray-800 text-sm">{arreglarNombreNovedad(productoSel.des_producto)}</p>
+                <p className="text-xs text-gray-500 font-mono">{productoSel.cod_producto}</p>
+              </div>
+              <button onClick={() => { setProductoSel(null); setBusqueda(''); }}
+                className="text-gray-400 hover:text-gray-600 text-xl leading-none flex-shrink-0">×</button>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-600 block mb-1">Válido hasta (opcional)</label>
+              <input type="date" value={fechaHasta} onChange={e => setFechaHasta(e.target.value)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            {error && <p className="text-red-500 text-sm">{error}</p>}
+            <button onClick={agregar} disabled={guardando}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg text-sm font-semibold disabled:opacity-50">
+              {guardando ? 'Guardando...' : '🆕 Agregar como novedad'}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* LISTA */}
+      <h3 className="text-sm font-semibold text-gray-600 mb-3">Novedades cargadas</h3>
+      {cargando ? (
+        <div className="text-center py-10 text-gray-400">Cargando...</div>
+      ) : novedades.length === 0 ? (
+        <div className="text-center py-10 text-gray-400">No hay novedades cargadas todavía</div>
+      ) : (
+        <div className="space-y-3">
+          {novedades.map(n => {
+            const vig = vigenciaLabel(n);
+            return (
+              <div key={n.id} className="bg-white rounded-xl shadow-sm p-4 flex items-center gap-4">
+                <div className="w-14 h-14 flex-shrink-0 bg-gray-100 rounded-lg overflow-hidden flex items-center justify-center">
+                  {n.imagen_url ? (
+                    <img src={proxyImgNovedad(n.imagen_url)} alt=""
+                      onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                      className="w-full h-full object-contain" />
+                  ) : <span className="text-gray-300 text-xl">📦</span>}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-gray-800 text-sm truncate">
+                    {arreglarNombreNovedad(n.producto_nombre)}
+                  </p>
+                  {n.producto_codigo && (
+                    <p className="text-xs text-gray-400 font-mono">{n.producto_codigo}</p>
+                  )}
+                  {vig && <p className={`text-xs mt-0.5 ${vig.cls}`}>{vig.txt}</p>}
+                </div>
+                <div className="flex flex-col items-end gap-2 flex-shrink-0">
+                  <span className={`text-xs px-2 py-1 rounded-full font-semibold ${
+                    n.activa ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
+                  }`}>
+                    {n.activa ? 'Activa' : 'Inactiva'}
+                  </span>
+                  <div className="flex gap-2">
+                    <button onClick={() => toggle(n.id)} className="text-xs text-gray-600 hover:underline">
+                      {n.activa ? 'Desactivar' : 'Activar'}
+                    </button>
+                    <button onClick={() => eliminar(n.id)} className="text-xs text-red-500 hover:underline">
+                      Eliminar
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // === NUEVO: chat mayorista ↔ clientes ===
 
 interface HiloMensajes {
@@ -879,6 +1120,7 @@ function Dashboard() {
   const [mensajesHabilitado, setMensajesHabilitado] = useState(false);
   const [mensajesNoLeidos, setMensajesNoLeidos] = useState(0);
   const [notificacionesHabilitado, setNotificacionesHabilitado] = useState(false);
+  const [novedadesHabilitado, setNovedadesHabilitado] = useState(false);
 
   useEffect(() => {
     if (!mayorista.id) return;
@@ -887,6 +1129,7 @@ function Dashboard() {
       .then(data => {
         setMensajesHabilitado(data.habilitar_mensajes ?? false);
         setNotificacionesHabilitado(data.habilitar_notificaciones ?? false);
+        setNovedadesHabilitado(data.habilitar_novedades ?? false);
       })
       .catch(() => {});
     // eslint-disable-next-line
@@ -960,6 +1203,7 @@ function Dashboard() {
     demanda: 'Demanda', ofertas: 'Ofertas',
     'productos-solicitados': 'Más/Menos solicitados', configuracion: 'Configuración',
     banners: 'Banners', mensajes: 'Mensajes', notificaciones: 'Notificaciones',
+    novedades: 'Novedades',
   };
 
   const navegar = (key: string) => { setPaginaActual(key); setSubseccionLabel(''); setMenuAbierto(false); };
@@ -978,6 +1222,7 @@ function Dashboard() {
     // === NUEVO ===
     ...(mensajesHabilitado ? [{ icon: '💬', label: 'Mensajes', key: 'mensajes', badge: mensajesNoLeidos }] : []),
     ...(notificacionesHabilitado ? [{ icon: '🔔', label: 'Notificaciones', key: 'notificaciones' }] : []),
+    ...(novedadesHabilitado ? [{ icon: '🆕', label: 'Novedades', key: 'novedades' }] : []),
     { icon: '⚙️', label: 'Configuración',  key: 'configuracion' },
   ];
 
@@ -993,6 +1238,7 @@ function Dashboard() {
       case 'banners':       return <Banners />; // === NUEVO ===
       case 'mensajes':      return <Mensajes onNoLeidosChange={fetchMensajesNoLeidos} />;
       case 'notificaciones': return <Notificaciones />;
+      case 'novedades':     return <Novedades />;
       default: return (
         <main className="flex-1 p-6">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
