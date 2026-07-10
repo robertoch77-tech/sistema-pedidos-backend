@@ -128,13 +128,34 @@ router.post('/:id/resetear-clave-cliente', async (req, res) => {
 router.get('/:id/proximo-numero', async (req, res) => {
   try {
     const { id } = req.params;
-    const resultado = await pool.query(
-      `UPDATE mayoristas SET numero_pedido_inicio = numero_pedido_inicio + 1
-       WHERE id=$1 RETURNING numero_pedido_inicio - 1 AS numero`,
-      [id]
+
+    // Obtener el contador actual y el MAX real de pedidos_web en paralelo
+    const [contadorRes, maxRes] = await Promise.all([
+      pool.query(`SELECT numero_pedido_inicio FROM mayoristas WHERE id=$1`, [id]),
+      pool.query(
+        `SELECT COALESCE(MAX(CAST(numero_pedido AS INTEGER)), 0) AS max_real
+         FROM pedidos_web
+         WHERE mayorista_id=$1
+           AND numero_pedido ~ '^[0-9]+$'`,
+        [id]
+      ),
+    ]);
+
+    if (!contadorRes.rows[0]) return res.status(404).json({ mensaje: 'Mayorista no encontrado' });
+
+    const contador = parseInt(contadorRes.rows[0].numero_pedido_inicio) || 1;
+    const maxReal  = parseInt(maxRes.rows[0].max_real) || 0;
+
+    // El próximo número es el mayor de los dos + 1
+    const proximoNumero = Math.max(contador, maxReal) + 1;
+
+    // Actualizar el contador para que quede sincronizado
+    await pool.query(
+      `UPDATE mayoristas SET numero_pedido_inicio = $1 WHERE id=$2`,
+      [proximoNumero, id]
     );
-    if (!resultado.rows[0]) return res.status(404).json({ mensaje: 'Mayorista no encontrado' });
-    res.json({ numero: resultado.rows[0].numero });
+
+    res.json({ numero: proximoNumero });
   } catch (error) {
     console.error(error);
     res.status(500).json({ mensaje: 'Error del servidor' });
