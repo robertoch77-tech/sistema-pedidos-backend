@@ -36,6 +36,7 @@ interface Mayorista {
   habilitar_mensajes?: boolean;
   habilitar_notificaciones?: boolean;
   habilitar_cotizaciones?: boolean;
+  habilitar_novedades?: boolean;
   habilitar_pedido_sugerido?: boolean;
   habilitar_cross_selling?: boolean;
   habilitar_lector_barras?: boolean;
@@ -119,6 +120,7 @@ const FLAGS_NUEVOS: { campo: keyof Mayorista; endpoint: string; label: string; n
   { campo: 'habilitar_mensajes', endpoint: 'toggle-mensajes', label: 'Mensajes', nota: 'Preparado — sin funcionalidad todavía' },
   { campo: 'habilitar_notificaciones', endpoint: 'toggle-notificaciones', label: 'Notificaciones', nota: 'Preparado — sin funcionalidad todavía' },
   { campo: 'habilitar_cotizaciones', endpoint: 'toggle-cotizaciones', label: 'Cotizaciones', nota: 'Preparado — sin funcionalidad todavía' },
+  { campo: 'habilitar_novedades', endpoint: 'toggle-novedades', label: 'Novedades', nota: 'Preparado — sin funcionalidad todavía' },
   { campo: 'habilitar_pedido_sugerido', endpoint: 'toggle-pedido-sugerido', label: 'Pedido sugerido', nota: 'Preparado — sin funcionalidad todavía' },
   { campo: 'habilitar_cross_selling', endpoint: 'toggle-cross-selling', label: 'Cross-selling', nota: 'Preparado — sin funcionalidad todavía' },
   { campo: 'habilitar_lector_barras', endpoint: 'toggle-lector-barras', label: 'Lector de códigos de barras', nota: 'Preparado — sin funcionalidad todavía' },
