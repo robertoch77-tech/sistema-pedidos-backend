@@ -16,6 +16,21 @@ import CalculadoraVenta from './pages/CalculadoraVenta';
 import MiHistorial from './pages/MiHistorial';
 import Presupuesto from './pages/Presupuesto';
 import MisNovedades from './pages/MisNovedades';
+import Bienvenida from './pages/Bienvenida';
+import SuperAdminLogin from './pages/superadmin/SuperAdminLogin';
+import SuperAdminDashboard from './pages/superadmin/SuperAdminDashboard';
+import NuevoCliente from './pages/superadmin/clientes/NuevoCliente';
+import DetalleCliente from './pages/superadmin/clientes/DetalleCliente';
+import RobertoLogin from './pages/roberto/RobertoLogin';
+import RobertoDashboard from './pages/roberto/RobertoDashboard';
+import RobertoConfig from './pages/roberto/RobertoConfig';
+import RobertoProductos from './pages/roberto/productos/RobertoProductos';
+import RobertoVentas from './pages/roberto/ventas/RobertoVentas';
+import RobertoStock from './pages/roberto/stock/RobertoStock';
+import RobertoClientes from './pages/roberto/clientes/RobertoClientes';
+import RobertoPresupuestos from './pages/roberto/presupuestos/RobertoPresupuestos';
+import RobertoRemitos from './pages/roberto/remitos/RobertoRemitos';
+import RobertoProveedores from './pages/roberto/proveedores/RobertoProveedores';
 
 function RedirectToLogin() {
   const location = useLocation();
@@ -73,6 +88,26 @@ function App() {
         <Route path="/mis-novedades" element={
           cliente ? <MisNovedades /> : <Navigate to="/login" />
         } />
+        <Route path="/bienvenida" element={
+          cliente ? <Bienvenida /> : <Navigate to="/login" />
+        } />
+        {/* SuperAdmin Roberto — completamente separado de Ivan */}
+        <Route path="/superadmin/login" element={<SuperAdminLogin />} />
+        <Route path="/superadmin/dashboard" element={<SuperAdminDashboard />} />
+        <Route path="/superadmin/clientes" element={<SuperAdminDashboard />} />
+        <Route path="/superadmin/clientes/nuevo" element={<NuevoCliente />} />
+        <Route path="/superadmin/clientes/:id" element={<DetalleCliente />} />
+        {/* Panel cliente Roberto — separado de Ivan */}
+        <Route path="/roberto/login" element={<RobertoLogin />} />
+        <Route path="/roberto/dashboard" element={<RobertoDashboard />} />
+        <Route path="/roberto/config" element={<RobertoConfig />} />
+        <Route path="/roberto/productos" element={<RobertoProductos />} />
+        <Route path="/roberto/ventas" element={<RobertoVentas />} />
+        <Route path="/roberto/stock" element={<RobertoStock />} />
+        <Route path="/roberto/clientes" element={<RobertoClientes />} />
+        <Route path="/roberto/presupuestos" element={<RobertoPresupuestos />} />
+        <Route path="/roberto/remitos" element={<RobertoRemitos />} />
+        <Route path="/roberto/proveedores" element={<RobertoProveedores />} />
         <Route path="*" element={<RedirectToLogin />} />
       </Routes>
     </BrowserRouter>

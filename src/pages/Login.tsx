@@ -13,6 +13,8 @@ const Logo = ({ size = 32 }: { size?: number }) => (
   </svg>
 );
 
+const API_ROBERTO = process.env.REACT_APP_API_URL || 'http://localhost:4000';
+
 function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -23,6 +25,7 @@ function Login() {
   const [primeraVez, setPrimeraVez] = useState(false);
   const [error, setError] = useState('');
   const [cargando, setCargando] = useState(false);
+  const [verificandoTipo, setVerificandoTipo] = useState(false);
   const params = new URLSearchParams(window.location.search);
   const codigoUrl = params.get('m');
 
@@ -33,6 +36,23 @@ function Login() {
   useEffect(() => {
     if (codigoUrl) localStorage.setItem('codigo_mayorista', codigoUrl);
   }, [codigoUrl]);
+
+  // Detección de cliente Roberto: si el código pertenece a tipo_fuente='roberto'
+  // redirigir al login de Roberto en lugar de mostrar el formulario de Ivan.
+  useEffect(() => {
+    if (!codigoUrl) return;
+    setVerificandoTipo(true);
+    fetch(`${API_ROBERTO}/api/superadmin/portal/${codigoUrl}`)
+      .then(r => r.json())
+      .then(data => {
+        if (data?.tipo_fuente === 'roberto') {
+          window.location.href = `/roberto/login?m=${codigoUrl}`;
+        } else {
+          setVerificandoTipo(false);
+        }
+      })
+      .catch(() => setVerificandoTipo(false));
+  }, [codigoUrl]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const codigoMayorista = codigoUrl || localStorage.getItem('codigo_mayorista') || '';
 
@@ -78,7 +98,7 @@ function Login() {
         }
 
         localStorage.setItem('cliente', JSON.stringify(data.cliente));
-        window.location.href = '/cliente';
+        window.location.href = '/bienvenida';
       }
     } catch (err: any) {
       setError(err.message);
@@ -86,6 +106,16 @@ function Login() {
       setCargando(false);
     }
   };
+
+  if (verificandoTipo) return (
+    <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
+      <div style={{ textAlign: 'center' }}>
+        <div style={{ width: '32px', height: '32px', border: '3px solid #BEE3F8', borderTopColor: '#2B6CB0', borderRadius: '50%', animation: 'spin 0.7s linear infinite', margin: '0 auto 12px' }} />
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        <p style={{ color: '#718096', fontSize: '14px' }}>Verificando acceso...</p>
+      </div>
+    </div>
+  );
 
   return (
     <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
