@@ -82,6 +82,12 @@ const historialRouter = require('./routes/historial');
 app.use('/api/historial', historialRouter);
 const novedadesRouter = require('./routes/novedades');
 app.use('/api/novedades', novedadesRouter);
+app.use('/api/superadmin', require('./routes/superadmin/auth'));
+app.use('/api/superadmin/clientes', require('./routes/superadmin/clientes'));
+app.use('/api/superadmin/portal', require('./routes/superadmin/portal'));
+app.use('/api/superadmin/portal-auth', require('./routes/superadmin/portal-auth'));
+app.use('/api/superadmin/importador', require('./routes/superadmin/importador'));
+app.use('/api/superadmin/ventas', require('./routes/superadmin/ventas'));
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
