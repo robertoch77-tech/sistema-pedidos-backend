@@ -83,6 +83,19 @@ router.post('/login', async (req, res) => {
   }
 });
 
+// ── GET /schema ──────────────────────────────────────────────
+router.get('/schema', async (_req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT column_name, data_type FROM information_schema.columns
+       WHERE table_name = 'pi_usuarios' ORDER BY ordinal_position`
+    );
+    res.json({ columns: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── POST /reset-admin ─────────────────────────────────────────
 router.post('/reset-admin', async (req, res) => {
   try {
