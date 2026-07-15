@@ -8,13 +8,13 @@ async function asegurarTablas() {
   try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS pi_usuarios (
-        id          BIGSERIAL PRIMARY KEY,
-        email       TEXT UNIQUE NOT NULL,
-        password    TEXT NOT NULL,
-        nombre      TEXT,
-        rol         TEXT NOT NULL DEFAULT 'operador',
-        activo      BOOLEAN DEFAULT true,
-        creado_en   TIMESTAMPTZ DEFAULT now()
+        id            BIGSERIAL PRIMARY KEY,
+        email         TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        nombre        TEXT,
+        rol           TEXT NOT NULL DEFAULT 'operador',
+        activo        BOOLEAN DEFAULT true,
+        creado_en     TIMESTAMPTZ DEFAULT now()
       )
     `);
 
@@ -23,7 +23,7 @@ async function asegurarTablas() {
     if (parseInt(rows[0].count) === 0) {
       const hash = await bcrypt.hash('pi2024', 10);
       await pool.query(
-        `INSERT INTO pi_usuarios (email, password, nombre, rol)
+        `INSERT INTO pi_usuarios (email, password_hash, nombre, rol)
          VALUES ($1, $2, $3, $4)
          ON CONFLICT (email) DO NOTHING`,
         ['admin@pi.com', hash, 'Admin', 'admin']
@@ -59,7 +59,7 @@ router.post('/login', async (req, res) => {
     }
 
     const usuario = rows[0];
-    const valido  = await bcrypt.compare(password, usuario.password);
+    const valido  = await bcrypt.compare(password, usuario.password_hash);
 
     if (!valido) {
       return res.status(401).json({ ok: false, error: 'Credenciales incorrectas' });
@@ -83,7 +83,7 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// ── GET /schema ──────────────────────────────────────────────
+// ── GET /schema ───────────────────────────────────────────────
 router.get('/schema', async (_req, res) => {
   try {
     const { rows } = await pool.query(
@@ -101,12 +101,12 @@ router.post('/reset-admin', async (req, res) => {
   try {
     const hash = await bcrypt.hash('pi2024', 10);
     const { rowCount } = await pool.query(
-      `UPDATE pi_usuarios SET password = $1 WHERE email = 'admin@pi.com'`,
+      `UPDATE pi_usuarios SET password_hash = $1 WHERE email = 'admin@pi.com'`,
       [hash]
     );
     if (rowCount === 0) {
       await pool.query(
-        `INSERT INTO pi_usuarios (email, password, nombre, rol)
+        `INSERT INTO pi_usuarios (email, password_hash, nombre, rol)
          VALUES ('admin@pi.com', $1, 'Admin', 'admin')`,
         [hash]
       );
