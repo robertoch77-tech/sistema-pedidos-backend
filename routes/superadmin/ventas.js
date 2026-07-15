@@ -246,6 +246,31 @@ router.post('/:cliente_id', async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
+// GET /buscar-ean/:cliente_id/:ean — busca producto por código EAN
+// ═══════════════════════════════════════════════════════════════
+router.get('/buscar-ean/:cliente_id/:ean', async (req, res) => {
+  try {
+    const { cliente_id, ean } = req.params;
+    const result = await pool.query(
+      `SELECT id, codigo, descripcion, precio_costo,
+              COALESCE(precio_venta_1, 0) AS precio_venta_1,
+              COALESCE(stock_actual, 0)   AS stock_actual,
+              COALESCE(alicuota_iva, 21)  AS alicuota_iva,
+              ean
+       FROM productos_propios
+       WHERE ean = $1 AND cliente_id = $2 AND activo = true
+       LIMIT 1`,
+      [ean, cliente_id]
+    );
+    if (!result.rows[0]) return res.status(404).json({ mensaje: 'Producto no encontrado' });
+    res.json({ producto: result.rows[0] });
+  } catch (err) {
+    console.error('GET /buscar-ean error:', err.message);
+    res.status(500).json({ mensaje: 'Error al buscar por EAN', detalle: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
 // GET /:cliente_id/:id — detalle con items
 // ═══════════════════════════════════════════════════════════════
 router.get('/:cliente_id/:id', async (req, res) => {
