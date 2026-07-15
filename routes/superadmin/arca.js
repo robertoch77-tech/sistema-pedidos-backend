@@ -441,7 +441,7 @@ router.post('/facturar/:cliente_id', async (req, res) => {
       resultadoOk = true;
     }
 
-    const prefijos: Record<number, string> = { 1:'FA', 2:'NDA', 3:'NCA', 6:'FB', 7:'NDB', 8:'NCB', 11:'FC', 12:'NDC', 13:'NCC' };
+    const prefijos = { 1:'FA', 2:'NDA', 3:'NCA', 6:'FB', 7:'NDB', 8:'NCB', 11:'FC', 12:'NDC', 13:'NCC' };
     const prefijo = prefijos[cbteTipo] || 'F';
     const numero_completo = `${prefijo}-${String(pventa).padStart(4,'0')}-${String(nuevoNum).padStart(8,'0')}`;
 
@@ -503,13 +503,13 @@ router.get('/historial/:cliente_id', async (req, res) => {
     if (fecha_hasta) { params.push(fecha_hasta); conds.push(`fecha_emision <= $${params.length}`); }
     if (buscar) { params.push(`%${buscar}%`); conds.push(`(numero_completo ILIKE $${params.length} OR receptor_nombre ILIKE $${params.length})`); }
     const where = conds.join(' AND ');
-    const offset = (parseInt(page as string) - 1) * parseInt(limit as string);
+    const offset = (parseInt(page) - 1) * parseInt(limit);
     const [rows, tot] = await Promise.all([
       pool.query(`SELECT * FROM arca_comprobantes WHERE ${where} ORDER BY creado_en DESC LIMIT $${params.length+1} OFFSET $${params.length+2}`,
-        [...params, parseInt(limit as string), offset]),
+        [...params, parseInt(limit), offset]),
       pool.query(`SELECT COUNT(*) FROM arca_comprobantes WHERE ${where}`, params),
     ]);
-    res.json({ comprobantes: rows.rows, total: parseInt(tot.rows[0].count,10), pagina: parseInt(page as string) });
+    res.json({ comprobantes: rows.rows, total: parseInt(tot.rows[0].count,10), pagina: parseInt(page) });
   } catch (err) {
     console.error('arca historial:', err.message);
     res.status(500).json({ error: err.message });
@@ -522,15 +522,15 @@ router.get('/logs/:cliente_id', async (req, res) => {
     const { cliente_id } = req.params;
     const { exitoso, fecha_desde, fecha_hasta, page = 1, limit = 25 } = req.query;
     const conds = ['cliente_id=$1'];
-    const params: any[] = [cliente_id];
+    const params = [cliente_id];
     if (exitoso !== undefined) { params.push(exitoso === 'true'); conds.push(`exitoso=$${params.length}`); }
     if (fecha_desde) { params.push(fecha_desde); conds.push(`creado_en::date >= $${params.length}`); }
     if (fecha_hasta) { params.push(fecha_hasta); conds.push(`creado_en::date <= $${params.length}`); }
     const where = conds.join(' AND ');
-    const offset = (parseInt(page as string) - 1) * parseInt(limit as string);
+    const offset = (parseInt(page) - 1) * parseInt(limit);
     const [rows, tot] = await Promise.all([
       pool.query(`SELECT id, tipo, exitoso, error, creado_en FROM arca_logs WHERE ${where} ORDER BY creado_en DESC LIMIT $${params.length+1} OFFSET $${params.length+2}`,
-        [...params, parseInt(limit as string), offset]),
+        [...params, parseInt(limit), offset]),
       pool.query(`SELECT COUNT(*) FROM arca_logs WHERE ${where}`, params),
     ]);
     res.json({ logs: rows.rows, total: parseInt(tot.rows[0].count,10) });

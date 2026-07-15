@@ -244,10 +244,10 @@ router.get('/:cliente_id/:caja_id/movimientos', async (req, res) => {
   try {
     const { cliente_id, caja_id } = req.params;
     const { tipo, page = 1, limit = 50 } = req.query;
-    const offset = (parseInt(page as string) - 1) * parseInt(limit as string);
+    const offset = (parseInt(page) - 1) * parseInt(limit);
 
     const conds = ['m.caja_id=$1', 'm.cliente_id=$2'];
-    const params: any[] = [caja_id, cliente_id];
+    const params = [caja_id, cliente_id];
     if (tipo) { params.push(tipo); conds.push(`m.tipo=$${params.length}`); }
 
     const where = conds.join(' AND ');
@@ -260,12 +260,12 @@ router.get('/:cliente_id/:caja_id/movimientos', async (req, res) => {
          WHERE ${where}
          ORDER BY m.creado_en DESC
          LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
-        [...params, parseInt(limit as string), offset]
+        [...params, parseInt(limit), offset]
       ),
       pool.query(`SELECT COUNT(*) FROM caja_movimientos m WHERE ${where}`, params),
     ]);
 
-    res.json({ movimientos: rows.rows, total: parseInt(tot.rows[0].count, 10), pagina: parseInt(page as string) });
+    res.json({ movimientos: rows.rows, total: parseInt(tot.rows[0].count, 10), pagina: parseInt(page) });
   } catch (err) {
     console.error('caja movimientos:', err.message);
     res.status(500).json({ error: err.message });
@@ -355,10 +355,10 @@ router.get('/:cliente_id/historial', async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const { fecha_desde, fecha_hasta, page = 1, limit = 25 } = req.query;
-    const offset = (parseInt(page as string) - 1) * parseInt(limit as string);
+    const offset = (parseInt(page) - 1) * parseInt(limit);
 
     const conds = ["cliente_id=$1", "estado='cerrada'"];
-    const params: any[] = [cliente_id];
+    const params = [cliente_id];
 
     if (fecha_desde) { params.push(fecha_desde); conds.push(`fecha_apertura::date >= $${params.length}`); }
     if (fecha_hasta) { params.push(fecha_hasta); conds.push(`fecha_apertura::date <= $${params.length}`); }
@@ -373,12 +373,12 @@ router.get('/:cliente_id/historial', async (req, res) => {
          FROM cajas WHERE ${where}
          ORDER BY fecha_cierre DESC
          LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
-        [...params, parseInt(limit as string), offset]
+        [...params, parseInt(limit), offset]
       ),
       pool.query(`SELECT COUNT(*) FROM cajas WHERE ${where}`, params),
     ]);
 
-    res.json({ cajas: rows.rows, total: parseInt(tot.rows[0].count, 10), pagina: parseInt(page as string) });
+    res.json({ cajas: rows.rows, total: parseInt(tot.rows[0].count, 10), pagina: parseInt(page) });
   } catch (err) {
     console.error('caja historial:', err.message);
     res.status(500).json({ error: err.message });
