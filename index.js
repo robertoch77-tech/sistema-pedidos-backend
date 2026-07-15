@@ -88,6 +88,22 @@ app.use('/api/superadmin/portal', require('./routes/superadmin/portal'));
 app.use('/api/superadmin/portal-auth', require('./routes/superadmin/portal-auth'));
 app.use('/api/superadmin/importador', require('./routes/superadmin/importador'));
 app.use('/api/superadmin/ventas', require('./routes/superadmin/ventas'));
+app.use('/api/superadmin/clientes-finales', require('./routes/superadmin/clientes-finales'));
+app.use('/api/superadmin/presupuestos', require('./routes/superadmin/presupuestos'));
+app.use('/api/superadmin/remitos', require('./routes/superadmin/remitos'));
+app.use('/api/superadmin/stock',       require('./routes/superadmin/stock'));
+app.use('/api/superadmin/proveedores', require('./routes/superadmin/proveedores'));
+app.use('/api/superadmin/cuenta-corriente', require('./routes/superadmin/cuenta-corriente'));
+app.use('/api/superadmin/caja', require('./routes/superadmin/caja'));
+app.use('/api/superadmin/cheques', require('./routes/superadmin/cheques'));
+app.use('/api/superadmin/notas',   require('./routes/superadmin/notas'));
+app.use('/api/superadmin/arca',    require('./routes/superadmin/arca'));
+app.use('/api/superadmin/reportes', require('./routes/superadmin/reportes'));
+app.use('/api/pi/auth',    require('./routes/pi/auth'));
+app.use('/api/pi/importar', require('./routes/pi/importar'));
+app.use('/api/pi/procesar', require('./routes/pi/procesar'));
+app.use('/api/pi/pedidos',  require('./routes/pi/pedidos'));
+app.use('/api/pi/config',   require('./routes/pi/config'));
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
