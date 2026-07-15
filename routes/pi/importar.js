@@ -105,6 +105,14 @@ function leerExcel(buffer) {
     headers.forEach((h, j) => { obj[h] = row[j] !== undefined ? row[j] : ''; });
     data.push(obj);
   }
+
+  // LOG DIAGNÓSTICO TEMPORAL
+  console.log('[PI-IMPORT] headerIdx:', headerIdx);
+  console.log('[PI-IMPORT] columnas detectadas:', JSON.stringify(headers));
+  console.log('[PI-IMPORT] total filas datos:', data.length);
+  if (data[0]) console.log('[PI-IMPORT] fila 0:', JSON.stringify(data[0]));
+  if (data[1]) console.log('[PI-IMPORT] fila 1:', JSON.stringify(data[1]));
+
   return data;
 }
 
