@@ -120,7 +120,7 @@ function extraerNumeroCliente(razonSocial) {
 // ═══════════════════════════════════════════════════════════════
 // POST /productos
 // ═══════════════════════════════════════════════════════════════
-router.post('/productos', upload.single('archivo'), async (req, res) => {
+router.post('/productos', (req, _res, next) => { req.setTimeout(300000); next(); }, upload.single('archivo'), async (req, res) => {
   if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo' });
 
   let importados = 0, errores = 0;
@@ -128,26 +128,39 @@ router.post('/productos', upload.single('archivo'), async (req, res) => {
   try {
     const filas = leerExcel(req.file.buffer);
 
+    // Parsear todas las filas primero
+    const registros = [];
     for (const fila of filas) {
-      const codigo       = String(fila['Código']         || fila['Codigo']          || '').trim();
-      const detalle      = String(fila['Detalle']         || fila['Descripcion']      || fila['Descripción'] || '').trim();
-      const precio_venta = parseFloat(String(fila['Precio Venta'] || fila['Precio'] || 0).replace(',', '.')) || null;
-      const rubro        = String(fila['Observaciones']   || '').trim() || null;
-      const marca        = String(fila['Marca']           || '').trim() || null;
-      const tipo         = String(fila['Rubro']           || '').trim() || null;
-      const unidad_medida= String(fila['Unidad Medida']   || fila['Unidad']          || '').trim() || null;
-      const ean          = String(fila['EAN']             || '').trim() || null;
-      const proveedor    = String(fila['Proveedor']       || '').trim() || null;
+      const codigo        = String(fila['Código']       || fila['Codigo']         || '').trim();
+      const detalle       = String(fila['Detalle']       || fila['Descripcion']    || fila['Descripción'] || '').trim();
+      const precio_venta  = parseFloat(String(fila['Precio Venta'] || fila['Precio'] || 0).replace(',', '.')) || null;
+      const rubro         = String(fila['Observaciones'] || '').trim() || null;
+      const marca         = String(fila['Marca']         || '').trim() || null;
+      const tipo          = String(fila['Rubro']         || '').trim() || null;
+      const unidad_medida = String(fila['Unidad Medida'] || fila['Unidad'] || '').trim() || null;
+      const ean           = String(fila['EAN']           || '').trim() || null;
+      const proveedor     = String(fila['Proveedor']     || '').trim() || null;
 
       if (!codigo && !detalle) { errores++; continue; }
+      registros.push([codigo || null, detalle || null, normalizar(detalle), precio_venta, rubro, marca, tipo, unidad_medida, ean, proveedor]);
+    }
 
-      const detalle_normalizado = normalizar(detalle);
-
+    // INSERT masivo en lotes de 100
+    const LOTE = 100;
+    for (let i = 0; i < registros.length; i += LOTE) {
+      const lote   = registros.slice(i, i + LOTE);
+      const vals   = [];
+      const params = [];
+      lote.forEach((r, j) => {
+        const b = j * 10;
+        vals.push(`($${b+1},$${b+2},$${b+3},$${b+4},$${b+5},$${b+6},$${b+7},$${b+8},$${b+9},$${b+10},now())`);
+        params.push(...r);
+      });
       try {
         await pool.query(`
           INSERT INTO pi_productos
             (codigo, detalle, detalle_normalizado, precio_venta, rubro, marca, tipo, unidad_medida, ean, proveedor, actualizado_en)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now())
+          VALUES ${vals.join(',')}
           ON CONFLICT (codigo) DO UPDATE SET
             detalle             = EXCLUDED.detalle,
             detalle_normalizado = EXCLUDED.detalle_normalizado,
@@ -159,10 +172,10 @@ router.post('/productos', upload.single('archivo'), async (req, res) => {
             ean                 = EXCLUDED.ean,
             proveedor           = EXCLUDED.proveedor,
             actualizado_en      = now()
-        `, [codigo || null, detalle || null, detalle_normalizado, precio_venta, rubro, marca, tipo, unidad_medida, ean, proveedor]);
-        importados++;
+        `, params);
+        importados += lote.length;
       } catch {
-        errores++;
+        errores += lote.length;
       }
     }
 
@@ -181,7 +194,7 @@ router.post('/productos', upload.single('archivo'), async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // POST /clientes
 // ═══════════════════════════════════════════════════════════════
-router.post('/clientes', upload.single('archivo'), async (req, res) => {
+router.post('/clientes', (req, _res, next) => { req.setTimeout(300000); next(); }, upload.single('archivo'), async (req, res) => {
   if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo' });
 
   let importados = 0, errores = 0;
@@ -189,37 +202,52 @@ router.post('/clientes', upload.single('archivo'), async (req, res) => {
   try {
     const filas = leerExcel(req.file.buffer);
 
+    // Parsear todas las filas primero
+    const registros = [];
     for (const fila of filas) {
-      const razonRaw      = String(fila['Razón Social'] || fila['Razon Social'] || fila['Nombre'] || '').trim();
+      const razonRaw        = String(fila['Razón Social'] || fila['Razon Social'] || fila['Nombre'] || '').trim();
       const { numero, nombre } = extraerNumeroCliente(razonRaw);
-      const numero_cliente = numero || String(fila['Número'] || fila['Numero'] || '').trim() || null;
-      const razon_social  = nombre;
-
-      const cuit           = String(fila['Documento']     || fila['CUIT']         || '').trim() || null;
-      const condicion_iva  = String(fila['sit. IVA']      || fila['Sit. IVA']     || fila['Condicion IVA'] || '').trim() || null;
-      const calle          = String(fila['Calle']         || '').trim() || null;
-      const numero_dir     = String(fila['Nro.']          || fila['Número Dir']   || '').trim() || null;
-      const localidad      = String(fila['Localidad']     || '').trim() || null;
-      const provincia      = String(fila['Provincia']     || '').trim() || null;
-      const telefono       = String(fila['Telefono']      || fila['Teléfono']     || '').trim() || null;
-      const celular        = String(fila['Celular']       || '').trim() || null;
-      const email          = String(fila['Mail1']         || fila['Email']        || fila['Mail'] || '').trim() || null;
-      const lista_precio   = String(fila['Lista Precio']  || '').trim() || null;
-      const condicion_venta= String(fila['Cond. Venta']   || fila['Condicion Venta'] || '').trim() || null;
-      const descuento      = parseFloat(String(fila['% Descuento'] || fila['Descuento'] || 0).replace(',', '.')) || null;
-      const zona           = String(fila['Zona']          || '').trim() || null;
-      const vendedor       = String(fila['Vendedor']      || '').trim() || null;
-      const activoRaw      = String(fila['Activo']        || '').trim().toLowerCase();
-      const activo         = activoRaw === '' ? true : (activoRaw === 'si' || activoRaw === 'sí' || activoRaw === 's' || activoRaw === '1' || activoRaw === 'true');
+      const numero_cliente  = numero || String(fila['Número'] || fila['Numero'] || '').trim() || null;
+      const razon_social    = nombre;
+      const cuit            = String(fila['Documento']    || fila['CUIT']            || '').trim() || null;
+      const condicion_iva   = String(fila['sit. IVA']     || fila['Sit. IVA']        || fila['Condicion IVA'] || '').trim() || null;
+      const calle           = String(fila['Calle']        || '').trim() || null;
+      const numero_dir      = String(fila['Nro.']         || fila['Número Dir']      || '').trim() || null;
+      const localidad       = String(fila['Localidad']    || '').trim() || null;
+      const provincia       = String(fila['Provincia']    || '').trim() || null;
+      const telefono        = String(fila['Telefono']     || fila['Teléfono']        || '').trim() || null;
+      const celular         = String(fila['Celular']      || '').trim() || null;
+      const email           = String(fila['Mail1']        || fila['Email']           || fila['Mail'] || '').trim() || null;
+      const lista_precio    = String(fila['Lista Precio'] || '').trim() || null;
+      const condicion_venta = String(fila['Cond. Venta']  || fila['Condicion Venta'] || '').trim() || null;
+      const descuento       = parseFloat(String(fila['% Descuento'] || fila['Descuento'] || 0).replace(',', '.')) || null;
+      const zona            = String(fila['Zona']         || '').trim() || null;
+      const vendedor        = String(fila['Vendedor']     || '').trim() || null;
+      const activoRaw       = String(fila['Activo']       || '').trim().toLowerCase();
+      const activo          = activoRaw === '' ? true : (activoRaw === 'si' || activoRaw === 'sí' || activoRaw === 's' || activoRaw === '1' || activoRaw === 'true');
 
       if (!numero_cliente && !razon_social) { errores++; continue; }
+      registros.push([numero_cliente, razon_social, cuit, condicion_iva, calle, numero_dir, localidad, provincia,
+                      telefono, celular, email, lista_precio, condicion_venta, descuento, zona, vendedor, activo]);
+    }
 
+    // INSERT masivo en lotes de 100
+    const LOTE = 100;
+    for (let i = 0; i < registros.length; i += LOTE) {
+      const lote   = registros.slice(i, i + LOTE);
+      const vals   = [];
+      const params = [];
+      lote.forEach((r, j) => {
+        const b = j * 17;
+        vals.push(`($${b+1},$${b+2},$${b+3},$${b+4},$${b+5},$${b+6},$${b+7},$${b+8},$${b+9},$${b+10},$${b+11},$${b+12},$${b+13},$${b+14},$${b+15},$${b+16},$${b+17},now())`);
+        params.push(...r);
+      });
       try {
         await pool.query(`
           INSERT INTO pi_clientes
             (numero_cliente, razon_social, cuit, condicion_iva, calle, numero, localidad, provincia,
              telefono, celular, email, lista_precio, condicion_venta, descuento, zona, vendedor, activo, actualizado_en)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17, now())
+          VALUES ${vals.join(',')}
           ON CONFLICT (numero_cliente) DO UPDATE SET
             razon_social    = EXCLUDED.razon_social,
             cuit            = EXCLUDED.cuit,
@@ -238,11 +266,10 @@ router.post('/clientes', upload.single('archivo'), async (req, res) => {
             vendedor        = EXCLUDED.vendedor,
             activo          = EXCLUDED.activo,
             actualizado_en  = now()
-        `, [numero_cliente, razon_social, cuit, condicion_iva, calle, numero_dir, localidad, provincia,
-            telefono, celular, email, lista_precio, condicion_venta, descuento, zona, vendedor, activo]);
-        importados++;
+        `, params);
+        importados += lote.length;
       } catch {
-        errores++;
+        errores += lote.length;
       }
     }
 
