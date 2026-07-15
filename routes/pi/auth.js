@@ -83,4 +83,26 @@ router.post('/login', async (req, res) => {
   }
 });
 
+// ── POST /reset-admin ─────────────────────────────────────────
+router.post('/reset-admin', async (req, res) => {
+  try {
+    const hash = await bcrypt.hash('pi2024', 10);
+    const { rowCount } = await pool.query(
+      `UPDATE pi_usuarios SET password = $1 WHERE email = 'admin@pi.com'`,
+      [hash]
+    );
+    if (rowCount === 0) {
+      await pool.query(
+        `INSERT INTO pi_usuarios (email, password, nombre, rol)
+         VALUES ('admin@pi.com', $1, 'Admin', 'admin')`,
+        [hash]
+      );
+    }
+    res.json({ ok: true, mensaje: 'Password reseteado' });
+  } catch (err) {
+    console.error('PI reset-admin:', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 module.exports = router;
