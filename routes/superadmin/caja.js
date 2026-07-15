@@ -120,7 +120,7 @@ router.get('/:cliente_id/desglose/:caja_id', async (req, res) => {
       [caja_id, cliente_id]
     );
 
-    const mapa: Record<string, number> = { efectivo: 0, transferencia: 0, cheques: 0, tarjeta: 0, otros: 0 };
+    const mapa = { efectivo: 0, transferencia: 0, cheques: 0, tarjeta: 0, otros: 0 };
     for (const r of rows.rows) {
       const mp = r.medio_pago || 'efectivo';
       const monto = n(r.total);
