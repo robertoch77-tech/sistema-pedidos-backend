@@ -80,19 +80,51 @@ function normalizar(str) {
     .trim();
 }
 
-// ── Leer Excel y detectar encabezado ─────────────────────────
-function leerExcel(buffer) {
+// ── Analizar Excel: detecta encabezado y retorna muestra ──────
+function analizarExcel(buffer) {
+  const wb   = XLSX.read(buffer, { type: 'buffer', cellDates: true });
+  const ws   = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+
+  if (!rows.length) return { columnas: [], muestra: [], total_filas: 0 };
+
+  // Fila con más columnas no vacías (dentro de las primeras 15 filas)
+  let headerIdx = 0, maxNoVacias = 0;
+  for (let i = 0; i < Math.min(15, rows.length); i++) {
+    const noVacias = rows[i].filter(c => String(c).trim() !== '').length;
+    if (noVacias > maxNoVacias) { maxNoVacias = noVacias; headerIdx = i; }
+  }
+
+  const columnas = rows[headerIdx].map(h => String(h).trim());
+
+  // Primeras 3 filas de datos como muestra
+  const muestra = [];
+  for (let i = headerIdx + 1; i < rows.length && muestra.length < 3; i++) {
+    const row = rows[i];
+    if (row.every(c => String(c).trim() === '')) continue;
+    const obj = {};
+    columnas.forEach((h, j) => { obj[h] = row[j] !== undefined ? String(row[j]).trim() : ''; });
+    muestra.push(obj);
+  }
+
+  const total_filas = rows.slice(headerIdx + 1).filter(r => !r.every(c => String(c).trim() === '')).length;
+
+  return { columnas, muestra, total_filas, headerIdx };
+}
+
+// ── Leer Excel usando mapeo de columnas ───────────────────────
+function leerExcelConMapeo(buffer, mapeo) {
   const wb   = XLSX.read(buffer, { type: 'buffer', cellDates: true });
   const ws   = wb.Sheets[wb.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
 
   if (!rows.length) return [];
 
-  // Buscar fila de encabezado — primera fila con ≥3 celdas no vacías
-  let headerIdx = 0;
-  for (let i = 0; i < Math.min(10, rows.length); i++) {
+  // Detectar fila encabezado igual que analizarExcel
+  let headerIdx = 0, maxNoVacias = 0;
+  for (let i = 0; i < Math.min(15, rows.length); i++) {
     const noVacias = rows[i].filter(c => String(c).trim() !== '').length;
-    if (noVacias >= 3) { headerIdx = i; break; }
+    if (noVacias > maxNoVacias) { maxNoVacias = noVacias; headerIdx = i; }
   }
 
   const headers = rows[headerIdx].map(h => String(h).trim());
@@ -100,54 +132,84 @@ function leerExcel(buffer) {
 
   for (let i = headerIdx + 1; i < rows.length; i++) {
     const row = rows[i];
-    if (row.every(c => String(c).trim() === '')) continue; // fila vacía
+    if (row.every(c => String(c).trim() === '')) continue;
     const obj = {};
     headers.forEach((h, j) => { obj[h] = row[j] !== undefined ? row[j] : ''; });
     data.push(obj);
   }
-
-  // LOG DIAGNÓSTICO TEMPORAL
-  console.log('[PI-IMPORT] headerIdx:', headerIdx);
-  console.log('[PI-IMPORT] columnas detectadas:', JSON.stringify(headers));
-  console.log('[PI-IMPORT] total filas datos:', data.length);
-  if (data[0]) console.log('[PI-IMPORT] fila 0:', JSON.stringify(data[0]));
-  if (data[1]) console.log('[PI-IMPORT] fila 1:', JSON.stringify(data[1]));
-
   return data;
 }
 
 // ── Extraer número de cliente del inicio de razón social ──────
 function extraerNumeroCliente(razonSocial) {
   if (!razonSocial) return { numero: null, nombre: String(razonSocial || '').trim() };
-  const s   = String(razonSocial).trim();
-  const m   = s.match(/^(\d+)\s+(.+)$/);
+  const s = String(razonSocial).trim();
+  const m = s.match(/^(\d+)\s+(.+)$/);
   if (m) return { numero: m[1], nombre: m[2].trim() };
   return { numero: null, nombre: s };
 }
 
 // ═══════════════════════════════════════════════════════════════
-// POST /productos
+// POST /productos/analizar
+// ═══════════════════════════════════════════════════════════════
+router.post('/productos/analizar', upload.single('archivo'), (req, res) => {
+  if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo' });
+  try {
+    const resultado = analizarExcel(req.file.buffer);
+    res.json({ ok: true, ...resultado });
+  } catch (err) {
+    console.error('PI analizar productos:', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// POST /productos  (acepta mapeo JSON en req.body.mapeo)
 // ═══════════════════════════════════════════════════════════════
 router.post('/productos', (req, _res, next) => { req.setTimeout(300000); next(); }, upload.single('archivo'), async (req, res) => {
   if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo' });
 
+  // Parsear mapeo (puede venir como string JSON o ya como objeto)
+  let mapeo = {};
+  try {
+    mapeo = typeof req.body.mapeo === 'string' ? JSON.parse(req.body.mapeo) : (req.body.mapeo || {});
+  } catch { /* mapeo vacío, usará detección automática */ }
+
+  const col = (campo, ...fallbacks) => {
+    const nombre = mapeo[campo];
+    if (nombre) return nombre;
+    return fallbacks[0] || campo;
+  };
+
   let importados = 0, errores = 0;
 
   try {
-    const filas = leerExcel(req.file.buffer);
+    const filas = leerExcelConMapeo(req.file.buffer, mapeo);
 
-    // Parsear todas las filas primero
+    // Parsear todas las filas
     const registros = [];
     for (const fila of filas) {
-      const codigo        = String(fila['Código']       || fila['Codigo']         || '').trim();
-      const detalle       = String(fila['Detalle']       || fila['Descripcion']    || fila['Descripción'] || '').trim();
-      const precio_venta  = parseFloat(String(fila['Precio Venta'] || fila['Precio'] || 0).replace(',', '.')) || null;
-      const rubro         = String(fila['Observaciones'] || '').trim() || null;
-      const marca         = String(fila['Marca']         || '').trim() || null;
-      const tipo          = String(fila['Rubro']         || '').trim() || null;
-      const unidad_medida = String(fila['Unidad Medida'] || fila['Unidad'] || '').trim() || null;
-      const ean           = String(fila['EAN']           || '').trim() || null;
-      const proveedor     = String(fila['Proveedor']     || '').trim() || null;
+      const v = (campo, ...alts) => {
+        const colNombre = mapeo[campo];
+        if (colNombre && fila[colNombre] !== undefined && String(fila[colNombre]).trim() !== '') {
+          return String(fila[colNombre]).trim();
+        }
+        // Fallback a nombres alternativos
+        for (const a of alts) {
+          if (fila[a] !== undefined && String(fila[a]).trim() !== '') return String(fila[a]).trim();
+        }
+        return '';
+      };
+
+      const codigo        = v('codigo',        'Código', 'Codigo', 'CODIGO', 'codigo');
+      const detalle       = v('detalle',        'Detalle', 'Descripcion', 'Descripción', 'DETALLE', 'DESCRIPCION');
+      const precio_venta  = parseFloat(v('precio_venta', 'Precio Venta', 'Precio', 'PRECIO VENTA', 'PRECIO').replace(',', '.')) || null;
+      const rubro         = v('rubro',          'Observaciones', 'OBSERVACIONES', 'Rubro', 'RUBRO') || null;
+      const marca         = v('marca',          'Marca', 'MARCA') || null;
+      const tipo          = v('tipo',           'Tipo', 'TIPO') || null;
+      const unidad_medida = v('unidad_medida',  'Unidad Medida', 'Unidad', 'UNIDAD MEDIDA', 'UNIDAD') || null;
+      const ean           = v('ean',            'EAN', 'Código barras', 'CODIGO BARRAS') || null;
+      const proveedor     = v('proveedor',      'Proveedor', 'PROVEEDOR') || null;
 
       if (!codigo && !detalle) { errores++; continue; }
       registros.push([codigo || null, detalle || null, normalizar(detalle), precio_venta, rubro, marca, tipo, unidad_medida, ean, proveedor]);
@@ -182,7 +244,8 @@ router.post('/productos', (req, _res, next) => { req.setTimeout(300000); next();
             actualizado_en      = now()
         `, params);
         importados += lote.length;
-      } catch {
+      } catch (e) {
+        console.error('PI lote error:', e.message);
         errores += lote.length;
       }
     }
@@ -208,9 +271,8 @@ router.post('/clientes', (req, _res, next) => { req.setTimeout(300000); next(); 
   let importados = 0, errores = 0;
 
   try {
-    const filas = leerExcel(req.file.buffer);
+    const filas = leerExcelConMapeo(req.file.buffer, {});
 
-    // Parsear todas las filas primero
     const registros = [];
     for (const fila of filas) {
       const razonRaw        = String(fila['Razón Social'] || fila['Razon Social'] || fila['Nombre'] || '').trim();
@@ -239,7 +301,6 @@ router.post('/clientes', (req, _res, next) => { req.setTimeout(300000); next(); 
                       telefono, celular, email, lista_precio, condicion_venta, descuento, zona, vendedor, activo]);
     }
 
-    // INSERT masivo en lotes de 100
     const LOTE = 100;
     for (let i = 0; i < registros.length; i += LOTE) {
       const lote   = registros.slice(i, i + LOTE);
@@ -304,8 +365,8 @@ router.get('/productos/stats', async (_req, res) => {
       pool.query("SELECT creado_en FROM pi_importaciones WHERE tipo = 'productos' ORDER BY creado_en DESC LIMIT 1"),
     ]);
     res.json({
-      total:             parseInt(totQ.rows[0].count),
-      rubros:            parseInt(rubQ.rows[0].count),
+      total:              parseInt(totQ.rows[0].count),
+      rubros:             parseInt(rubQ.rows[0].count),
       ultima_importacion: impQ.rows[0]?.creado_en ?? null,
     });
   } catch (err) {
@@ -324,8 +385,8 @@ router.get('/clientes/stats', async (_req, res) => {
       pool.query("SELECT creado_en FROM pi_importaciones WHERE tipo = 'clientes' ORDER BY creado_en DESC LIMIT 1"),
     ]);
     res.json({
-      total:             parseInt(totQ.rows[0].count),
-      zonas:             parseInt(zonQ.rows[0].count),
+      total:              parseInt(totQ.rows[0].count),
+      zonas:              parseInt(zonQ.rows[0].count),
       ultima_importacion: impQ.rows[0]?.creado_en ?? null,
     });
   } catch (err) {
@@ -342,15 +403,15 @@ router.get('/productos', async (req, res) => {
   const lim = Math.min(100, Math.max(1, parseInt(limit)));
   const off = (pg - 1) * lim;
 
-  const where = ['1=1'];
+  const where  = ['1=1'];
   const params = [];
 
   if (q) {
     params.push(`%${normalizar(q)}%`);
     where.push(`(detalle_normalizado ILIKE $${params.length} OR codigo ILIKE $${params.length})`);
   }
-  if (rubro) { params.push(rubro); where.push(`rubro = $${params.length}`); }
-  if (marca) { params.push(marca); where.push(`marca = $${params.length}`); }
+  if (rubro)  { params.push(rubro);  where.push(`rubro = $${params.length}`); }
+  if (marca)  { params.push(marca);  where.push(`marca = $${params.length}`); }
   if (activo !== undefined && activo !== '') {
     params.push(activo === 'true' || activo === '1');
     where.push(`activo = $${params.length}`);
@@ -377,7 +438,7 @@ router.get('/clientes', async (req, res) => {
   const lim = Math.min(100, Math.max(1, parseInt(limit)));
   const off = (pg - 1) * lim;
 
-  const where = ['1=1'];
+  const where  = ['1=1'];
   const params = [];
 
   if (q) {
@@ -385,7 +446,7 @@ router.get('/clientes', async (req, res) => {
     params.push(`%${String(q).trim()}%`);
     where.push(`(LOWER(razon_social) ILIKE $${params.length - 1} OR numero_cliente ILIKE $${params.length})`);
   }
-  if (zona) { params.push(zona); where.push(`zona = $${params.length}`); }
+  if (zona)  { params.push(zona);  where.push(`zona = $${params.length}`); }
   if (activo !== undefined && activo !== '') {
     params.push(activo === 'true' || activo === '1');
     where.push(`activo = $${params.length}`);
