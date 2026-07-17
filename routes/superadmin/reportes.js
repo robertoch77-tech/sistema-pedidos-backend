@@ -474,8 +474,27 @@ router.get('/rentabilidad/:cliente_id', async (req, res) => {
         AND anulada IS NOT TRUE
     `, [cliente_id, fecha_desde, fecha_hasta]).catch(() => ({ rows: [{ compras: 0 }] }));
 
-    // Gastos fijos / variables desde caja
-    const gastosQ = await pool.query(`
+    const mes  = new Date(fecha_desde).getMonth() + 1;
+    const anio = new Date(fecha_desde).getFullYear();
+
+    // Gastos fijos desde tabla gastos_fijos
+    const gastosFijosQ = await pool.query(`
+      SELECT COALESCE(SUM(monto), 0) AS total
+      FROM gastos_fijos
+      WHERE cliente_id = $1 AND activo = true
+        AND (mes IS NULL OR mes = $2)
+        AND (anio IS NULL OR anio = $3)
+    `, [cliente_id, mes, anio]).catch(() => ({ rows: [{ total: 0 }] }));
+
+    // Gastos variables desde tabla gastos_variables
+    const gastosVarQ = await pool.query(`
+      SELECT COALESCE(SUM(monto), 0) AS total
+      FROM gastos_variables
+      WHERE cliente_id = $1 AND fecha BETWEEN $2 AND $3
+    `, [cliente_id, fecha_desde, fecha_hasta]).catch(() => ({ rows: [{ total: 0 }] }));
+
+    // También sumar gastos desde caja_movimientos (legado)
+    const cajaQ = await pool.query(`
       SELECT
         tipo_gasto,
         COALESCE(SUM(monto), 0) AS total
@@ -486,11 +505,12 @@ router.get('/rentabilidad/:cliente_id', async (req, res) => {
       GROUP BY tipo_gasto
     `, [cliente_id, fecha_desde, fecha_hasta]).catch(() => ({ rows: [] }));
 
-    let gastosFijos = 0, gastosVariables = 0;
-    for (const g of gastosQ.rows) {
-      if (g.tipo_gasto === 'fijo')      gastosFijos     += n(g.total);
+    let gastosFijos     = n(gastosFijosQ.rows[0].total);
+    let gastosVariables = n(gastosVarQ.rows[0].total);
+    for (const g of cajaQ.rows) {
+      if (g.tipo_gasto === 'fijo')          gastosFijos     += n(g.total);
       else if (g.tipo_gasto === 'variable') gastosVariables += n(g.total);
-      else gastosVariables += n(g.total);
+      else                                  gastosVariables += n(g.total);
     }
 
     const ventas    = n(ingresosQ.rows[0].ventas);

@@ -99,6 +99,7 @@ app.use('/api/superadmin/cheques', require('./routes/superadmin/cheques'));
 app.use('/api/superadmin/notas',   require('./routes/superadmin/notas'));
 app.use('/api/superadmin/arca',    require('./routes/superadmin/arca'));
 app.use('/api/superadmin/reportes', require('./routes/superadmin/reportes'));
+app.use('/api/superadmin/gastos',  require('./routes/superadmin/gastos'));
 app.use('/api/pi/auth',    require('./routes/pi/auth'));
 app.use('/api/pi/importar', require('./routes/pi/importar'));
 app.use('/api/pi/procesar', require('./routes/pi/procesar'));
