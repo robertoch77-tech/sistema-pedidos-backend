@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 
-const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:4000';
+import { API_BASE } from '../../config/api';
 
 const NAVY  = '#1B2A4A';
 const BLUE  = '#2B6CB0';
@@ -42,10 +43,12 @@ const MENU_ITEMS = [
   { id: 'stock',         icon: '📊', label: 'Stock',             flag: 'stock' },
   { id: 'clientes',      icon: '👥', label: 'Clientes',          flag: null },
   { id: 'proveedores',   icon: '🏢', label: 'Proveedores',       flag: null },
-  { id: 'cuentacorriente',icon: '💳',label: 'Cuenta Corriente',  flag: 'ctas_ctes' },
-  { id: 'caja',          icon: '🏦', label: 'Caja',              flag: 'caja' },
-  { id: 'cheques',       icon: '🧾', label: 'Cheques',           flag: 'cheques' },
-  { id: 'facturacion',   icon: '📄', label: 'Facturación',       flag: 'arca' },
+  { id: 'cuentacorriente',icon: '💳',label: 'Cuenta Corriente',  flag: null },
+  { id: 'caja',          icon: '🏦', label: 'Caja',              flag: 'habilitar_caja' },
+  { id: 'cheques',       icon: '🧾', label: 'Cheques',           flag: 'habilitar_cheques' },
+  { id: 'notas',         icon: '📄', label: 'NC/ND',             flag: null },
+  { id: 'facturacion',   icon: '🧾', label: 'Facturación',       flag: 'arca' },
+  { id: 'gastos',        icon: '💸', label: 'Gastos',             flag: null },
   { id: 'reportes',      icon: '📈', label: 'Reportes',          flag: null },
   { id: 'configuracion', icon: '⚙️', label: 'Configuración',     flag: null },
 ];
@@ -83,6 +86,7 @@ function PantallaEnConstruccion({ nombre, icon, onDashboard }: { nombre: string;
 
 // ─── COMPONENTE PRINCIPAL ─────────────────────────────────────
 function RobertoDashboard() {
+  const navigate = useNavigate();
   const [sesion,    setSesion]    = useState<Sesion | null>(null);
   const [seccion,   setSeccion]   = useState('inicio');
   const [metricas,  setMetricas]  = useState<MetricCard[]>([]);
@@ -135,15 +139,26 @@ function RobertoDashboard() {
   const modulos = sesion.modulos || {};
   const menuVisible = MENU_ITEMS.filter(m => m.flag === null || !!modulos[m.flag]);
 
+  const RUTAS: Record<string, string> = {
+    configuracion:    '/roberto/config',
+    productos:        '/roberto/productos',
+    ventas:           '/roberto/ventas',
+    stock:            '/roberto/stock',
+    clientes:         '/roberto/clientes',
+    presupuestos:     '/roberto/presupuestos',
+    remitos:          '/roberto/remitos',
+    proveedores:      '/roberto/proveedores',
+    gastos:           '/roberto/gastos',
+    cuentacorriente:  '/roberto/cuenta-corriente',
+    caja:             '/roberto/caja',
+    cheques:          '/roberto/cheques',
+    notas:            '/roberto/notas',
+    facturacion:      '/roberto/arca',
+    reportes:         '/roberto/reportes',
+  };
+
   const irA = (id: string) => {
-    if (id === 'configuracion') { window.location.href = '/roberto/config'; return; }
-    if (id === 'productos')     { window.location.href = '/roberto/productos'; return; }
-    if (id === 'ventas')        { window.location.href = '/roberto/ventas'; return; }
-    if (id === 'stock')         { window.location.href = '/roberto/stock'; return; }
-    if (id === 'clientes')      { window.location.href = '/roberto/clientes'; return; }
-    if (id === 'presupuestos')  { window.location.href = '/roberto/presupuestos'; return; }
-    if (id === 'remitos')       { window.location.href = '/roberto/remitos'; return; }
-    if (id === 'proveedores')   { window.location.href = '/roberto/proveedores'; return; }
+    if (RUTAS[id]) { navigate(RUTAS[id]); return; }
     setSeccion(id);
   };
 
@@ -162,14 +177,14 @@ function RobertoDashboard() {
         {metricas.map(m => (
           <div key={m.label}
             style={{ backgroundColor: '#fff', borderRadius: '12px', boxShadow: '0 2px 8px rgba(0,0,0,0.06)', padding: '20px', borderLeft: `4px solid ${m.color}`, cursor: 'pointer' }}
-            onClick={() => setSeccion(m.link)}
+            onClick={() => irA(m.link)}
             onMouseEnter={e => { e.currentTarget.style.boxShadow = '0 4px 16px rgba(0,0,0,0.10)'; }}
             onMouseLeave={e => { e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.06)'; }}
           >
             <div style={{ fontSize: '24px', marginBottom: '8px' }}>{m.icon}</div>
             <div style={{ fontSize: '22px', fontWeight: 700, color: m.color, marginBottom: '4px' }}>{m.valor}</div>
             <div style={{ fontSize: '12px', color: GRAY, fontWeight: 500 }}>{m.label}</div>
-            <button onClick={e => { e.stopPropagation(); setSeccion(m.link); }}
+            <button onClick={e => { e.stopPropagation(); irA(m.link); }}
               style={{ marginTop: '10px', fontSize: '11px', color: BLUE, background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontWeight: 600 }}>
               Ver detalle →
             </button>
@@ -183,7 +198,7 @@ function RobertoDashboard() {
         <div style={{ backgroundColor: '#fff', borderRadius: '12px', boxShadow: '0 2px 8px rgba(0,0,0,0.06)', overflow: 'hidden' }}>
           <div style={{ padding: '16px 20px', borderBottom: `2px solid ${SEP}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <h3 style={{ fontSize: '14px', fontWeight: 700, color: NAVY, margin: 0 }}>💰 Últimas ventas del día</h3>
-            <button onClick={() => setSeccion('ventas')}
+            <button onClick={() => navigate('/roberto/ventas')}
               style={{ fontSize: '11px', color: BLUE, background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}>
               Ver todas →
             </button>
@@ -215,13 +230,13 @@ function RobertoDashboard() {
         <div style={{ backgroundColor: '#fff', borderRadius: '12px', boxShadow: '0 2px 8px rgba(0,0,0,0.06)', overflow: 'hidden' }}>
           <div style={{ padding: '16px 20px', borderBottom: `2px solid ${SEP}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <h3 style={{ fontSize: '14px', fontWeight: 700, color: NAVY, margin: 0 }}>🧾 Cheques a vencer (7 días)</h3>
-            <button onClick={() => setSeccion('cheques')}
+            <button onClick={() => irA('cheques')}
               style={{ fontSize: '11px', color: BLUE, background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}>
               Ver todos →
             </button>
           </div>
           <div style={{ padding: '16px 20px' }}>
-            {modulos.cheques ? (
+            {modulos.habilitar_cheques ? (
               <div style={{ textAlign: 'center', padding: '24px 0', color: GRAY, fontSize: '13px' }}>
                 No hay cheques próximos a vencer.
               </div>
@@ -271,7 +286,7 @@ function RobertoDashboard() {
               <span style={{ position: 'absolute', top: 0, right: 0, width: '8px', height: '8px', backgroundColor: RED, borderRadius: '50%', border: '2px solid #fff' }} />
             </button>
           )}
-          <button onClick={() => window.location.href = '/roberto/config'} title="Configuración"
+          <button onClick={() => navigate('/roberto/config')} title="Configuración"
             style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '20px', padding: '4px' }}>
             ⚙️
           </button>

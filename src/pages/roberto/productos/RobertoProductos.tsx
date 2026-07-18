@@ -1,5 +1,7 @@
 import React, { useState, useRef, useCallback } from 'react';
+import { API_BASE } from '../../../config/api';
 
+const API    = API_BASE;
 const NAVY   = '#1B2A4A';
 const BLUE   = '#2B6CB0';
 const GREEN  = '#38A169';
@@ -10,8 +12,6 @@ const TEXT   = '#2D3748';
 const BG     = '#F4F6F9';
 const ORANGE = '#DD6B20';
 const YELLOW = '#D69E2E';
-
-const API = process.env.REACT_APP_API_URL || 'http://localhost:4000';
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
@@ -1284,6 +1284,10 @@ function RobertoProductos() {
   const [modalAbierto,    setModalAbierto]    = useState(false);
   const [modalImprimir,   setModalImprimir]   = useState(false);
   const [exportando,      setExportando]      = useState(false);
+  const [modoPrecios,    setModoPrecios]    = useState(false);
+  const [preciosEdit,    setPreciosEdit]    = useState<Record<number, { precio_costo: string; precio_venta_final: string }>>({});
+  const [actualizando,   setActualizando]   = useState(false);
+  const [msgActualizar,  setMsgActualizar]  = useState('');
   const [modalProducto,   setModalProducto]   = useState(false);
   const [productoEditar,  setProductoEditar]  = useState<ProductoReal | null>(null);
   const [productoDesactivar, setProductoDesactivar] = useState<ProductoReal | null>(null);
@@ -1372,6 +1376,39 @@ function RobertoProductos() {
 
   const limpiarFechas = () => { setFechaDesde(''); setFechaHasta(''); };
 
+  const handleActualizarPrecios = async () => {
+    if (!modoPrecios) {
+      setModoPrecios(true); setPreciosEdit({}); setMsgActualizar(''); return;
+    }
+    const modificados = Object.keys(preciosEdit).map(Number);
+    if (modificados.length === 0) { setModoPrecios(false); return; }
+    setActualizando(true);
+    try {
+      const body = {
+        cliente_id: clienteId,
+        productos: modificados.map(id => ({
+          id,
+          precio_costo: parseFloat(preciosEdit[id].precio_costo) || 0,
+          precio_venta_final: parseFloat(preciosEdit[id].precio_venta_final) || 0,
+        })),
+      };
+      const r = await fetch(`${API}/api/superadmin/importador/actualizar-precios`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'x-superadmin-token': token },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json();
+      if (r.ok && d.ok) {
+        setMsgActualizar(`✅ ${d.actualizados} precios actualizados`);
+        setModoPrecios(false); setPreciosEdit({});
+        cargarProductos(pagina);
+      } else {
+        setMsgActualizar(`❌ ${d.mensaje || 'Error al actualizar'}`);
+      }
+    } catch { setMsgActualizar('❌ Error de conexión'); }
+    finally { setActualizando(false); }
+  };
+
   const hayFiltros   = busqueda || filtroProveedor || filtroMarca || filtroRubro || filtroEstado;
   const hayFechas    = fechaDesde || fechaHasta;
 
@@ -1436,9 +1473,19 @@ function RobertoProductos() {
           <button style={btnStyle(BLUE)} onClick={() => setModalAbierto(true)}>
             📥 Importar Excel
           </button>
-          <button style={btnStyle(ORANGE)} onClick={() => alert('Actualizar precios — próximamente')}>
-            💲 Actualizar precios
+          {msgActualizar && (
+            <span style={{ fontSize: '12px', fontWeight: 600, color: msgActualizar.startsWith('✅') ? GREEN : RED, alignSelf: 'center' }}>
+              {msgActualizar}
+            </span>
+          )}
+          <button style={btnStyle(actualizando ? GRAY : ORANGE, '#fff', actualizando)} disabled={actualizando} onClick={handleActualizarPrecios}>
+            {actualizando ? '⏳ Guardando...' : modoPrecios ? `✅ Guardar${Object.keys(preciosEdit).length > 0 ? ` (${Object.keys(preciosEdit).length})` : ''}` : '💲 Actualizar precios'}
           </button>
+          {modoPrecios && !actualizando && (
+            <button style={btnStyle('#EDF2F7', GRAY)} onClick={() => { setModoPrecios(false); setPreciosEdit({}); setMsgActualizar(''); }}>
+              ✗ Cancelar
+            </button>
+          )}
           <button style={btnStyle('#2F855A')} onClick={handleExportar} disabled={exportando}>
             {exportando ? '⏳ Exportando...' : '📤 Exportar Excel'}
           </button>
@@ -1559,11 +1606,21 @@ function RobertoProductos() {
                         <div style={{ fontWeight: 600, color: TEXT }}>{p.marca || '—'}</div>
                         {p.rubro && <div style={{ fontSize: '11px', color: GRAY }}>{p.rubro}</div>}
                       </td>
-                      <td style={{ padding: '10px 14px', color: GRAY, fontFamily: 'monospace', borderRight: '1px solid rgba(99,179,237,0.15)' }}>
-                        ${Number(p.precio_costo || 0).toLocaleString('es-AR')}
+                      <td style={{ padding: '6px 14px', color: GRAY, fontFamily: 'monospace', borderRight: '1px solid rgba(99,179,237,0.15)' }}>
+                        {modoPrecios ? (
+                          <input type="number"
+                            value={preciosEdit[p.id]?.precio_costo ?? String(p.precio_costo || 0)}
+                            onChange={e => setPreciosEdit(prev => ({ ...prev, [p.id]: { precio_costo: e.target.value, precio_venta_final: prev[p.id]?.precio_venta_final ?? String(p.precio_venta_final || p.precio_venta_1 || 0) } }))}
+                            style={{ width: '90px', border: '1.5px solid #CBD5E0', borderRadius: '6px', padding: '4px 8px', fontSize: '12px', fontFamily: 'monospace' }} />
+                        ) : `$${Number(p.precio_costo || 0).toLocaleString('es-AR')}`}
                       </td>
-                      <td style={{ padding: '10px 14px', fontWeight: 600, color: GREEN, fontFamily: 'monospace', borderRight: '1px solid rgba(99,179,237,0.15)' }}>
-                        ${Number(p.precio_venta_final || p.precio_venta_1 || 0).toLocaleString('es-AR')}
+                      <td style={{ padding: '6px 14px', fontWeight: 600, fontFamily: 'monospace', borderRight: '1px solid rgba(99,179,237,0.15)', color: modoPrecios ? TEXT : GREEN }}>
+                        {modoPrecios ? (
+                          <input type="number"
+                            value={preciosEdit[p.id]?.precio_venta_final ?? String(p.precio_venta_final || p.precio_venta_1 || 0)}
+                            onChange={e => setPreciosEdit(prev => ({ ...prev, [p.id]: { precio_costo: prev[p.id]?.precio_costo ?? String(p.precio_costo || 0), precio_venta_final: e.target.value } }))}
+                            style={{ width: '90px', border: '1.5px solid #63B3ED', borderRadius: '6px', padding: '4px 8px', fontSize: '12px', fontFamily: 'monospace', fontWeight: 600, color: GREEN }} />
+                        ) : `$${Number(p.precio_venta_final || p.precio_venta_1 || 0).toLocaleString('es-AR')}`}
                       </td>
                       <td style={{ padding: '10px 14px', textAlign: 'center', borderRight: '1px solid rgba(99,179,237,0.15)' }}>
                         <span style={{
