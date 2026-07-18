@@ -974,10 +974,14 @@ function RobertoProductos() {
           };
         }),
       };
+      console.log('TOKEN:', token);
+      console.log('CLIENTE:', clienteId);
+      console.log('BODY:', JSON.stringify(body));
       const r = await fetch(`${API}/api/superadmin/importador/actualizar-precios-v2`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json', 'x-superadmin-token': token }, body: JSON.stringify(body),
       });
       const d = await r.json();
+      console.log('RESPONSE:', JSON.stringify(d));
       if (r.ok && d.ok) { setMsgGuardar(`✅ ${d.actualizados} actualizados`); setModoEdit(false); setEdits({}); cargarProductos(pagina); }
       else setMsgGuardar(`❌ ${d.mensaje || 'Error'}`);
     } catch { setMsgGuardar('❌ Error de conexión'); }
