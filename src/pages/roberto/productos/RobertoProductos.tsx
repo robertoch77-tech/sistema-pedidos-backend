@@ -811,6 +811,7 @@ const CAMPOS_MASIVOS = [
 const POR_PAG_OPTS = [10, 25, 50, 100];
 
 function RobertoProductos() {
+  console.log('BUILD_VERSION: v2_con_logs');
   const navigate = useNavigate();
   const token     = getToken();
   const clienteId = getClienteId();
@@ -1087,7 +1088,7 @@ function RobertoProductos() {
                   </label>
                 ))}
               </div>
-              <button style={btnStyle(GREEN, '#fff', guardando || cantEdit === 0)} disabled={guardando || cantEdit === 0} onClick={handleGuardar}>
+              <button style={btnStyle(GREEN, '#fff', guardando || cantEdit === 0)} disabled={guardando || cantEdit === 0} onClick={() => { console.log('CLICK GUARDAR TABLA'); handleGuardar(); }}>
                 {guardando ? '⏳ Guardando...' : `✅ Guardar${cantEdit > 0 ? ` (${cantEdit})` : ''}`}
               </button>
               <button style={btnStyle('#718096', '#fff')} onClick={() => { setModoEdit(false); setEdits({}); setMsgGuardar(''); }}>✗ Cancelar</button>
