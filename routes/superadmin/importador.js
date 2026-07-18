@@ -795,4 +795,35 @@ router.delete('/productos/:cliente_id/:id', async (req, res) => {
   }
 });
 
+// ═══════════════════════════════════════════════════════════════
+// ENDPOINT 10 — PUT /actualizar-precios  (batch price update)
+// ═══════════════════════════════════════════════════════════════
+router.put('/actualizar-precios', async (req, res) => {
+  const { cliente_id, productos } = req.body;
+  if (!cliente_id || !Array.isArray(productos) || productos.length === 0)
+    return res.status(400).json({ mensaje: 'Datos incompletos' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    let actualizados = 0;
+    for (const p of productos) {
+      const r = await client.query(
+        `UPDATE productos_propios
+         SET precio_costo=$1, precio_venta_final=$2, modificado_en=now()
+         WHERE id=$3 AND cliente_id=$4`,
+        [p.precio_costo || 0, p.precio_venta_final || 0, p.id, cliente_id]
+      );
+      actualizados += r.rowCount;
+    }
+    await client.query('COMMIT');
+    res.json({ ok: true, actualizados });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('PUT /actualizar-precios error:', err.message);
+    res.status(500).json({ mensaje: 'Error al actualizar precios', detalle: err.message });
+  } finally {
+    client.release();
+  }
+});
+
 module.exports = router;
