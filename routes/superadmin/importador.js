@@ -112,6 +112,16 @@ async function asegurarTablas() {
       await pool.query(`ALTER TABLE ${tabla} ADD COLUMN IF NOT EXISTS ${col} ${tipo}`).catch(() => {});
     }
     await pool.query(`
+      CREATE TABLE IF NOT EXISTS productos_propios_precios (
+        id                    BIGSERIAL PRIMARY KEY,
+        producto_id           BIGINT NOT NULL,
+        cliente_id            BIGINT NOT NULL,
+        precio_costo_anterior NUMERIC DEFAULT 0,
+        precio_venta_anterior NUMERIC DEFAULT 0,
+        fecha                 TIMESTAMPTZ DEFAULT now()
+      )
+    `).catch(() => {});
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS importaciones_historial (
         id              BIGSERIAL PRIMARY KEY,
         cliente_id      BIGINT NOT NULL,
@@ -552,15 +562,14 @@ router.get('/productos/:cliente_id', async (req, res) => {
 
     const [dataRes, countRes] = await Promise.all([
       pool.query(
-        `SELECT id, codigo, descripcion, descripcion_corta, marca,
-                proveedor_id, rubro, tipo,
-                precio_costo, precio_costo_final,
-                precio_venta_1, precio_venta_2, precio_venta_final,
-                alicuota_iva,
-                COALESCE(stock_actual, 0) AS stock,
+        `SELECT id, codigo, descripcion, marca,
+                proveedor_id, rubro, unidad_medida, ean, imagen_url,
+                precio_costo, dto_1, dto_2, dto_3, imp_1, imp_2,
+                precio_venta_1, precio_venta_2, precio_venta_final, precio_venta_3,
+                alicuota_iva, utilidad_1, utilidad_2, utilidad_3,
+                COALESCE(stock_actual, 0) AS stock_actual,
                 COALESCE(stock_minimo, 0) AS stock_minimo,
-                unidad_medida,
-                ean, imagen_url, activo, creado_en AS fecha_importacion
+                activo, creado_en, modificado_en
          FROM productos_propios
          WHERE ${whereStr}
          ORDER BY descripcion ASC
@@ -1059,6 +1068,265 @@ router.put('/actualizar-precios', async (req, res) => {
     res.status(500).json({ mensaje: 'Error al actualizar precios', detalle: err.message });
   } finally {
     client.release();
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// GET /productos/:cliente_id/:id  — producto individual
+// ═══════════════════════════════════════════════════════════════
+router.get('/productos/:cliente_id/:id', async (req, res) => {
+  try {
+    const { cliente_id, id } = req.params;
+    const r = await pool.query(
+      `SELECT p.*, pv.nombre AS proveedor_nombre
+       FROM productos_propios p
+       LEFT JOIN proveedores pv ON pv.id = p.proveedor_id
+       WHERE p.id=$1 AND p.cliente_id=$2 LIMIT 1`,
+      [id, cliente_id]
+    );
+    if (!r.rows[0]) return res.status(404).json({ mensaje: 'Producto no encontrado' });
+    res.json({ producto: r.rows[0] });
+  } catch (err) {
+    res.status(500).json({ mensaje: 'Error', detalle: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// GET /productos/:cliente_id/:id/historial  — historial precios
+// ═══════════════════════════════════════════════════════════════
+router.get('/productos/:cliente_id/:id/historial', async (req, res) => {
+  try {
+    const { cliente_id, id } = req.params;
+    const r = await pool.query(
+      `SELECT precio_costo_anterior, precio_venta_anterior, fecha
+       FROM productos_propios_precios
+       WHERE producto_id=$1 AND cliente_id=$2
+       ORDER BY fecha DESC LIMIT 5`,
+      [id, cliente_id]
+    ).catch(() => ({ rows: [] }));
+    res.json({ historial: r.rows });
+  } catch (err) {
+    res.json({ historial: [] });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// POST /analizar-v2  — detectar todas las hojas del Excel
+// ═══════════════════════════════════════════════════════════════
+router.post('/analizar-v2', upload.single('archivo'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ mensaje: 'Se requiere un archivo Excel' });
+    const wb = XLSX.read(req.file.buffer, { type: 'buffer', cellDates: true });
+    const hojas = wb.SheetNames.map(nombre => {
+      try {
+        const filas = XLSX.utils.sheet_to_json(wb.Sheets[nombre], { header: 1, defval: '' });
+        if (!filas.length) return { nombre, columnas: [], total_filas: 0, muestra: [] };
+        const headerIdx = detectarEncabezado(filas);
+        const columnas = filas[headerIdx].map(c => String(c).trim()).filter(c => c !== '');
+        const datos = filas.slice(headerIdx + 1).filter(f => f.some(c => c !== '' && c != null));
+        const muestra = datos.slice(0, 3).map(fila =>
+          Object.fromEntries(columnas.map((col, i) => [col, fila[i] != null ? String(fila[i]) : '']))
+        );
+        return { nombre, columnas, total_filas: datos.length, muestra };
+      } catch { return { nombre, columnas: [], total_filas: 0, muestra: [] }; }
+    });
+    res.json({ hojas });
+  } catch (err) {
+    console.error('POST /analizar-v2 error:', err.message);
+    res.status(500).json({ mensaje: 'Error al analizar', detalle: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// POST /importar-v2  — importar con selección de hojas
+// ═══════════════════════════════════════════════════════════════
+router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next(); }, upload.single('archivo'), async (req, res) => {
+  const client = await pool.connect();
+  try {
+    if (!req.file) return res.status(400).json({ mensaje: 'Se requiere un archivo Excel' });
+    const { cliente_id, proveedor } = req.body;
+    const cfg = typeof req.body.configuracion === 'string'
+      ? JSON.parse(req.body.configuracion) : (req.body.configuracion || {});
+    const { hojas_seleccionadas = [], mapeo = {}, marca_defecto, rubro_defecto } = cfg;
+
+    let proveedor_id = null;
+    if (proveedor && proveedor.trim()) {
+      const pe = await pool.query('SELECT id FROM proveedores WHERE cliente_id=$1 AND nombre=$2 LIMIT 1', [cliente_id, proveedor.trim()]);
+      if (pe.rows[0]) { proveedor_id = pe.rows[0].id; }
+      else { const ins = await pool.query('INSERT INTO proveedores (cliente_id, nombre, activo) VALUES ($1,$2,true) RETURNING id', [cliente_id, proveedor.trim()]); proveedor_id = ins.rows[0].id; }
+    }
+
+    const wb = XLSX.read(req.file.buffer, { type: 'buffer', cellDates: true });
+    const existRes = await pool.query('SELECT id, codigo FROM productos_propios WHERE cliente_id=$1', [cliente_id]);
+    const existMap = new Map(existRes.rows.map(r => [String(r.codigo || '').trim().toUpperCase(), r.id]));
+
+    let totalNuevos = 0, totalActualizados = 0, totalErrores = 0;
+    const porHoja = [];
+    const BATCH = 100;
+
+    await client.query('BEGIN');
+    for (const hojaName of hojas_seleccionadas) {
+      if (!wb.Sheets[hojaName]) continue;
+      const filas = XLSX.utils.sheet_to_json(wb.Sheets[hojaName], { header: 1, defval: '' });
+      if (!filas.length) { porHoja.push({ hoja: hojaName, nuevos: 0, actualizados: 0, errores: 0 }); continue; }
+      const headerIdx = detectarEncabezado(filas);
+      const enc = filas[headerIdx].map(c => String(c).trim());
+      const datos = filas.slice(headerIdx + 1).filter(f => f.some(c => c !== '' && c != null));
+      let nuevos = 0, actualizados = 0, errores = 0;
+
+      for (let i = 0; i < datos.length; i += BATCH) {
+        for (const fila of datos.slice(i, i + BATCH)) {
+          try {
+            const descCols = Array.isArray(mapeo.descripcion) ? mapeo.descripcion : (mapeo.descripcion ? [mapeo.descripcion] : []);
+            const descripcion = descCols.map(c => val(fila, c, enc)).filter(Boolean).join(' ').trim();
+            if (!descripcion) { errores++; continue; }
+            const codigo = val(fila, mapeo.codigo, enc) || null;
+            const key = codigo ? codigo.trim().toUpperCase() : null;
+            const campos = {
+              precio_costo:   numVal(fila, mapeo.precio_costo, enc),
+              precio_venta_1: numVal(fila, mapeo.precio_venta_1, enc),
+              precio_venta_2: numVal(fila, mapeo.precio_venta_2, enc),
+              precio_venta_3: numVal(fila, mapeo.precio_venta_3, enc),
+              marca:          val(fila, mapeo.marca, enc) || marca_defecto || null,
+              rubro:          val(fila, mapeo.rubro, enc) || rubro_defecto || null,
+              unidad_medida:  val(fila, mapeo.unidad_medida, enc) || null,
+              ean:            val(fila, mapeo.ean, enc) || null,
+              dto_1:          numVal(fila, mapeo.descuento_1, enc),
+              dto_2:          numVal(fila, mapeo.descuento_2, enc),
+              dto_3:          numVal(fila, mapeo.descuento_3, enc),
+              alicuota_iva:   numVal(fila, mapeo.iva, enc),
+              stock_actual:   numVal(fila, mapeo.stock, enc),
+              stock_minimo:   numVal(fila, mapeo.stock_minimo, enc),
+            };
+            if (key && existMap.has(key)) {
+              const id = existMap.get(key);
+              await client.query(
+                `UPDATE productos_propios SET descripcion=$1,proveedor_id=$2,
+                 precio_costo=COALESCE($3,precio_costo),precio_venta_1=COALESCE($4,precio_venta_1),
+                 precio_venta_2=COALESCE($5,precio_venta_2),precio_venta_3=COALESCE($6,precio_venta_3),
+                 marca=COALESCE($7,marca),rubro=COALESCE($8,rubro),
+                 unidad_medida=COALESCE($9,unidad_medida),ean=COALESCE($10,ean),
+                 dto_1=COALESCE($11,dto_1),dto_2=COALESCE($12,dto_2),dto_3=COALESCE($13,dto_3),
+                 alicuota_iva=COALESCE($14,alicuota_iva),
+                 stock_actual=COALESCE($15,stock_actual),stock_minimo=COALESCE($16,stock_minimo),
+                 modificado_en=now() WHERE id=$17 AND cliente_id=$18`,
+                [descripcion,proveedor_id,campos.precio_costo,campos.precio_venta_1,campos.precio_venta_2,
+                 campos.precio_venta_3,campos.marca,campos.rubro,campos.unidad_medida,campos.ean,
+                 campos.dto_1,campos.dto_2,campos.dto_3,campos.alicuota_iva,
+                 campos.stock_actual,campos.stock_minimo,id,cliente_id]
+              );
+              actualizados++;
+            } else {
+              const ins = await client.query(
+                `INSERT INTO productos_propios
+                 (cliente_id,proveedor_id,codigo,descripcion,precio_costo,precio_venta_1,precio_venta_2,
+                  precio_venta_3,marca,rubro,unidad_medida,ean,dto_1,dto_2,dto_3,alicuota_iva,
+                  stock_actual,stock_minimo,activo)
+                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,true) RETURNING id`,
+                [cliente_id,proveedor_id,codigo,descripcion,
+                 campos.precio_costo||0,campos.precio_venta_1||0,campos.precio_venta_2||0,campos.precio_venta_3||0,
+                 campos.marca,campos.rubro,campos.unidad_medida,campos.ean,
+                 campos.dto_1||0,campos.dto_2||0,campos.dto_3||0,campos.alicuota_iva||0,
+                 campos.stock_actual||0,campos.stock_minimo||0]
+              );
+              if (key) existMap.set(key, ins.rows[0].id);
+              nuevos++;
+            }
+          } catch { errores++; }
+        }
+      }
+      totalNuevos += nuevos; totalActualizados += actualizados; totalErrores += errores;
+      porHoja.push({ hoja: hojaName, nuevos, actualizados, errores });
+    }
+    if (proveedor_id) {
+      await client.query(
+        `INSERT INTO importaciones_historial (cliente_id,proveedor_id,nuevos,aplicados,errores) VALUES($1,$2,$3,$4,$5)`,
+        [cliente_id, proveedor_id, totalNuevos, totalNuevos + totalActualizados, totalErrores]
+      );
+    }
+    await client.query('COMMIT');
+    res.json({ ok: true, importados: totalNuevos + totalActualizados, nuevos: totalNuevos,
+      actualizados: totalActualizados, errores: totalErrores,
+      total: totalNuevos + totalActualizados + totalErrores, por_hoja: porHoja });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('POST /importar-v2 error:', err.message);
+    res.status(500).json({ mensaje: 'Error al importar', detalle: err.message });
+  } finally { client.release(); }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// PUT /actualizar-precios-v2
+// ═══════════════════════════════════════════════════════════════
+router.put('/actualizar-precios-v2', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { cliente_id, productos } = req.body;
+    if (!cliente_id || !Array.isArray(productos) || !productos.length)
+      return res.status(400).json({ mensaje: 'Datos inválidos' });
+    await client.query('BEGIN');
+    let actualizados = 0;
+    for (const p of productos) {
+      try {
+        const prev = await client.query(
+          'SELECT precio_costo, precio_venta_final FROM productos_propios WHERE id=$1 AND cliente_id=$2',
+          [p.id, cliente_id]
+        );
+        if (prev.rows[0]) {
+          await client.query(
+            `INSERT INTO productos_propios_precios (producto_id,cliente_id,precio_costo_anterior,precio_venta_anterior)
+             VALUES($1,$2,$3,$4)`,
+            [p.id, cliente_id, prev.rows[0].precio_costo, prev.rows[0].precio_venta_final]
+          ).catch(() => {});
+        }
+      } catch {}
+      const r = await client.query(
+        `UPDATE productos_propios SET
+           precio_costo=COALESCE($1,precio_costo), dto_1=COALESCE($2,dto_1), dto_2=COALESCE($3,dto_2),
+           dto_3=COALESCE($4,dto_3), imp_1=COALESCE($5,imp_1), imp_2=COALESCE($6,imp_2),
+           alicuota_iva=COALESCE($7,alicuota_iva), utilidad_1=COALESCE($8,utilidad_1),
+           utilidad_2=COALESCE($9,utilidad_2), utilidad_3=COALESCE($10,utilidad_3),
+           precio_venta_final=COALESCE($11,precio_venta_final),
+           precio_venta_2=COALESCE($12,precio_venta_2), precio_venta_3=COALESCE($13,precio_venta_3),
+           marca=COALESCE($14,marca), rubro=COALESCE($15,rubro),
+           unidad_medida=COALESCE($16,unidad_medida), stock_minimo=COALESCE($17,stock_minimo),
+           activo=COALESCE($18,activo), modificado_en=now()
+         WHERE id=$19 AND cliente_id=$20`,
+        [p.precio_costo??null, p.descuento_1??null, p.descuento_2??null, p.descuento_3??null,
+         p.impuesto_1??null, p.impuesto_2??null, p.iva??null,
+         p.utilidad_1??null, p.utilidad_2??null, p.utilidad_3??null,
+         p.precio_venta_final??null, p.precio_venta_2??null, p.precio_venta_3??null,
+         p.marca??null, p.rubro??null, p.unidad_medida??null,
+         p.stock_minimo??null, p.activo??null, p.id, cliente_id]
+      );
+      actualizados += r.rowCount;
+    }
+    await client.query('COMMIT');
+    res.json({ ok: true, actualizados });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('PUT /actualizar-precios-v2 error:', err.message);
+    res.status(500).json({ mensaje: 'Error al actualizar', detalle: err.message });
+  } finally { client.release(); }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// PUT /actualizar-masivo
+// ═══════════════════════════════════════════════════════════════
+router.put('/actualizar-masivo', async (req, res) => {
+  try {
+    const { cliente_id, ids, campo, valor } = req.body;
+    const PERMITIDOS = ['marca','rubro','utilidad_1','utilidad_2','utilidad_3','precio_costo','alicuota_iva','activo','unidad_medida','stock_minimo'];
+    if (!PERMITIDOS.includes(campo)) return res.status(400).json({ mensaje: 'Campo no permitido' });
+    if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ mensaje: 'IDs requeridos' });
+    const r = await pool.query(
+      `UPDATE productos_propios SET ${campo}=$1, modificado_en=now() WHERE id=ANY($2) AND cliente_id=$3`,
+      [valor, ids, cliente_id]
+    );
+    res.json({ ok: true, actualizados: r.rowCount });
+  } catch (err) {
+    console.error('PUT /actualizar-masivo error:', err.message);
+    res.status(500).json({ mensaje: 'Error', detalle: err.message });
   }
 });
 
