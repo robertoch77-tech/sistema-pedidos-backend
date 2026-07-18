@@ -1259,55 +1259,68 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
 // PUT /actualizar-precios-v2
 // ═══════════════════════════════════════════════════════════════
 router.put('/actualizar-precios-v2', async (req, res) => {
-  const client = await pool.connect();
   try {
     const { cliente_id, productos } = req.body;
     if (!cliente_id || !Array.isArray(productos) || !productos.length)
       return res.status(400).json({ mensaje: 'Datos inválidos' });
-    await client.query('BEGIN');
+
+    // Asegurar columnas nuevas por si no existían al iniciar
+    const colsNuevas = [
+      'dto_1','dto_2','dto_3','imp_1','imp_2',
+      'utilidad_1','utilidad_2','utilidad_3',
+      'precio_venta_2','precio_venta_3',
+    ];
+    for (const col of colsNuevas) {
+      await pool.query(`ALTER TABLE productos_propios ADD COLUMN IF NOT EXISTS ${col} NUMERIC DEFAULT 0`).catch(() => {});
+    }
+    await pool.query(`ALTER TABLE productos_propios ADD COLUMN IF NOT EXISTS stock_minimo NUMERIC DEFAULT 0`).catch(() => {});
+
     let actualizados = 0;
     for (const p of productos) {
       try {
-        const prev = await client.query(
+        // Guardar historial de precios
+        const prev = await pool.query(
           'SELECT precio_costo, precio_venta_final FROM productos_propios WHERE id=$1 AND cliente_id=$2',
           [p.id, cliente_id]
         );
         if (prev.rows[0]) {
-          await client.query(
+          await pool.query(
             `INSERT INTO productos_propios_precios (producto_id,cliente_id,precio_costo_anterior,precio_venta_anterior)
              VALUES($1,$2,$3,$4)`,
             [p.id, cliente_id, prev.rows[0].precio_costo, prev.rows[0].precio_venta_final]
           ).catch(() => {});
         }
-      } catch {}
-      const r = await client.query(
-        `UPDATE productos_propios SET
-           precio_costo=COALESCE($1,precio_costo), dto_1=COALESCE($2,dto_1), dto_2=COALESCE($3,dto_2),
-           dto_3=COALESCE($4,dto_3), imp_1=COALESCE($5,imp_1), imp_2=COALESCE($6,imp_2),
-           alicuota_iva=COALESCE($7,alicuota_iva), utilidad_1=COALESCE($8,utilidad_1),
-           utilidad_2=COALESCE($9,utilidad_2), utilidad_3=COALESCE($10,utilidad_3),
-           precio_venta_final=COALESCE($11,precio_venta_final),
-           precio_venta_2=COALESCE($12,precio_venta_2), precio_venta_3=COALESCE($13,precio_venta_3),
-           marca=COALESCE($14,marca), rubro=COALESCE($15,rubro),
-           unidad_medida=COALESCE($16,unidad_medida), stock_minimo=COALESCE($17,stock_minimo),
-           activo=COALESCE($18,activo), modificado_en=now()
-         WHERE id=$19 AND cliente_id=$20`,
-        [p.precio_costo??null, p.descuento_1??null, p.descuento_2??null, p.descuento_3??null,
-         p.impuesto_1??null, p.impuesto_2??null, p.iva??null,
-         p.utilidad_1??null, p.utilidad_2??null, p.utilidad_3??null,
-         p.precio_venta_final??null, p.precio_venta_2??null, p.precio_venta_3??null,
-         p.marca??null, p.rubro??null, p.unidad_medida??null,
-         p.stock_minimo??null, p.activo??null, p.id, cliente_id]
-      );
-      actualizados += r.rowCount;
+        // UPDATE principal — cada producto en su propio try/catch
+        const r = await pool.query(
+          `UPDATE productos_propios SET
+             precio_costo=COALESCE($1,precio_costo),
+             dto_1=COALESCE($2,dto_1), dto_2=COALESCE($3,dto_2), dto_3=COALESCE($4,dto_3),
+             imp_1=COALESCE($5,imp_1), imp_2=COALESCE($6,imp_2),
+             alicuota_iva=COALESCE($7,alicuota_iva),
+             utilidad_1=COALESCE($8,utilidad_1), utilidad_2=COALESCE($9,utilidad_2), utilidad_3=COALESCE($10,utilidad_3),
+             precio_venta_final=COALESCE($11,precio_venta_final),
+             precio_venta_2=COALESCE($12,precio_venta_2), precio_venta_3=COALESCE($13,precio_venta_3),
+             marca=COALESCE($14,marca), rubro=COALESCE($15,rubro),
+             unidad_medida=COALESCE($16,unidad_medida), stock_minimo=COALESCE($17,stock_minimo),
+             activo=COALESCE($18,activo), modificado_en=now()
+           WHERE id=$19 AND cliente_id=$20`,
+          [p.precio_costo??null, p.descuento_1??null, p.descuento_2??null, p.descuento_3??null,
+           p.impuesto_1??null, p.impuesto_2??null, p.iva??null,
+           p.utilidad_1??null, p.utilidad_2??null, p.utilidad_3??null,
+           p.precio_venta_final??null, p.precio_venta_2??null, p.precio_venta_3??null,
+           p.marca??null, p.rubro??null, p.unidad_medida??null,
+           p.stock_minimo??null, p.activo??null, p.id, cliente_id]
+        );
+        actualizados += r.rowCount;
+      } catch (err) {
+        console.error(`PUT /actualizar-precios-v2 producto ${p.id}:`, err.message);
+      }
     }
-    await client.query('COMMIT');
     res.json({ ok: true, actualizados });
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
     console.error('PUT /actualizar-precios-v2 error:', err.message);
     res.status(500).json({ mensaje: 'Error al actualizar', detalle: err.message });
-  } finally { client.release(); }
+  }
 });
 
 // ═══════════════════════════════════════════════════════════════
