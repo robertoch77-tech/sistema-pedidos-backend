@@ -498,9 +498,20 @@ interface ProductoReal {
   marca: string; proveedor_id: number | null; rubro: string; tipo: string;
   precio_costo: number; precio_costo_final: number;
   precio_venta_1: number; precio_venta_2: number; precio_venta_final: number;
+  precio_venta_3: number;
   alicuota_iva: number; stock: number; stock_minimo: number;
+  dto_1: number; dto_2: number; dto_3: number; dto_4: number;
+  imp_1: number; imp_2: number;
+  utilidad_1: number; utilidad_2: number; utilidad_3: number;
   unidad_medida: string; ean: string; imagen_url: string | null; activo: boolean;
   fecha_importacion: string;
+}
+
+interface EditPrecios {
+  precio_costo: string;
+  dto_1: string; dto_2: string; dto_3: string;
+  imp_1: string; imp_2: string; iva: string;
+  utilidad_1: string; utilidad_2: string; utilidad_3: string;
 }
 
 interface FiltrosOpciones {
@@ -1062,7 +1073,7 @@ async function exportarExcel(productos: any[], nombreCliente: string) {
   XLSX.writeFile(wb, `Productos_${nombreCliente}_${fecha}.xlsx`);
 }
 
-const COLUMNAS_TABLA = ['Imagen', 'Código', 'Descripción', 'Marca', 'Precio costo', 'Precio venta', 'Stock', 'Estado', 'Acciones'];
+// COLUMNAS_TABLA — 22 columnas definidas en el render manual de thead
 const POR_PAGINA_OPCIONES = [10, 25, 50];
 
 function useDebounce(value: string, delay: number) {
@@ -1089,7 +1100,9 @@ function RobertoProductos() {
   const [modalImprimir,   setModalImprimir]   = useState(false);
   const [exportando,      setExportando]      = useState(false);
   const [modoPrecios,    setModoPrecios]    = useState(false);
-  const [preciosEdit,    setPreciosEdit]    = useState<Record<number, { precio_costo: string; precio_venta_final: string }>>({});
+  const [preciosEdit,    setPreciosEdit]    = useState<Record<number, EditPrecios>>({});
+  const [pvActivo,       setPvActivo]       = useState<1 | 2 | 3>(1);
+  const [popupMasivo,    setPopupMasivo]    = useState<{ campo: keyof EditPrecios; label: string; valor: string } | null>(null);
   const [actualizando,   setActualizando]   = useState(false);
   const [msgActualizar,  setMsgActualizar]  = useState('');
   const [modalProducto,   setModalProducto]   = useState(false);
@@ -1180,6 +1193,55 @@ function RobertoProductos() {
 
   const limpiarFechas = () => { setFechaDesde(''); setFechaHasta(''); };
 
+  // ── Helpers para edición inline de precios ────────────────────
+  const defEdit = (p: ProductoReal): EditPrecios => ({
+    precio_costo: String(p.precio_costo || 0),
+    dto_1: String(p.dto_1 || 0), dto_2: String(p.dto_2 || 0), dto_3: String(p.dto_3 || 0),
+    imp_1: String(p.imp_1 || 0), imp_2: String(p.imp_2 || 0),
+    iva: String(p.alicuota_iva || 0),
+    utilidad_1: String(p.utilidad_1 || 0), utilidad_2: String(p.utilidad_2 || 0),
+    utilidad_3: String(p.utilidad_3 || 0),
+  });
+
+  const getF = (p: ProductoReal, campo: keyof EditPrecios): number => {
+    const e = preciosEdit[p.id];
+    if (e?.[campo] !== undefined && e[campo] !== '') return parseFloat(e[campo]) || 0;
+    const map: Record<keyof EditPrecios, number> = {
+      precio_costo: p.precio_costo, dto_1: p.dto_1, dto_2: p.dto_2, dto_3: p.dto_3,
+      imp_1: p.imp_1, imp_2: p.imp_2, iva: p.alicuota_iva,
+      utilidad_1: p.utilidad_1, utilidad_2: p.utilidad_2, utilidad_3: p.utilidad_3,
+    };
+    return map[campo] || 0;
+  };
+
+  const calcP = (p: ProductoReal) => {
+    const pc = getF(p, 'precio_costo');
+    const d1 = getF(p, 'dto_1'), d2 = getF(p, 'dto_2'), d3 = getF(p, 'dto_3');
+    const i1 = getF(p, 'imp_1'), i2 = getF(p, 'imp_2'), iva = getF(p, 'iva');
+    const u1 = getF(p, 'utilidad_1'), u2 = getF(p, 'utilidad_2'), u3 = getF(p, 'utilidad_3');
+    const pcFinal = pc * (1 - d1 / 100) * (1 - d2 / 100) * (1 - d3 / 100);
+    const base = pcFinal * (1 + i1 / 100) * (1 + i2 / 100) * (1 + iva / 100);
+    return { pcFinal, pv1: base * (1 + u1 / 100), pv2: base * (1 + u2 / 100), pv3: base * (1 + u3 / 100) };
+  };
+
+  const setEditF = (p: ProductoReal, campo: keyof EditPrecios, valor: string) => {
+    setPreciosEdit(prev => ({ ...prev, [p.id]: { ...defEdit(p), ...prev[p.id], [campo]: valor } }));
+  };
+
+  const applyMasivo = (campo: keyof EditPrecios, valor: string) => {
+    setPreciosEdit(prev => {
+      const next = { ...prev };
+      for (const p of productos) {
+        next[p.id] = { ...defEdit(p), ...prev[p.id], [campo]: valor };
+      }
+      return next;
+    });
+    setPopupMasivo(null);
+  };
+
+  const numFmt = (n: number) => n > 0 ? n.toLocaleString('es-AR', { maximumFractionDigits: 2 }) : '—';
+  const pctFmt = (n: number) => n > 0 ? `${n}%` : '—';
+
   const handleActualizarPrecios = async () => {
     if (!modoPrecios) {
       setModoPrecios(true); setPreciosEdit({}); setMsgActualizar(''); return;
@@ -1190,11 +1252,28 @@ function RobertoProductos() {
     try {
       const body = {
         cliente_id: clienteId,
-        productos: modificados.map(id => ({
-          id,
-          precio_costo: parseFloat(preciosEdit[id].precio_costo) || 0,
-          precio_venta_final: parseFloat(preciosEdit[id].precio_venta_final) || 0,
-        })),
+        productos: modificados.map(id => {
+          const p = productos.find(x => x.id === id)!;
+          const e = preciosEdit[id];
+          const { pv1, pv2, pv3 } = calcP(p);
+          const pvFinal = pvActivo === 1 ? pv1 : pvActivo === 2 ? pv2 : pv3;
+          return {
+            id,
+            precio_costo:    parseFloat(e.precio_costo) || 0,
+            descuento_1:     parseFloat(e.dto_1) || 0,
+            descuento_2:     parseFloat(e.dto_2) || 0,
+            descuento_3:     parseFloat(e.dto_3) || 0,
+            impuesto_1:      parseFloat(e.imp_1) || 0,
+            impuesto_2:      parseFloat(e.imp_2) || 0,
+            iva:             parseFloat(e.iva) || 0,
+            utilidad_1:      parseFloat(e.utilidad_1) || 0,
+            utilidad_2:      parseFloat(e.utilidad_2) || 0,
+            utilidad_3:      parseFloat(e.utilidad_3) || 0,
+            precio_venta_final: pvFinal,
+            precio_venta_2:  pv2,
+            precio_venta_3:  pv3,
+          };
+        }),
       };
       const r = await fetch(`${API}/api/superadmin/importador/actualizar-precios`, {
         method: 'PUT',
@@ -1227,6 +1306,30 @@ function RobertoProductos() {
 
   return (
     <div style={{ minHeight: '100vh', backgroundColor: BG, padding: '28px' }}>
+
+      {/* ── POPUP MASIVO ─────────────────────────────────────────── */}
+      {popupMasivo && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.3)' }}
+          onClick={() => setPopupMasivo(null)}>
+          <div style={{ backgroundColor: '#fff', borderRadius: 12, padding: '20px 24px', boxShadow: '0 8px 32px rgba(0,0,0,0.2)', minWidth: 300 }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: NAVY, marginBottom: 14 }}>
+              Aplicar {popupMasivo.label} a todos los productos visibles
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input type="number" autoFocus value={popupMasivo.valor}
+                onChange={e => setPopupMasivo(prev => prev ? { ...prev, valor: e.target.value } : null)}
+                onKeyDown={e => { if (e.key === 'Enter') applyMasivo(popupMasivo.campo, popupMasivo.valor); }}
+                style={{ ...selectStyle, width: 100, boxSizing: 'border-box' }} placeholder="0" />
+              <span style={{ color: GRAY, fontSize: 13 }}>%</span>
+              <button style={btnStyle(ORANGE)} onClick={() => applyMasivo(popupMasivo.campo, popupMasivo.valor)}>
+                Aplicar
+              </button>
+              <button style={btnStyle('#EDF2F7', GRAY)} onClick={() => setPopupMasivo(null)}>✕</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {modalAbierto && (
         <ModalImportador
@@ -1378,81 +1481,213 @@ function RobertoProductos() {
           </div>
         ) : productos.length > 0 ? (
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', minWidth: '900px' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', minWidth: '2000px' }}>
               <thead>
                 <tr style={{ backgroundColor: '#EBF4FF' }}>
-                  {COLUMNAS_TABLA.map((col, i) => (
-                    <th key={col} style={{ padding: '11px 14px', textAlign: 'left', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: i < COLUMNAS_TABLA.length - 1 ? `1px solid rgba(99,179,237,0.3)` : 'none', whiteSpace: 'nowrap' }}>
-                      {col}
-                    </th>
-                  ))}
+                  {/* 1 Imagen */}
+                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>Img</th>
+                  {/* 2 Código */}
+                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>Código</th>
+                  {/* 3 Descripción */}
+                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap', minWidth: 160 }}>Descripción</th>
+                  {/* 4 Marca */}
+                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>Marca</th>
+                  {/* 5 Rubro */}
+                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>Rubro</th>
+                  {/* 6 PC Base */}
+                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>PC Base</th>
+                  {/* 7 Dt1 */}
+                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>Dt 1%</th>
+                  {/* 8 Dt2 */}
+                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>Dt 2%</th>
+                  {/* 9 Dt3 */}
+                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>Dt 3%</th>
+                  {/* 10 PC Final */}
+                  <th style={{ padding: '8px 10px', fontWeight: 600, color: BLUE, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap', backgroundColor: '#EBF8FF' }}>PC Final</th>
+                  {/* 11 Imp1 */}
+                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>Imp 1%</th>
+                  {/* 12 Imp2 */}
+                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>Imp 2%</th>
+                  {/* 13 IVA */}
+                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>IVA%</th>
+                  {/* 14 Ut1 */}
+                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>
+                    Ut 1% {modoPrecios && <button onClick={() => setPopupMasivo({ campo: 'utilidad_1', label: 'Ut 1', valor: '' })} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 11, padding: '0 2px' }}>✏️</button>}
+                  </th>
+                  {/* 15 Ut2 */}
+                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>
+                    Ut 2% {modoPrecios && <button onClick={() => setPopupMasivo({ campo: 'utilidad_2', label: 'Ut 2', valor: '' })} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 11, padding: '0 2px' }}>✏️</button>}
+                  </th>
+                  {/* 16 Ut3 */}
+                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>
+                    Ut 3% {modoPrecios && <button onClick={() => setPopupMasivo({ campo: 'utilidad_3', label: 'Ut 3', valor: '' })} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 11, padding: '0 2px' }}>✏️</button>}
+                  </th>
+                  {/* 17 PV1 */}
+                  <th style={{ padding: '8px 6px', fontWeight: 600, color: GREEN, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap', backgroundColor: '#F0FFF4' }}>
+                    <div>PV1</div>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer', fontSize: 10, fontWeight: 400, color: pvActivo === 1 ? BLUE : GRAY }}>
+                      <input type="radio" name="pvActivo" checked={pvActivo === 1} onChange={() => setPvActivo(1)} style={{ width: 11, height: 11, cursor: 'pointer' }} />activo
+                    </label>
+                  </th>
+                  {/* 18 PV2 */}
+                  <th style={{ padding: '8px 6px', fontWeight: 600, color: GREEN, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap', backgroundColor: '#F0FFF4' }}>
+                    <div>PV2</div>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer', fontSize: 10, fontWeight: 400, color: pvActivo === 2 ? BLUE : GRAY }}>
+                      <input type="radio" name="pvActivo" checked={pvActivo === 2} onChange={() => setPvActivo(2)} style={{ width: 11, height: 11, cursor: 'pointer' }} />activo
+                    </label>
+                  </th>
+                  {/* 19 PV3 */}
+                  <th style={{ padding: '8px 6px', fontWeight: 600, color: GREEN, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap', backgroundColor: '#F0FFF4' }}>
+                    <div>PV3</div>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer', fontSize: 10, fontWeight: 400, color: pvActivo === 3 ? BLUE : GRAY }}>
+                      <input type="radio" name="pvActivo" checked={pvActivo === 3} onChange={() => setPvActivo(3)} style={{ width: 11, height: 11, cursor: 'pointer' }} />activo
+                    </label>
+                  </th>
+                  {/* 20 Stock */}
+                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>Stock</th>
+                  {/* 21 Estado */}
+                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>Estado</th>
+                  {/* 22 Acciones */}
+                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, whiteSpace: 'nowrap' }}>Acciones</th>
                 </tr>
               </thead>
               <tbody>
-                {productos.map((p, idx) => {
-                  const stockBajo = Number(p.stock) <= Number(p.stock_minimo) && Number(p.stock_minimo) > 0;
-                  return (
-                    <tr key={p.id} style={{ backgroundColor: idx % 2 === 0 ? '#fff' : '#F7FAFC' }}
-                      onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#EBF8FF'; }}
-                      onMouseLeave={e => { e.currentTarget.style.backgroundColor = idx % 2 === 0 ? '#fff' : '#F7FAFC'; }}>
-                      <td style={{ padding: '10px 14px', borderRight: '1px solid rgba(99,179,237,0.15)' }}>
-                        {p.imagen_url
-                          ? <img src={p.imagen_url} alt="" style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '6px', border: '1px solid #EDF2F7' }} />
-                          : <div style={{ width: '40px', height: '40px', backgroundColor: '#EDF2F7', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px' }}>📦</div>
-                        }
-                      </td>
-                      <td style={{ padding: '10px 14px', fontFamily: 'monospace', fontSize: '12px', color: GRAY, borderRight: '1px solid rgba(99,179,237,0.15)' }}>{p.codigo || '—'}</td>
-                      <td style={{ padding: '10px 14px', fontWeight: 500, color: TEXT, borderRight: '1px solid rgba(99,179,237,0.15)', maxWidth: '220px' }}>
-                        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.descripcion}</div>
-                        {p.descripcion_corta && <div style={{ fontSize: '11px', color: GRAY, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.descripcion_corta}</div>}
-                      </td>
-                      <td style={{ padding: '10px 14px', color: GRAY, borderRight: '1px solid rgba(99,179,237,0.15)' }}>
-                        <div style={{ fontWeight: 600, color: TEXT }}>{p.marca || '—'}</div>
-                        {p.rubro && <div style={{ fontSize: '11px', color: GRAY }}>{p.rubro}</div>}
-                      </td>
-                      <td style={{ padding: '6px 14px', color: GRAY, fontFamily: 'monospace', borderRight: '1px solid rgba(99,179,237,0.15)' }}>
-                        {modoPrecios ? (
-                          <input type="number"
-                            value={preciosEdit[p.id]?.precio_costo ?? String(p.precio_costo || 0)}
-                            onChange={e => setPreciosEdit(prev => ({ ...prev, [p.id]: { precio_costo: e.target.value, precio_venta_final: prev[p.id]?.precio_venta_final ?? String(p.precio_venta_final || p.precio_venta_1 || 0) } }))}
-                            style={{ width: '90px', border: '1.5px solid #CBD5E0', borderRadius: '6px', padding: '4px 8px', fontSize: '12px', fontFamily: 'monospace' }} />
-                        ) : `$${Number(p.precio_costo || 0).toLocaleString('es-AR')}`}
-                      </td>
-                      <td style={{ padding: '6px 14px', fontWeight: 600, fontFamily: 'monospace', borderRight: '1px solid rgba(99,179,237,0.15)', color: modoPrecios ? TEXT : GREEN }}>
-                        {modoPrecios ? (
-                          <input type="number"
-                            value={preciosEdit[p.id]?.precio_venta_final ?? String(p.precio_venta_final || p.precio_venta_1 || 0)}
-                            onChange={e => setPreciosEdit(prev => ({ ...prev, [p.id]: { precio_costo: prev[p.id]?.precio_costo ?? String(p.precio_costo || 0), precio_venta_final: e.target.value } }))}
-                            style={{ width: '90px', border: '1.5px solid #63B3ED', borderRadius: '6px', padding: '4px 8px', fontSize: '12px', fontFamily: 'monospace', fontWeight: 600, color: GREEN }} />
-                        ) : `$${Number(p.precio_venta_final || p.precio_venta_1 || 0).toLocaleString('es-AR')}`}
-                      </td>
-                      <td style={{ padding: '10px 14px', textAlign: 'center', borderRight: '1px solid rgba(99,179,237,0.15)' }}>
-                        <span style={{
-                          display: 'inline-block', padding: '2px 8px', borderRadius: '12px', fontSize: '12px', fontWeight: 700,
-                          backgroundColor: stockBajo ? '#FFF5F5' : '#F0FFF4',
-                          color: stockBajo ? RED : GREEN,
-                        }}>
-                          {Number(p.stock || 0)}
-                        </span>
-                      </td>
-                      <td style={{ padding: '10px 14px', borderRight: '1px solid rgba(99,179,237,0.15)' }}>
-                        <BadgeEstado activo={p.activo} />
-                      </td>
-                      <td style={{ padding: '10px 14px' }}>
-                        <div style={{ display: 'flex', gap: '6px' }}>
-                          <button onClick={() => { setProductoEditar(p); setModalProducto(true); }}
-                            style={{ backgroundColor: '#EBF4FF', color: BLUE, border: 'none', borderRadius: '5px', padding: '5px 10px', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>
-                            ✏️ Editar
-                          </button>
-                          <button onClick={() => setProductoDesactivar(p)}
-                            style={{ backgroundColor: '#FFF5F5', color: RED, border: 'none', borderRadius: '5px', padding: '5px 10px', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>
-                            🗑️
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
+                {(() => {
+                  const einSt: React.CSSProperties = { width: 64, border: '1.5px solid #CBD5E0', borderRadius: 4, padding: '3px 5px', fontSize: '11px', fontFamily: 'monospace', backgroundColor: '#FEFEFE', boxSizing: 'border-box' };
+                  const tdSt = (extra?: React.CSSProperties): React.CSSProperties => ({
+                    padding: '7px 8px', borderRight: '1px solid rgba(99,179,237,0.15)', fontFamily: 'monospace', fontSize: '11px', ...extra,
+                  });
+                  return productos.map((p, idx) => {
+                    const stockBajo = Number(p.stock) <= Number(p.stock_minimo) && Number(p.stock_minimo) > 0;
+                    const { pcFinal, pv1, pv2, pv3 } = calcP(p);
+                    const rowBg = idx % 2 === 0 ? '#fff' : '#F7FAFC';
+                    return (
+                      <tr key={p.id} style={{ backgroundColor: rowBg }}
+                        onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#EBF8FF'; }}
+                        onMouseLeave={e => { e.currentTarget.style.backgroundColor = rowBg; }}>
+                        {/* 1 Imagen */}
+                        <td style={{ padding: '6px 8px', borderRight: '1px solid rgba(99,179,237,0.15)' }}>
+                          {p.imagen_url
+                            ? <img src={p.imagen_url} alt="" style={{ width: 36, height: 36, objectFit: 'cover', borderRadius: 4 }} />
+                            : <div style={{ width: 36, height: 36, backgroundColor: '#EDF2F7', borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16 }}>📦</div>}
+                        </td>
+                        {/* 2 Código */}
+                        <td style={tdSt({ color: GRAY })}>{p.codigo || '—'}</td>
+                        {/* 3 Descripción */}
+                        <td style={{ padding: '7px 8px', fontWeight: 500, color: TEXT, borderRight: '1px solid rgba(99,179,237,0.15)', maxWidth: 180 }}>
+                          <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12 }}>{p.descripcion}</div>
+                          {p.descripcion_corta && <div style={{ fontSize: 10, color: GRAY }}>{p.descripcion_corta}</div>}
+                        </td>
+                        {/* 4 Marca */}
+                        <td style={tdSt({ fontFamily: 'inherit', fontSize: 11, color: TEXT })}>{p.marca || '—'}</td>
+                        {/* 5 Rubro */}
+                        <td style={tdSt({ fontFamily: 'inherit', fontSize: 11, color: GRAY })}>{p.rubro || '—'}</td>
+                        {/* 6 PC Base (editable) */}
+                        <td style={tdSt()}>
+                          {modoPrecios
+                            ? <input type="number" value={preciosEdit[p.id]?.precio_costo ?? String(p.precio_costo || 0)} onChange={e => setEditF(p, 'precio_costo', e.target.value)} style={einSt} />
+                            : numFmt(p.precio_costo)}
+                        </td>
+                        {/* 7 Dt1 (editable) */}
+                        <td style={tdSt()}>
+                          {modoPrecios
+                            ? <input type="number" value={preciosEdit[p.id]?.dto_1 ?? String(p.dto_1 || 0)} onChange={e => setEditF(p, 'dto_1', e.target.value)} style={einSt} />
+                            : pctFmt(p.dto_1)}
+                        </td>
+                        {/* 8 Dt2 (editable) */}
+                        <td style={tdSt()}>
+                          {modoPrecios
+                            ? <input type="number" value={preciosEdit[p.id]?.dto_2 ?? String(p.dto_2 || 0)} onChange={e => setEditF(p, 'dto_2', e.target.value)} style={einSt} />
+                            : pctFmt(p.dto_2)}
+                        </td>
+                        {/* 9 Dt3 (editable) */}
+                        <td style={tdSt()}>
+                          {modoPrecios
+                            ? <input type="number" value={preciosEdit[p.id]?.dto_3 ?? String(p.dto_3 || 0)} onChange={e => setEditF(p, 'dto_3', e.target.value)} style={einSt} />
+                            : pctFmt(p.dto_3)}
+                        </td>
+                        {/* 10 PC Final (calculado) */}
+                        <td style={tdSt({ color: BLUE, fontWeight: 600, backgroundColor: '#EBF8FF' })}>
+                          {numFmt(pcFinal)}
+                        </td>
+                        {/* 11 Imp1 (editable) */}
+                        <td style={tdSt()}>
+                          {modoPrecios
+                            ? <input type="number" value={preciosEdit[p.id]?.imp_1 ?? String(p.imp_1 || 0)} onChange={e => setEditF(p, 'imp_1', e.target.value)} style={einSt} />
+                            : pctFmt(p.imp_1)}
+                        </td>
+                        {/* 12 Imp2 (editable) */}
+                        <td style={tdSt()}>
+                          {modoPrecios
+                            ? <input type="number" value={preciosEdit[p.id]?.imp_2 ?? String(p.imp_2 || 0)} onChange={e => setEditF(p, 'imp_2', e.target.value)} style={einSt} />
+                            : pctFmt(p.imp_2)}
+                        </td>
+                        {/* 13 IVA (editable) */}
+                        <td style={tdSt()}>
+                          {modoPrecios
+                            ? <input type="number" value={preciosEdit[p.id]?.iva ?? String(p.alicuota_iva || 0)} onChange={e => setEditF(p, 'iva', e.target.value)} style={einSt} />
+                            : pctFmt(p.alicuota_iva)}
+                        </td>
+                        {/* 14 Ut1 (editable) */}
+                        <td style={tdSt()}>
+                          {modoPrecios
+                            ? <input type="number" value={preciosEdit[p.id]?.utilidad_1 ?? String(p.utilidad_1 || 0)} onChange={e => setEditF(p, 'utilidad_1', e.target.value)} style={einSt} />
+                            : pctFmt(p.utilidad_1)}
+                        </td>
+                        {/* 15 Ut2 (editable) */}
+                        <td style={tdSt()}>
+                          {modoPrecios
+                            ? <input type="number" value={preciosEdit[p.id]?.utilidad_2 ?? String(p.utilidad_2 || 0)} onChange={e => setEditF(p, 'utilidad_2', e.target.value)} style={einSt} />
+                            : pctFmt(p.utilidad_2)}
+                        </td>
+                        {/* 16 Ut3 (editable) */}
+                        <td style={tdSt()}>
+                          {modoPrecios
+                            ? <input type="number" value={preciosEdit[p.id]?.utilidad_3 ?? String(p.utilidad_3 || 0)} onChange={e => setEditF(p, 'utilidad_3', e.target.value)} style={einSt} />
+                            : pctFmt(p.utilidad_3)}
+                        </td>
+                        {/* 17 PV1 (calculado) */}
+                        <td style={tdSt({ color: pvActivo === 1 ? GREEN : GRAY, fontWeight: pvActivo === 1 ? 700 : 400, backgroundColor: '#F0FFF4' })}>
+                          ${numFmt(pv1)}
+                          {pvActivo === 1 && <span style={{ fontSize: 9, color: GREEN, display: 'block', fontFamily: 'inherit' }}>● activo</span>}
+                        </td>
+                        {/* 18 PV2 (calculado) */}
+                        <td style={tdSt({ color: pvActivo === 2 ? GREEN : GRAY, fontWeight: pvActivo === 2 ? 700 : 400, backgroundColor: '#F0FFF4' })}>
+                          ${numFmt(pv2)}
+                          {pvActivo === 2 && <span style={{ fontSize: 9, color: GREEN, display: 'block', fontFamily: 'inherit' }}>● activo</span>}
+                        </td>
+                        {/* 19 PV3 (calculado) */}
+                        <td style={tdSt({ color: pvActivo === 3 ? GREEN : GRAY, fontWeight: pvActivo === 3 ? 700 : 400, backgroundColor: '#F0FFF4' })}>
+                          ${numFmt(pv3)}
+                          {pvActivo === 3 && <span style={{ fontSize: 9, color: GREEN, display: 'block', fontFamily: 'inherit' }}>● activo</span>}
+                        </td>
+                        {/* 20 Stock */}
+                        <td style={{ padding: '7px 8px', textAlign: 'center', borderRight: '1px solid rgba(99,179,237,0.15)' }}>
+                          <span style={{ display: 'inline-block', padding: '2px 6px', borderRadius: 10, fontSize: 11, fontWeight: 700, backgroundColor: stockBajo ? '#FFF5F5' : '#F0FFF4', color: stockBajo ? RED : GREEN }}>
+                            {Number(p.stock || 0)}
+                          </span>
+                        </td>
+                        {/* 21 Estado */}
+                        <td style={{ padding: '7px 8px', borderRight: '1px solid rgba(99,179,237,0.15)' }}>
+                          <BadgeEstado activo={p.activo} />
+                        </td>
+                        {/* 22 Acciones */}
+                        <td style={{ padding: '7px 8px' }}>
+                          <div style={{ display: 'flex', gap: 4 }}>
+                            <button onClick={() => { setProductoEditar(p); setModalProducto(true); }}
+                              style={{ backgroundColor: '#EBF4FF', color: BLUE, border: 'none', borderRadius: 4, padding: '4px 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
+                              ✏️
+                            </button>
+                            <button onClick={() => setProductoDesactivar(p)}
+                              style={{ backgroundColor: '#FFF5F5', color: RED, border: 'none', borderRadius: 4, padding: '4px 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
+                              🗑️
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  });
+                })()}
               </tbody>
             </table>
           </div>
