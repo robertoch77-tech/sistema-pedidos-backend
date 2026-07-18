@@ -150,41 +150,48 @@ function BarraProgreso({ paso }: { paso: number }) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// MODAL IMPORTADOR
+// MODAL IMPORTADOR LIBRE
 // ════════════════════════════════════════════════════════════════════════════
 
+const CAMPOS_LIBRE: { campo: string; label: string; obligatorio?: boolean }[] = [
+  { campo: 'codigo',        label: 'Código del producto',    obligatorio: true },
+  { campo: 'descripcion',   label: 'Descripción',            obligatorio: true },
+  { campo: 'precio_costo',  label: 'Precio costo' },
+  { campo: 'precio_venta_1',label: 'Precio venta 1' },
+  { campo: 'precio_venta_2',label: 'Precio venta 2' },
+  { campo: 'precio_venta_3',label: 'Precio venta 3' },
+  { campo: 'marca',         label: 'Marca' },
+  { campo: 'rubro',         label: 'Rubro' },
+  { campo: 'unidad_medida', label: 'Unidad de medida' },
+  { campo: 'ean',           label: 'EAN / Código de barras' },
+  { campo: 'descuento_1',   label: 'Descuento 1 %' },
+  { campo: 'descuento_2',   label: 'Descuento 2 %' },
+  { campo: 'descuento_3',   label: 'Descuento 3 %' },
+  { campo: 'iva',           label: 'IVA %' },
+];
+
 function ModalImportador({ onCerrar, onExito }: { onCerrar: () => void; onExito: () => void }) {
-  const [paso, setPaso]                     = useState(1);
-  const [drag, setDrag]                     = useState(false);
-  const [archivo, setArchivo]               = useState<File | null>(null);
-  const [proveedor, setProveedor]           = useState('');
-  const [cargando, setCargando]             = useState(false);
-  const [error, setError]                   = useState('');
-  const [columnas, setColumnas]             = useState<string[]>([]);
-  const [filaEnc, setFilaEnc]               = useState(0);
-  const [muestra, setMuestra]               = useState<Record<string, string>[]>([]);
-  const [mapeo, setMapeo]                   = useState<MapeoState>(MAPEO_INICIAL);
-  const [proveedorId, setProveedorId]       = useState<number | null>(null);
-  const [resumen, setResumen]               = useState<Resumen | null>(null);
-  const [detalle, setDetalle]               = useState<ItemDetalle[]>([]);
-  const [filtroTipo, setFiltroTipo]         = useState('');
-  const [busDetalle, setBusDetalle]         = useState('');
-  const [selTodos, setSelTodos]             = useState(false);
-  const [exito, setExito]                   = useState<{ aplicados: number; nuevos: number } | null>(null);
+  const [paso, setPaso]               = useState(1);
+  const [drag, setDrag]               = useState(false);
+  const [archivo, setArchivo]         = useState<File | null>(null);
+  const [proveedor, setProveedor]     = useState('');
+  const [cargando, setCargando]       = useState(false);
+  const [error, setError]             = useState('');
+  const [columnas, setColumnas]       = useState<string[]>([]);
+  const [muestra, setMuestra]         = useState<Record<string, string>[]>([]);
+  const [totalFilas, setTotalFilas]   = useState(0);
+  const [mapeo, setMapeo]             = useState<Record<string, string>>({});
+  const [guardarMapeo, setGuardarMapeo] = useState(true);
+  const [mapeoGuardado, setMapeoGuardado] = useState(false);
+  const [resultado, setResultado]     = useState<{ importados: number; errores: number; nuevos: number; actualizados: number } | null>(null);
 
-  const inputRef = useRef<HTMLInputElement>(null);
-  const token    = getToken();
-  const clienteId = getClienteId();
-
-  // ── Paso 1 — drop/select ─────────────────────────────────────────────────
+  const inputRef   = useRef<HTMLInputElement>(null);
+  const token      = getToken();
+  const clienteId  = getClienteId();
 
   const aceptarArchivo = (f: File) => {
-    if (!f.name.match(/\.(xlsx|xls)$/i)) {
-      setError('Solo se aceptan archivos .xls y .xlsx');
-      return;
-    }
-    setError('');
-    setArchivo(f);
+    if (!f.name.match(/\.(xlsx|xls)$/i)) { setError('Solo se aceptan archivos .xls y .xlsx'); return; }
+    setError(''); setArchivo(f);
   };
 
   const onDrop = useCallback((e: React.DragEvent) => {
@@ -201,20 +208,24 @@ function ModalImportador({ onCerrar, onExito }: { onCerrar: () => void; onExito:
     try {
       const fd = new FormData();
       fd.append('archivo', archivo);
-      const r = await fetch(`${API}/api/superadmin/importador/analizar`, {
+      const r = await fetch(`${API}/api/superadmin/importador/analizar-libre`, {
         method: 'POST', headers: { 'x-superadmin-token': token }, body: fd,
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.mensaje || 'Error al analizar');
-      setColumnas(d.columnas);
-      setFilaEnc(d.fila_encabezado);
+      setColumnas(d.columnas || []);
       setMuestra(d.muestra || []);
-      setMapeo(prev => ({
-        ...prev,
-        codigo:      d.columnas.find((c: string) => /codi?g/i.test(c)) || '',
-        descripcion: d.columnas.find((c: string) => /desc/i.test(c)) || '',
-        precio_costo: d.columnas.find((c: string) => /precio|costo/i.test(c)) || '',
-      }));
+      setTotalFilas(d.total_filas || 0);
+      let mapeoInicial: Record<string, string> = {};
+      try {
+        const rm = await fetch(
+          `${API}/api/superadmin/importador/mapeo-proveedor/${clienteId}/${encodeURIComponent(proveedor.trim())}`,
+          { headers: { 'x-superadmin-token': token } }
+        );
+        const dm = await rm.json();
+        if (dm.mapeo) { mapeoInicial = dm.mapeo; setMapeoGuardado(true); }
+      } catch {}
+      setMapeo(mapeoInicial);
       setPaso(2);
     } catch (e: any) {
       setError(e.message);
@@ -223,125 +234,50 @@ function ModalImportador({ onCerrar, onExito }: { onCerrar: () => void; onExito:
     }
   };
 
-  // ── Paso 2 — mapear + comparar ───────────────────────────────────────────
-
-  const previaMuestra = muestra.slice(0, 3);
-
-  const comparar = async () => {
-    if (!mapeo.codigo) { setError('El campo Código es obligatorio'); return; }
-    if (!mapeo.descripcion) { setError('El campo Descripción es obligatorio'); return; }
-    setError(''); setCargando(true);
+  const importar = async () => {
+    if (!mapeo['codigo']) { setError('El campo Código es obligatorio'); return; }
+    if (!mapeo['descripcion']) { setError('El campo Descripción es obligatorio'); return; }
+    setError(''); setCargando(true); setPaso(3);
     try {
-      // mapear
-      const mapObj: Record<string, string> = {};
-      (Object.keys(mapeo) as (keyof MapeoState)[]).forEach(k => {
-        if (mapeo[k]) mapObj[k] = mapeo[k];
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve((reader.result as string).split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(archivo!);
       });
-      const rm = await fetch(`${API}/api/superadmin/importador/mapear`, {
+      if (guardarMapeo) {
+        try {
+          await fetch(`${API}/api/superadmin/importador/mapeo-proveedor/${clienteId}`, {
+            method: 'POST',
+            headers: { 'x-superadmin-token': token, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ proveedor: proveedor.trim(), mapeo }),
+          });
+        } catch {}
+      }
+      const r = await fetch(`${API}/api/superadmin/importador/aplicar-libre`, {
         method: 'POST',
         headers: { 'x-superadmin-token': token, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          cliente_id: clienteId, proveedor_nombre: proveedor.trim(),
-          fila_encabezado: filaEnc, mapeo: mapObj,
-        }),
-      });
-      const dm = await rm.json();
-      if (!rm.ok) throw new Error(dm.mensaje || 'Error al guardar mapeo');
-      setProveedorId(dm.proveedor_id);
-
-      // comparar
-      const fd = new FormData();
-      fd.append('archivo', archivo!);
-      fd.append('cliente_id', String(clienteId));
-      fd.append('proveedor_id', String(dm.proveedor_id));
-      fd.append('mapeo', JSON.stringify(mapObj));
-      fd.append('fila_encabezado', String(filaEnc));
-      const rc = await fetch(`${API}/api/superadmin/importador/comparar`, {
-        method: 'POST', headers: { 'x-superadmin-token': token }, body: fd,
-      });
-      const dc = await rc.json();
-      if (!rc.ok) throw new Error(dc.mensaje || 'Error al comparar');
-      setResumen(dc.resumen);
-      const items: ItemDetalle[] = dc.detalle.map((x: ItemDetalle) => ({ ...x, aprobado: x.tipo !== 'sin_cambio' }));
-      setDetalle(items);
-      setPaso(3);
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setCargando(false);
-    }
-  };
-
-  // ── Paso 3 — filtros y selección ─────────────────────────────────────────
-
-  const detalleVisible = detalle.filter(x => {
-    if (filtroTipo && x.tipo !== filtroTipo) return false;
-    if (busDetalle && !x.descripcion.toLowerCase().includes(busDetalle.toLowerCase())) return false;
-    return true;
-  });
-
-  const toggleAprobado = (codigo: string) => {
-    setDetalle(prev => prev.map(x => x.codigo === codigo ? { ...x, aprobado: !x.aprobado } : x));
-  };
-
-  const toggleTodos = () => {
-    const nuevo = !selTodos;
-    setSelTodos(nuevo);
-    setDetalle(prev => prev.map(x => {
-      const visible = detalleVisible.find(v => v.codigo === x.codigo);
-      return visible ? { ...x, aprobado: nuevo } : x;
-    }));
-  };
-
-  const aprobados = detalle.filter(x => x.aprobado);
-
-  const aplicar = async () => {
-    if (!aprobados.length) return;
-    setError(''); setCargando(true);
-    try {
-      const r = await fetch(`${API}/api/superadmin/importador/aplicar`, {
-        method: 'POST',
-        headers: { 'x-superadmin-token': token, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          cliente_id: clienteId, proveedor_id: proveedorId,
-          productos_aprobados: aprobados,
-        }),
+        body: JSON.stringify({ cliente_id: clienteId, proveedor_nombre: proveedor.trim(), archivo_base64: base64, mapeo }),
       });
       const d = await r.json();
-      if (!r.ok) throw new Error(d.mensaje || 'Error al aplicar');
-      setExito({
-        aplicados: d.aplicados,
-        nuevos: aprobados.filter(x => x.tipo === 'nuevo').length,
-      });
+      if (!r.ok) throw new Error(d.mensaje || 'Error al importar');
+      setResultado({ importados: d.importados || 0, errores: d.errores || 0, nuevos: d.nuevos || 0, actualizados: d.actualizados || 0 });
     } catch (e: any) {
-      setError(e.message);
+      setError(e.message); setPaso(2);
     } finally {
       setCargando(false);
     }
   };
 
-  // ── Render ───────────────────────────────────────────────────────────────
+  const reiniciar = () => {
+    setPaso(1); setArchivo(null); setProveedor(''); setColumnas([]);
+    setMuestra([]); setTotalFilas(0); setMapeo({}); setResultado(null);
+    setError(''); setMapeoGuardado(false);
+  };
 
-  const titulos = ['Subir lista de precios', 'Configurar columnas', 'Informe de cambios'];
-
-  const CAMPOS_MAPEO: { key: keyof MapeoState; label: string; obligatorio?: boolean }[] = [
-    { key: 'codigo',          label: 'Código',              obligatorio: true },
-    { key: 'descripcion',     label: 'Descripción',         obligatorio: true },
-    { key: 'precio_costo',    label: 'Precio costo' },
-    { key: 'precio_venta_1',  label: 'Precio venta 1' },
-    { key: 'precio_venta_2',  label: 'Precio venta 2' },
-    { key: 'precio_venta_final', label: 'Precio venta final' },
-    { key: 'marca',           label: 'Marca' },
-    { key: 'rubro',           label: 'Rubro' },
-    { key: 'unidad_medida',   label: 'Unidad de medida' },
-    { key: 'stock',           label: 'Stock' },
-    { key: 'ean',             label: 'Código de barras (EAN)' },
-    { key: 'descuento_1',     label: 'Descuento 1' },
-    { key: 'descuento_2',     label: 'Descuento 2' },
-    { key: 'descuento_3',     label: 'Descuento 3' },
-    { key: 'descuento_4',     label: 'Descuento 4' },
-    { key: 'iva',             label: 'IVA' },
-  ];
+  const previaMuestra    = muestra.slice(0, 3);
+  const camposConMapeo   = CAMPOS_LIBRE.filter(c => mapeo[c.campo]);
+  const titulos          = ['Subir archivo', 'Mapear columnas', resultado ? 'Importación completada' : 'Importando...'];
 
   return (
     <div style={{
@@ -352,80 +288,43 @@ function ModalImportador({ onCerrar, onExito }: { onCerrar: () => void; onExito:
       onClick={e => { if (e.target === e.currentTarget) onCerrar(); }}
     >
       <div style={{
-        backgroundColor: '#fff', borderRadius: '16px', width: '100%', maxWidth: 700,
+        backgroundColor: '#fff', borderRadius: '16px', width: '100%', maxWidth: 720,
         maxHeight: '90vh', display: 'flex', flexDirection: 'column',
         boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
       }}>
-
-        {/* ── Header modal ────────────────────────────────────────────── */}
-        <div style={{
-          backgroundColor: NAVY, borderRadius: '16px 16px 0 0',
-          padding: '18px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        }}>
+        {/* Header */}
+        <div style={{ backgroundColor: NAVY, borderRadius: '16px 16px 0 0', padding: '18px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
             <div style={{ fontSize: '11px', color: SEP, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '2px' }}>
-              {exito ? 'Importación completada' : `Paso ${paso} de 3`}
+              {paso < 3 ? `Paso ${paso} de 3` : resultado ? 'Importación completada' : 'Paso 3 de 3'}
             </div>
-            <div style={{ fontSize: '16px', fontWeight: 700, color: '#fff' }}>
-              {exito ? '✅ ¡Importación completada!' : titulos[paso - 1]}
-            </div>
+            <div style={{ fontSize: '16px', fontWeight: 700, color: '#fff' }}>{titulos[paso - 1]}</div>
           </div>
-          <button onClick={onCerrar} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: '8px', color: '#fff', fontSize: '18px', width: 36, height: 36, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700 }}>
-            ✕
-          </button>
+          <button onClick={onCerrar} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: '8px', color: '#fff', fontSize: '18px', width: 36, height: 36, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700 }}>✕</button>
         </div>
 
-        {/* ── Barra progreso ──────────────────────────────────────────── */}
-        {!exito && <BarraProgreso paso={paso} />}
+        {/* Barra progreso */}
+        {!resultado && <BarraProgreso paso={paso} />}
 
-        {/* ── Cuerpo ──────────────────────────────────────────────────── */}
+        {/* Cuerpo */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px' }}>
-
-          {/* Error global */}
           {error && (
             <div style={{ backgroundColor: '#FFF5F5', border: `1px solid ${RED}`, borderRadius: '8px', padding: '10px 14px', color: RED, fontSize: '13px', marginBottom: '16px', fontWeight: 500 }}>
               ⚠️ {error}
             </div>
           )}
 
-          {/* ══ ÉXITO ════════════════════════════════════════════════ */}
-          {exito && (
-            <div style={{ textAlign: 'center', padding: '32px 0' }}>
-              <div style={{ fontSize: '64px', marginBottom: '16px' }}>✅</div>
-              <h3 style={{ fontSize: '22px', fontWeight: 700, color: NAVY, margin: '0 0 12px' }}>
-                ¡Importación completada!
-              </h3>
-              <p style={{ color: GRAY, fontSize: '14px', margin: '0 0 6px' }}>
-                <strong style={{ color: GREEN }}>{exito.aplicados}</strong> productos actualizados
-              </p>
-              <p style={{ color: GRAY, fontSize: '14px', margin: '0 0 32px' }}>
-                <strong style={{ color: BLUE }}>{exito.nuevos}</strong> productos nuevos agregados
-              </p>
-              <button style={btnStyle(GREEN)} onClick={() => { onExito(); onCerrar(); }}>
-                Ver productos
-              </button>
-            </div>
-          )}
-
-          {/* ══ PASO 1 ═══════════════════════════════════════════════ */}
-          {!exito && paso === 1 && (
+          {/* ══ PASO 1 ══ */}
+          {paso === 1 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
-              {/* Drop zone */}
               <div
                 onDragOver={e => { e.preventDefault(); setDrag(true); }}
                 onDragLeave={() => setDrag(false)}
                 onDrop={onDrop}
                 onClick={() => inputRef.current?.click()}
-                style={{
-                  border: `2px dashed ${drag ? BLUE : archivo ? GREEN : '#CBD5E0'}`,
-                  borderRadius: '12px', padding: '36px 24px', textAlign: 'center',
-                  cursor: 'pointer', transition: 'all 0.2s',
-                  backgroundColor: drag ? '#EBF8FF' : archivo ? '#F0FFF4' : '#FAFAFA',
-                }}
+                style={{ border: `2px dashed ${drag ? BLUE : archivo ? GREEN : '#CBD5E0'}`, borderRadius: '12px', padding: '36px 24px', textAlign: 'center', cursor: 'pointer', transition: 'all 0.2s', backgroundColor: drag ? '#EBF8FF' : archivo ? '#F0FFF4' : '#FAFAFA' }}
               >
-                <div style={{ fontSize: '48px', marginBottom: '12px' }}>
-                  {archivo ? '✅' : '📊'}
-                </div>
+                <div style={{ fontSize: '48px', marginBottom: '12px' }}>{archivo ? '✅' : '📊'}</div>
                 {archivo ? (
                   <>
                     <div style={{ fontSize: '15px', fontWeight: 700, color: GREEN, marginBottom: '4px' }}>{archivo.name}</div>
@@ -439,47 +338,34 @@ function ModalImportador({ onCerrar, onExito }: { onCerrar: () => void; onExito:
                   </>
                 )}
               </div>
-              <input
-                ref={inputRef}
-                type="file"
-                accept=".xls,.xlsx"
-                style={{ display: 'none' }}
-                onChange={e => { const f = e.target.files?.[0]; if (f) aceptarArchivo(f); }}
-              />
-
-              {/* Campo proveedor */}
+              <input ref={inputRef} type="file" accept=".xls,.xlsx" style={{ display: 'none' }}
+                onChange={e => { const f = e.target.files?.[0]; if (f) aceptarArchivo(f); }} />
               <div>
                 <label style={labelSt}>Nombre del proveedor <span style={{ color: RED }}>*</span></label>
-                <input
-                  type="text"
-                  value={proveedor}
-                  onChange={e => setProveedor(e.target.value)}
-                  placeholder="Ej: BERGER, LALO GAS, LEKONS"
-                  style={inputStyle}
-                />
+                <input type="text" value={proveedor} onChange={e => setProveedor(e.target.value)}
+                  placeholder="Ej: BERGER, LALO GAS, LEKONS" style={inputStyle} />
               </div>
             </div>
           )}
 
-          {/* ══ PASO 2 ═══════════════════════════════════════════════ */}
-          {!exito && paso === 2 && (
+          {/* ══ PASO 2 ══ */}
+          {paso === 2 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {mapeoGuardado && (
+                <div style={{ backgroundColor: '#F0FFF4', border: `1px solid ${GREEN}`, borderRadius: '8px', padding: '10px 14px', color: GREEN, fontSize: '13px', fontWeight: 600 }}>
+                  ✅ Mapeo guardado encontrado para <strong>{proveedor}</strong> — se precargó automáticamente
+                </div>
+              )}
               <p style={{ margin: 0, fontSize: '13px', color: GRAY }}>
-                Se detectaron <strong>{columnas.length}</strong> columnas. Indicá cuál corresponde a cada campo del sistema.
+                Se detectaron <strong>{columnas.length}</strong> columnas y <strong>{totalFilas}</strong> filas.
+                Indicá qué columna corresponde a cada campo.
               </p>
-
-              {/* Grid de mapeo */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                {CAMPOS_MAPEO.map(({ key, label, obligatorio }) => (
-                  <div key={key}>
-                    <label style={labelSt}>
-                      {label} {obligatorio && <span style={{ color: RED }}>*</span>}
-                    </label>
-                    <select
-                      value={mapeo[key]}
-                      onChange={e => setMapeo(prev => ({ ...prev, [key]: e.target.value }))}
-                      style={{ ...selectStyle, width: '100%' }}
-                    >
+                {CAMPOS_LIBRE.map(({ campo, label, obligatorio }) => (
+                  <div key={campo}>
+                    <label style={labelSt}>{label} {obligatorio && <span style={{ color: RED }}>*</span>}</label>
+                    <select value={mapeo[campo] || ''} onChange={e => setMapeo(prev => ({ ...prev, [campo]: e.target.value }))}
+                      style={{ ...selectStyle, width: '100%' }}>
                       <option value="">— No usar —</option>
                       {columnas.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
@@ -487,8 +373,8 @@ function ModalImportador({ onCerrar, onExito }: { onCerrar: () => void; onExito:
                 ))}
               </div>
 
-              {/* Previa de datos */}
-              {previaMuestra.length > 0 && (
+              {/* Vista previa tiempo real */}
+              {camposConMapeo.length > 0 && previaMuestra.length > 0 && (
                 <div>
                   <div style={{ fontSize: '12px', fontWeight: 600, color: NAVY, marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
                     Vista previa con mapeo actual
@@ -497,27 +383,21 @@ function ModalImportador({ onCerrar, onExito }: { onCerrar: () => void; onExito:
                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
                       <thead>
                         <tr style={{ backgroundColor: '#EBF4FF' }}>
-                          {(['codigo','descripcion','precio_costo','marca','ean'] as (keyof MapeoState)[])
-                            .filter(k => mapeo[k])
-                            .map(k => (
-                              <th key={k} style={{ padding: '8px 10px', textAlign: 'left', color: NAVY, fontWeight: 600, borderBottom: `1px solid ${SEP}`, whiteSpace: 'nowrap' }}>
-                                {CAMPOS_MAPEO.find(f => f.key === k)?.label}
-                              </th>
-                            ))
-                          }
+                          {camposConMapeo.map(c => (
+                            <th key={c.campo} style={{ padding: '8px 10px', textAlign: 'left', color: NAVY, fontWeight: 600, borderBottom: `1px solid ${SEP}`, whiteSpace: 'nowrap' }}>
+                              {c.label}
+                            </th>
+                          ))}
                         </tr>
                       </thead>
                       <tbody>
                         {previaMuestra.map((fila, i) => (
                           <tr key={i} style={{ backgroundColor: i % 2 === 0 ? '#fff' : '#F7FAFC' }}>
-                            {(['codigo','descripcion','precio_costo','marca','ean'] as (keyof MapeoState)[])
-                              .filter(k => mapeo[k])
-                              .map(k => (
-                                <td key={k} style={{ padding: '7px 10px', color: TEXT, borderBottom: '1px solid #EDF2F7' }}>
-                                  {mapeo[k] ? String(fila[mapeo[k]] ?? '—') : '—'}
-                                </td>
-                              ))
-                            }
+                            {camposConMapeo.map(c => (
+                              <td key={c.campo} style={{ padding: '7px 10px', color: TEXT, borderBottom: '1px solid #EDF2F7' }}>
+                                {String(fila[mapeo[c.campo]] ?? '—')}
+                              </td>
+                            ))}
                           </tr>
                         ))}
                       </tbody>
@@ -526,155 +406,79 @@ function ModalImportador({ onCerrar, onExito }: { onCerrar: () => void; onExito:
                 </div>
               )}
 
-              <div style={{ backgroundColor: '#EBF4FF', borderRadius: '8px', padding: '10px 14px', fontSize: '12px', color: BLUE }}>
-                💾 Este mapeo se guardará automáticamente para <strong>{proveedor}</strong>. La próxima vez se cargará solo.
-              </div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: TEXT, cursor: 'pointer' }}>
+                <input type="checkbox" checked={guardarMapeo} onChange={e => setGuardarMapeo(e.target.checked)} style={{ width: 16, height: 16, cursor: 'pointer' }} />
+                Guardar este mapeo para la próxima vez
+              </label>
             </div>
           )}
 
-          {/* ══ PASO 3 ═══════════════════════════════════════════════ */}
-          {!exito && paso === 3 && resumen && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              {/* Cards resumen */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
-                {[
-                  { icon: '🟢', label: 'Nuevos',      val: resumen.nuevos,    color: GREEN  },
-                  { icon: '🔴', label: 'Subieron',    val: resumen.subieron,  color: RED    },
-                  { icon: '🔵', label: 'Bajaron',     val: resumen.bajaron,   color: BLUE   },
-                  { icon: '⚪', label: 'Sin cambio',  val: resumen.sin_cambio,color: GRAY   },
-                  { icon: '🟡', label: 'Quitados',    val: resumen.quitados,  color: YELLOW },
-                  { icon: '📊', label: 'Var. promedio', val: `${resumen.variacion_promedio}%`, color: NAVY },
-                ].map(({ icon, label, val, color }) => (
-                  <div key={label} style={{ backgroundColor: '#F7FAFC', borderRadius: '10px', padding: '12px', textAlign: 'center', borderLeft: `3px solid ${color}` }}>
-                    <div style={{ fontSize: '18px', marginBottom: '4px' }}>{icon}</div>
-                    <div style={{ fontSize: '20px', fontWeight: 700, color }}>{val}</div>
-                    <div style={{ fontSize: '11px', color: GRAY, fontWeight: 500 }}>{label}</div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Controles tabla */}
-              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', color: TEXT, cursor: 'pointer', fontWeight: 600 }}>
-                  <input type="checkbox" checked={selTodos} onChange={toggleTodos} style={{ width: 15, height: 15, cursor: 'pointer' }} />
-                  Sel. todos
-                </label>
-                <select value={filtroTipo} onChange={e => setFiltroTipo(e.target.value)} style={{ ...selectStyle, fontSize: '12px', padding: '6px 10px' }}>
-                  <option value="">Todos los tipos</option>
-                  <option value="nuevo">Solo nuevos</option>
-                  <option value="subio">Solo subieron</option>
-                  <option value="bajo">Solo bajaron</option>
-                  <option value="quitado">Solo quitados</option>
-                </select>
-                <input
-                  type="text" value={busDetalle}
-                  onChange={e => setBusDetalle(e.target.value)}
-                  placeholder="Buscar descripción..."
-                  style={{ ...selectStyle, fontSize: '12px', padding: '6px 10px', flex: 1, minWidth: 140 }}
-                />
-                <span style={{ fontSize: '12px', color: GRAY, whiteSpace: 'nowrap' }}>
-                  {aprobados.length} seleccionados
-                </span>
-              </div>
-
-              {/* Tabla detalle */}
-              <div style={{ overflowX: 'auto', borderRadius: '10px', border: '1px solid #E2E8F0', maxHeight: 300, overflowY: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', minWidth: 560 }}>
-                  <thead style={{ position: 'sticky', top: 0 }}>
-                    <tr style={{ backgroundColor: '#EBF4FF' }}>
-                      <th style={{ padding: '9px 10px', width: 32 }}></th>
-                      <th style={{ padding: '9px 10px', textAlign: 'left', color: NAVY, fontWeight: 600, borderBottom: `1px solid ${SEP}` }}>Código / Descripción</th>
-                      <th style={{ padding: '9px 10px', textAlign: 'right', color: NAVY, fontWeight: 600, borderBottom: `1px solid ${SEP}`, whiteSpace: 'nowrap' }}>Precio actual</th>
-                      <th style={{ padding: '9px 10px', textAlign: 'right', color: NAVY, fontWeight: 600, borderBottom: `1px solid ${SEP}`, whiteSpace: 'nowrap' }}>Precio nuevo</th>
-                      <th style={{ padding: '9px 10px', textAlign: 'center', color: NAVY, fontWeight: 600, borderBottom: `1px solid ${SEP}` }}>Var %</th>
-                      <th style={{ padding: '9px 10px', textAlign: 'center', color: NAVY, fontWeight: 600, borderBottom: `1px solid ${SEP}` }}>Tipo</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {detalleVisible.length === 0 ? (
-                      <tr><td colSpan={6} style={{ padding: '24px', textAlign: 'center', color: GRAY }}>Sin resultados</td></tr>
-                    ) : (
-                      detalleVisible.map((x, i) => {
-                        const varPct = x.variacion_porcentaje;
-                        const varColor = varPct === null ? GRAY : varPct > 0 ? RED : GREEN;
-                        return (
-                          <tr key={x.codigo} style={{ backgroundColor: i % 2 === 0 ? '#fff' : '#F7FAFC' }}>
-                            <td style={{ padding: '8px 10px', textAlign: 'center' }}>
-                              <input
-                                type="checkbox"
-                                checked={!!x.aprobado}
-                                onChange={() => toggleAprobado(x.codigo)}
-                                style={{ width: 14, height: 14, cursor: 'pointer' }}
-                              />
-                            </td>
-                            <td style={{ padding: '8px 10px' }}>
-                              <div style={{ fontFamily: 'monospace', fontSize: '11px', color: GRAY }}>{x.codigo}</div>
-                              <div style={{ color: TEXT, fontWeight: 500, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{x.descripcion}</div>
-                            </td>
-                            <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: 'monospace', color: GRAY }}>
-                              {x.precio_actual != null ? `$${Number(x.precio_actual).toLocaleString('es-AR')}` : '—'}
-                            </td>
-                            <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 600, color: TEXT }}>
-                              {x.precio_nuevo != null ? `$${Number(x.precio_nuevo).toLocaleString('es-AR')}` : '—'}
-                            </td>
-                            <td style={{ padding: '8px 10px', textAlign: 'center', fontWeight: 700, color: varColor }}>
-                              {varPct != null ? `${varPct > 0 ? '+' : ''}${varPct}%` : '—'}
-                            </td>
-                            <td style={{ padding: '8px 10px', textAlign: 'center' }}>
-                              <BadgeTipo tipo={x.tipo} />
-                            </td>
-                          </tr>
-                        );
-                      })
+          {/* ══ PASO 3 ══ */}
+          {paso === 3 && (
+            <div style={{ textAlign: 'center', padding: '32px 0' }}>
+              {!resultado ? (
+                <>
+                  <div style={{ fontSize: '48px', marginBottom: '16px' }}>⏳</div>
+                  <p style={{ color: GRAY, fontSize: '14px' }}>Importando {totalFilas} productos en lotes...</p>
+                </>
+              ) : (
+                <>
+                  <div style={{ fontSize: '64px', marginBottom: '16px' }}>✅</div>
+                  <h3 style={{ fontSize: '22px', fontWeight: 700, color: NAVY, margin: '0 0 20px' }}>Importación completada</h3>
+                  <div style={{ display: 'inline-grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '28px', textAlign: 'left' }}>
+                    <div style={{ backgroundColor: '#F0FFF4', borderRadius: '10px', padding: '14px 18px', borderLeft: `3px solid ${GREEN}` }}>
+                      <div style={{ fontSize: '24px', fontWeight: 700, color: GREEN }}>{resultado.importados}</div>
+                      <div style={{ fontSize: '12px', color: GRAY }}>Total procesados</div>
+                    </div>
+                    <div style={{ backgroundColor: '#EBF8FF', borderRadius: '10px', padding: '14px 18px', borderLeft: `3px solid ${BLUE}` }}>
+                      <div style={{ fontSize: '24px', fontWeight: 700, color: BLUE }}>{resultado.nuevos}</div>
+                      <div style={{ fontSize: '12px', color: GRAY }}>Productos nuevos</div>
+                    </div>
+                    <div style={{ backgroundColor: '#FFFAF0', borderRadius: '10px', padding: '14px 18px', borderLeft: `3px solid ${ORANGE}` }}>
+                      <div style={{ fontSize: '24px', fontWeight: 700, color: ORANGE }}>{resultado.actualizados}</div>
+                      <div style={{ fontSize: '12px', color: GRAY }}>Actualizados</div>
+                    </div>
+                    {resultado.errores > 0 && (
+                      <div style={{ backgroundColor: '#FFF5F5', borderRadius: '10px', padding: '14px 18px', borderLeft: `3px solid ${RED}` }}>
+                        <div style={{ fontSize: '24px', fontWeight: 700, color: RED }}>{resultado.errores}</div>
+                        <div style={{ fontSize: '12px', color: GRAY }}>Filas con error</div>
+                      </div>
                     )}
-                  </tbody>
-                </table>
-              </div>
+                    <div style={{ backgroundColor: '#F7FAFC', borderRadius: '10px', padding: '14px 18px', borderLeft: `3px solid ${GRAY}` }}>
+                      <div style={{ fontSize: '15px', fontWeight: 700, color: TEXT }}>{proveedor}</div>
+                      <div style={{ fontSize: '12px', color: GRAY }}>Proveedor</div>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                    <button style={btnStyle(GREEN)} onClick={() => { onExito(); onCerrar(); }}>Ver productos</button>
+                    <button style={btnStyle(BLUE)} onClick={reiniciar}>Importar otro</button>
+                  </div>
+                </>
+              )}
             </div>
           )}
         </div>
 
-        {/* ── Footer botones ───────────────────────────────────────────── */}
-        {!exito && (
-          <div style={{
-            borderTop: '1px solid #E2E8F0', padding: '14px 24px',
-            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-            borderRadius: '0 0 16px 16px', backgroundColor: '#FAFAFA',
-          }}>
+        {/* Footer */}
+        {paso < 3 && (
+          <div style={{ borderTop: '1px solid #E2E8F0', padding: '14px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderRadius: '0 0 16px 16px', backgroundColor: '#FAFAFA' }}>
             <div>
               {paso > 1 && (
-                <button
-                  onClick={() => { setError(''); setPaso(p => p - 1); }}
-                  disabled={cargando}
-                  style={btnStyle('#EDF2F7', GRAY, cargando)}
-                >
-                  ← {paso === 3 ? 'Volver a mapeo' : 'Anterior'}
+                <button onClick={() => { setError(''); setPaso(p => p - 1); }} disabled={cargando} style={btnStyle('#EDF2F7', GRAY, cargando)}>
+                  ← Anterior
                 </button>
               )}
             </div>
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-              {cargando && (
-                <span style={{ fontSize: '13px', color: GRAY, fontStyle: 'italic' }}>
-                  {paso === 1 ? 'Analizando...' : paso === 2 ? 'Comparando con tu base...' : 'Aplicando cambios...'}
-                </span>
-              )}
+              {cargando && <span style={{ fontSize: '13px', color: GRAY, fontStyle: 'italic' }}>{paso === 1 ? 'Analizando...' : 'Procesando...'}</span>}
               {paso === 1 && (
                 <button onClick={analizar} disabled={cargando} style={btnStyle(BLUE, '#fff', cargando)}>
-                  {cargando ? '⏳' : 'Analizar →'}
+                  {cargando ? '⏳' : 'Siguiente →'}
                 </button>
               )}
               {paso === 2 && (
-                <button onClick={comparar} disabled={cargando} style={btnStyle(BLUE, '#fff', cargando)}>
-                  {cargando ? '⏳' : 'Comparar →'}
-                </button>
-              )}
-              {paso === 3 && (
-                <button
-                  onClick={aplicar}
-                  disabled={cargando || aprobados.length === 0}
-                  style={btnStyle(GREEN, '#fff', cargando || aprobados.length === 0)}
-                >
-                  {cargando ? '⏳' : `✅ Aplicar seleccionados (${aprobados.length})`}
+                <button onClick={importar} disabled={cargando} style={btnStyle(GREEN, '#fff', cargando)}>
+                  {cargando ? '⏳' : `Importar ${totalFilas} productos →`}
                 </button>
               )}
             </div>
