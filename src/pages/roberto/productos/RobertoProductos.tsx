@@ -1,147 +1,153 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { API_BASE } from '../../../config/api';
 
-const API    = API_BASE;
-const NAVY   = '#1B2A4A';
-const BLUE   = '#2B6CB0';
-const GREEN  = '#38A169';
-const RED    = '#E53E3E';
-const SEP    = '#63B3ED';
-const GRAY   = '#718096';
-const TEXT   = '#2D3748';
-const BG     = '#F4F6F9';
+const API   = API_BASE;
+const NAVY  = '#1B2A4A';
+const BLUE  = '#2B6CB0';
+const GREEN = '#38A169';
+const RED   = '#E53E3E';
+const SEP   = '#63B3ED';
+const GRAY  = '#718096';
+const TEXT  = '#2D3748';
+const BG    = '#F4F6F9';
 const ORANGE = '#DD6B20';
 const YELLOW = '#D69E2E';
+const CALC_BG = '#EBF8FF';
+const CALC_BG2 = '#F0FFF4';
 
-// ── helpers ─────────────────────────────────────────────────────────────────
+// ── helpers ──────────────────────────────────────────────────────────────────
 
 function getToken() {
-  try {
-    const s = localStorage.getItem('superadmin_session');
-    return s ? JSON.parse(s).token : '';
-  } catch { return ''; }
+  try { const s = localStorage.getItem('superadmin_session'); return s ? JSON.parse(s).token : ''; } catch { return ''; }
 }
-
 function getClienteId() {
-  try {
-    const s = localStorage.getItem('roberto_portal_session');
-    return s ? JSON.parse(s).cliente?.id : null;
-  } catch { return null; }
+  try { const s = localStorage.getItem('roberto_portal_session'); return s ? JSON.parse(s).cliente?.id : null; } catch { return null; }
+}
+function getClienteNombre() {
+  try { return JSON.parse(localStorage.getItem('roberto_portal_session') || '{}').cliente?.nombre_comercial || 'Negocio'; } catch { return 'Negocio'; }
+}
+function numFmt(n: number | null | undefined, dec = 2): string {
+  if (!n && n !== 0) return '—';
+  return Number(n).toLocaleString('es-AR', { minimumFractionDigits: 0, maximumFractionDigits: dec });
+}
+function pctFmt(n: number | null | undefined): string {
+  return (!n && n !== 0) ? '—' : `${Number(n)}%`;
+}
+function fmtFecha(s: string | null | undefined): string {
+  if (!s) return '—';
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('es-AR');
+}
+function calcPcFinal(pc: number, d1: number, d2: number, d3: number) {
+  return pc * (1 - d1 / 100) * (1 - d2 / 100) * (1 - d3 / 100);
+}
+function calcPv(pcFinal: number, i1: number, i2: number, iva: number, ut: number) {
+  return pcFinal * (1 + i1 / 100) * (1 + i2 / 100) * (1 + iva / 100) * (1 + ut / 100);
 }
 
 // ── types ────────────────────────────────────────────────────────────────────
 
-interface ItemDetalle {
-  codigo: string; descripcion: string; precio_actual: number | null;
-  precio_nuevo: number | null; variacion_porcentaje: number | null;
-  tipo: 'nuevo' | 'subio' | 'bajo' | 'sin_cambio' | 'quitado';
-  marca?: string; unidad_medida?: string; ean?: string;
-  aprobado?: boolean;
+interface ProductoReal {
+  id: number;
+  codigo: string | null;
+  descripcion: string;
+  marca: string | null;
+  rubro: string | null;
+  proveedor_id: number | null;
+  unidad_medida: string | null;
+  ean: string | null;
+  imagen_url: string | null;
+  precio_costo: number;
+  dto_1: number; dto_2: number; dto_3: number;
+  imp_1: number; imp_2: number;
+  alicuota_iva: number;
+  utilidad_1: number; utilidad_2: number; utilidad_3: number;
+  precio_venta_final: number;
+  precio_venta_2: number;
+  precio_venta_3: number;
+  stock_actual: number;
+  stock_minimo: number;
+  activo: boolean;
+  creado_en: string;
+  modificado_en: string;
 }
 
-interface Resumen {
-  total_excel: number; nuevos: number; subieron: number; bajaron: number;
-  sin_cambio: number; quitados: number; variacion_promedio: number;
+interface EditState {
+  precio_costo: string;
+  dto_1: string; dto_2: string; dto_3: string;
+  imp_1: string; imp_2: string; alicuota_iva: string;
+  utilidad_1: string; utilidad_2: string; utilidad_3: string;
+  marca: string; rubro: string; unidad_medida: string;
+  ean: string; stock_minimo: string;
 }
 
-interface MapeoState {
-  codigo: string; descripcion: string; precio_costo: string; precio_venta_1: string;
-  precio_venta_2: string; precio_venta_final: string; marca: string; rubro: string;
-  unidad_medida: string; stock: string; ean: string;
-  descuento_1: string; descuento_2: string; descuento_3: string; descuento_4: string;
-  iva: string;
-}
+interface FiltrosOpts { proveedores: { id: number; nombre: string }[]; marcas: string[]; rubros: string[]; }
 
-const MAPEO_INICIAL: MapeoState = {
-  codigo: '', descripcion: '', precio_costo: '', precio_venta_1: '', precio_venta_2: '',
-  precio_venta_final: '', marca: '', rubro: '', unidad_medida: '', stock: '', ean: '',
-  descuento_1: '', descuento_2: '', descuento_3: '', descuento_4: '', iva: '',
-};
+interface HojaInfo { nombre: string; columnas: string[]; total_filas: number; muestra: Record<string, string>[]; }
 
-// ── estilos reutilizables ────────────────────────────────────────────────────
+// ── estilos ───────────────────────────────────────────────────────────────────
 
 const btnStyle = (bg: string, color = '#fff', disabled = false): React.CSSProperties => ({
   backgroundColor: disabled ? '#CBD5E0' : bg, color: disabled ? '#A0AEC0' : color,
-  border: 'none', borderRadius: '8px', padding: '9px 16px', fontSize: '13px',
+  border: 'none', borderRadius: '8px', padding: '8px 14px', fontSize: '13px',
   fontWeight: 600, cursor: disabled ? 'not-allowed' : 'pointer',
-  display: 'inline-flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap',
-  opacity: disabled ? 0.7 : 1,
+  display: 'inline-flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap',
+  opacity: disabled ? 0.7 : 1, transition: 'opacity 0.15s',
 });
-
-const selectStyle: React.CSSProperties = {
-  border: '1.5px solid #CBD5E0', borderRadius: '8px', padding: '8px 12px',
-  fontSize: '13px', color: TEXT, backgroundColor: '#fff', outline: 'none', cursor: 'pointer',
+const inputSt: React.CSSProperties = {
+  border: '1.5px solid #CBD5E0', borderRadius: '6px', padding: '5px 8px',
+  fontSize: '12px', color: TEXT, backgroundColor: '#fff', outline: 'none',
+  width: '100%', boxSizing: 'border-box',
 };
-
-const inputStyle: React.CSSProperties = {
-  ...selectStyle, boxSizing: 'border-box', width: '100%',
-};
-
+const selectSt: React.CSSProperties = { ...inputSt, cursor: 'pointer' };
 const labelSt: React.CSSProperties = {
   display: 'block', fontSize: '11px', fontWeight: 600, color: GRAY,
   textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '4px',
 };
+const thSt = (sorted = false): React.CSSProperties => ({
+  padding: '8px 10px', textAlign: 'left', fontSize: '11px', fontWeight: 700,
+  color: sorted ? BLUE : TEXT, backgroundColor: '#EBF4FF',
+  borderBottom: '2px solid #BEE3F8', whiteSpace: 'nowrap', cursor: 'pointer',
+  userSelect: 'none', position: 'sticky', top: 0, zIndex: 1,
+});
+const tdSt: React.CSSProperties = {
+  padding: '6px 8px', fontSize: '12px', color: TEXT, borderBottom: '1px solid #EDF2F7',
+  whiteSpace: 'nowrap',
+};
+const calcTd: React.CSSProperties = { ...tdSt, backgroundColor: CALC_BG, fontWeight: 600, color: BLUE };
+const calcTd2: React.CSSProperties = { ...tdSt, backgroundColor: CALC_BG2, fontWeight: 600, color: GREEN };
 
-// ── BadgeEstado ──────────────────────────────────────────────────────────────
+// ── BadgeEstado ───────────────────────────────────────────────────────────────
 
 function BadgeEstado({ activo }: { activo: boolean }) {
   return (
     <span style={{
-      display: 'inline-block', padding: '3px 10px', borderRadius: '20px',
-      fontSize: '12px', fontWeight: 600,
-      backgroundColor: activo ? '#F0FFF4' : '#FFF5F5',
-      color: activo ? GREEN : RED,
-    }}>
-      {activo ? 'Activo' : 'Inactivo'}
-    </span>
+      display: 'inline-block', padding: '2px 9px', borderRadius: '20px', fontSize: '11px', fontWeight: 600,
+      backgroundColor: activo ? '#F0FFF4' : '#FFF5F5', color: activo ? GREEN : RED,
+    }}>{activo ? 'Activo' : 'Inactivo'}</span>
   );
 }
 
-// ── BadgeTipo ────────────────────────────────────────────────────────────────
+// ── BarraProgreso ─────────────────────────────────────────────────────────────
 
-function BadgeTipo({ tipo }: { tipo: ItemDetalle['tipo'] }) {
-  const MAP: Record<string, [string, string, string]> = {
-    nuevo:     ['Nuevo',      '#F0FFF4', GREEN],
-    subio:     ['Subió ↑',   '#FFF5F5', RED],
-    bajo:      ['Bajó ↓',    '#EBF8FF', BLUE],
-    sin_cambio:['Sin cambio', '#F7FAFC', GRAY],
-    quitado:   ['Quitado',   '#FFFAF0', YELLOW],
-  };
-  const [label, bg, color] = MAP[tipo] || ['?', '#EDF2F7', GRAY];
+function BarraProgreso({ paso, labels }: { paso: number; labels: string[] }) {
   return (
-    <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: '12px', fontSize: '11px', fontWeight: 700, backgroundColor: bg, color }}>
-      {label}
-    </span>
-  );
-}
-
-// ── BarraProgreso ────────────────────────────────────────────────────────────
-
-function BarraProgreso({ paso }: { paso: number }) {
-  const pasos = ['Subir archivo', 'Mapear columnas', 'Informe'];
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 0, padding: '16px 24px 0', marginBottom: '4px' }}>
-      {pasos.map((p, i) => {
-        const num = i + 1;
-        const activo = num === paso;
-        const hecho  = num < paso;
+    <div style={{ display: 'flex', alignItems: 'center', padding: '14px 24px 0' }}>
+      {labels.map((p, i) => {
+        const num = i + 1; const activo = num === paso; const hecho = num < paso;
         return (
           <React.Fragment key={p}>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1 }}>
               <div style={{
-                width: 28, height: 28, borderRadius: '50%', display: 'flex',
-                alignItems: 'center', justifyContent: 'center', fontSize: '13px', fontWeight: 700,
+                width: 26, height: 26, borderRadius: '50%', display: 'flex', alignItems: 'center',
+                justifyContent: 'center', fontSize: '12px', fontWeight: 700, marginBottom: 3,
                 backgroundColor: hecho ? GREEN : activo ? BLUE : '#E2E8F0',
                 color: hecho || activo ? '#fff' : GRAY,
-                marginBottom: 4,
-              }}>
-                {hecho ? '✓' : num}
-              </div>
-              <span style={{ fontSize: '11px', fontWeight: activo ? 700 : 400, color: activo ? BLUE : GRAY, whiteSpace: 'nowrap' }}>{p}</span>
+              }}>{hecho ? '✓' : num}</div>
+              <span style={{ fontSize: '10px', fontWeight: activo ? 700 : 400, color: activo ? BLUE : GRAY, whiteSpace: 'nowrap' }}>{p}</span>
             </div>
-            {i < pasos.length - 1 && (
-              <div style={{ flex: 2, height: 2, backgroundColor: hecho ? GREEN : '#E2E8F0', marginBottom: 16 }} />
-            )}
+            {i < labels.length - 1 && <div style={{ flex: 2, height: 2, backgroundColor: hecho ? GREEN : '#E2E8F0', marginBottom: 14 }} />}
           </React.Fragment>
         );
       })}
@@ -150,308 +156,325 @@ function BarraProgreso({ paso }: { paso: number }) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// MODAL IMPORTADOR LIBRE
+// MODAL IMPORTADOR V2
 // ════════════════════════════════════════════════════════════════════════════
 
-const CAMPOS_LIBRE: { campo: string; label: string; obligatorio?: boolean }[] = [
-  { campo: 'codigo',        label: 'Código del producto',    obligatorio: true },
-  { campo: 'descripcion',   label: 'Descripción',            obligatorio: true },
-  { campo: 'precio_costo',  label: 'Precio costo' },
-  { campo: 'precio_venta_1',label: 'Precio venta 1' },
-  { campo: 'precio_venta_2',label: 'Precio venta 2' },
-  { campo: 'precio_venta_3',label: 'Precio venta 3' },
-  { campo: 'marca',         label: 'Marca' },
-  { campo: 'rubro',         label: 'Rubro' },
-  { campo: 'unidad_medida', label: 'Unidad de medida' },
-  { campo: 'ean',           label: 'EAN / Código de barras' },
-  { campo: 'descuento_1',   label: 'Descuento 1 %' },
-  { campo: 'descuento_2',   label: 'Descuento 2 %' },
-  { campo: 'descuento_3',   label: 'Descuento 3 %' },
-  { campo: 'iva',           label: 'IVA %' },
+const CAMPOS_MAPEO = [
+  { campo: 'codigo',       label: 'Código',          obligatorio: true },
+  { campo: 'precio_costo', label: 'Precio costo' },
+  { campo: 'precio_venta_1', label: 'Precio venta 1' },
+  { campo: 'precio_venta_2', label: 'Precio venta 2' },
+  { campo: 'precio_venta_3', label: 'Precio venta 3' },
+  { campo: 'marca',        label: 'Marca' },
+  { campo: 'rubro',        label: 'Rubro' },
+  { campo: 'unidad_medida', label: 'Unidad medida' },
+  { campo: 'ean',          label: 'EAN' },
+  { campo: 'descuento_1',  label: 'Descuento 1%' },
+  { campo: 'descuento_2',  label: 'Descuento 2%' },
+  { campo: 'descuento_3',  label: 'Descuento 3%' },
+  { campo: 'iva',          label: 'IVA%' },
+  { campo: 'stock',        label: 'Stock' },
+  { campo: 'stock_minimo', label: 'Stock mínimo' },
 ];
 
-function ModalImportador({ onCerrar, onExito }: { onCerrar: () => void; onExito: () => void }) {
-  const [paso, setPaso]               = useState(1);
-  const [drag, setDrag]               = useState(false);
-  const [archivo, setArchivo]         = useState<File | null>(null);
-  const [proveedor, setProveedor]     = useState('');
-  const [cargando, setCargando]       = useState(false);
-  const [error, setError]             = useState('');
-  const [columnas, setColumnas]       = useState<string[]>([]);
-  const [muestra, setMuestra]         = useState<Record<string, string>[]>([]);
-  const [totalFilas, setTotalFilas]   = useState(0);
-  const [mapeo, setMapeo]             = useState<Record<string, string>>({});
+function ModalImportadorV2({ onCerrar, onExito }: { onCerrar: () => void; onExito: () => void }) {
+  const [paso, setPaso]           = useState(1);
+  const [drag, setDrag]           = useState(false);
+  const [archivo, setArchivo]     = useState<File | null>(null);
+  const [proveedor, setProveedor] = useState('');
+  const [cargando, setCargando]   = useState(false);
+  const [error, setError]         = useState('');
+  const [hojas, setHojas]         = useState<HojaInfo[]>([]);
+  const [hojasOk, setHojasOk]    = useState<string[]>([]);
+  const [mapeo, setMapeo]         = useState<Record<string, string>>({});
+  const [descCols, setDescCols]   = useState<string[]>([]);
+  const [marcaDef, setMarcaDef]   = useState('');
+  const [rubroDef, setRubroDef]   = useState('');
   const [guardarMapeo, setGuardarMapeo] = useState(true);
-  const [mapeoGuardado, setMapeoGuardado] = useState(false);
-  const [resultado, setResultado]     = useState<{ importados: number; errores: number; nuevos: number; actualizados: number } | null>(null);
+  const [resultado, setResultado] = useState<{ importados: number; nuevos: number; actualizados: number; errores: number; por_hoja: {hoja:string;nuevos:number;actualizados:number;errores:number}[] } | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const token    = getToken();
+  const clienteId = getClienteId();
 
-  const inputRef   = useRef<HTMLInputElement>(null);
-  const token      = getToken();
-  const clienteId  = getClienteId();
+  const allColumnas = Array.from(new Set(
+    hojas.filter(h => hojasOk.includes(h.nombre)).flatMap(h => h.columnas)
+  ));
 
-  const aceptarArchivo = (f: File) => {
-    if (!f.name.match(/\.(xlsx|xls)$/i)) { setError('Solo se aceptan archivos .xls y .xlsx'); return; }
+  const muestraActual = hojas.find(h => hojasOk[0] === h.nombre)?.muestra || [];
+  const aceptar = (f: File) => {
+    if (!f.name.match(/\.(xlsx|xls)$/i)) { setError('Solo archivos .xls o .xlsx'); return; }
     setError(''); setArchivo(f);
   };
 
-  const onDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault(); setDrag(false);
-    const f = e.dataTransfer.files[0];
-    if (f) aceptarArchivo(f);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   const analizar = async () => {
     if (!archivo) { setError('Seleccioná un archivo'); return; }
-    if (!proveedor.trim()) { setError('Ingresá el nombre del proveedor'); return; }
+    if (!proveedor.trim()) { setError('Nombre del proveedor requerido'); return; }
     setError(''); setCargando(true);
     try {
       const fd = new FormData();
       fd.append('archivo', archivo);
-      const r = await fetch(`${API}/api/superadmin/importador/analizar-libre`, {
+      const r = await fetch(`${API}/api/superadmin/importador/analizar-v2`, {
         method: 'POST', headers: { 'x-superadmin-token': token }, body: fd,
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.mensaje || 'Error al analizar');
-      setColumnas(d.columnas || []);
-      setMuestra(d.muestra || []);
-      setTotalFilas(d.total_filas || 0);
-      let mapeoInicial: Record<string, string> = {};
-      try {
-        const rm = await fetch(
-          `${API}/api/superadmin/importador/mapeo-proveedor/${clienteId}/${encodeURIComponent(proveedor.trim())}`,
-          { headers: { 'x-superadmin-token': token } }
-        );
-        const dm = await rm.json();
-        if (dm.mapeo) { mapeoInicial = dm.mapeo; setMapeoGuardado(true); }
-      } catch {}
-      setMapeo(mapeoInicial);
+      const hojasData: HojaInfo[] = d.hojas || [];
+      setHojas(hojasData);
+      const conDatos = hojasData.filter(h => h.total_filas > 0).map(h => h.nombre);
+      setHojasOk(conDatos.length ? conDatos : hojasData.map(h => h.nombre));
       setPaso(2);
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setCargando(false);
-    }
+    } catch (e: any) { setError(e.message); }
+    finally { setCargando(false); }
   };
 
   const importar = async () => {
-    if (!mapeo['codigo']) { setError('El campo Código es obligatorio'); return; }
-    if (!mapeo['descripcion']) { setError('El campo Descripción es obligatorio'); return; }
+    if (!mapeo['codigo'] && !descCols.length) { setError('Código o Descripción son obligatorios'); return; }
+    if (!descCols.length) { setError('Indicá al menos una columna para la Descripción'); return; }
     setError(''); setCargando(true); setPaso(3);
     try {
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve((reader.result as string).split(',')[1]);
-        reader.onerror = reject;
-        reader.readAsDataURL(archivo!);
-      });
-      if (guardarMapeo) {
+      if (guardarMapeo && proveedor.trim()) {
         try {
           await fetch(`${API}/api/superadmin/importador/mapeo-proveedor/${clienteId}`, {
             method: 'POST',
             headers: { 'x-superadmin-token': token, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ proveedor: proveedor.trim(), mapeo }),
+            body: JSON.stringify({ proveedor: proveedor.trim(), mapeo: { ...mapeo, descripcion: descCols } }),
           });
         } catch {}
       }
-      const r = await fetch(`${API}/api/superadmin/importador/aplicar-libre`, {
-        method: 'POST',
-        headers: { 'x-superadmin-token': token, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cliente_id: clienteId, proveedor_nombre: proveedor.trim(), archivo_base64: base64, mapeo }),
+      const fd = new FormData();
+      fd.append('archivo', archivo!);
+      fd.append('cliente_id', String(clienteId));
+      fd.append('proveedor', proveedor.trim());
+      fd.append('configuracion', JSON.stringify({
+        hojas_seleccionadas: hojasOk,
+        mapeo: { ...mapeo, descripcion: descCols },
+        marca_defecto: marcaDef || undefined,
+        rubro_defecto: rubroDef || undefined,
+      }));
+      const r = await fetch(`${API}/api/superadmin/importador/importar-v2`, {
+        method: 'POST', headers: { 'x-superadmin-token': token }, body: fd,
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.mensaje || 'Error al importar');
-      setResultado({ importados: d.importados || 0, errores: d.errores || 0, nuevos: d.nuevos || 0, actualizados: d.actualizados || 0 });
-    } catch (e: any) {
-      setError(e.message); setPaso(2);
-    } finally {
-      setCargando(false);
-    }
+      setResultado(d);
+    } catch (e: any) { setError(e.message); setPaso(2); }
+    finally { setCargando(false); }
   };
 
-  const reiniciar = () => {
-    setPaso(1); setArchivo(null); setProveedor(''); setColumnas([]);
-    setMuestra([]); setTotalFilas(0); setMapeo({}); setResultado(null);
-    setError(''); setMapeoGuardado(false);
+  const toggleHoja = (nombre: string) => {
+    setHojasOk(prev => prev.includes(nombre) ? prev.filter(h => h !== nombre) : [...prev, nombre]);
   };
 
-  const previaMuestra    = muestra.slice(0, 3);
-  const camposConMapeo   = CAMPOS_LIBRE.filter(c => mapeo[c.campo]);
-  const titulos          = ['Subir archivo', 'Mapear columnas', resultado ? 'Importación completada' : 'Importando...'];
+  const addDescCol = (col: string) => {
+    if (col && !descCols.includes(col)) setDescCols(prev => [...prev, col]);
+  };
+  const removeDescCol = (i: number) => setDescCols(prev => prev.filter((_, idx) => idx !== i));
+  const moveDescCol = (i: number, dir: -1 | 1) => {
+    const j = i + dir;
+    if (j < 0 || j >= descCols.length) return;
+    const next = [...descCols]; [next[i], next[j]] = [next[j], next[i]]; setDescCols(next);
+  };
+
+  const preview3 = muestraActual.slice(0, 3).map(fila => {
+    const desc = descCols.map(c => fila[c] || '').filter(Boolean).join(' ');
+    const fields: Record<string, string> = { 'Descripción': desc };
+    CAMPOS_MAPEO.forEach(cm => { if (mapeo[cm.campo] && fila[mapeo[cm.campo]]) fields[cm.label] = String(fila[mapeo[cm.campo]]); });
+    return fields;
+  });
 
   return (
-    <div style={{
-      position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.55)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      zIndex: 1000, padding: '16px',
-    }}
-      onClick={e => { if (e.target === e.currentTarget) onCerrar(); }}
-    >
-      <div style={{
-        backgroundColor: '#fff', borderRadius: '16px', width: '100%', maxWidth: 720,
-        maxHeight: '90vh', display: 'flex', flexDirection: 'column',
-        boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
-      }}>
+    <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}
+      onClick={e => { if (e.target === e.currentTarget) onCerrar(); }}>
+      <div style={{ backgroundColor: '#fff', borderRadius: 16, width: '100%', maxWidth: 780, maxHeight: '92vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
         {/* Header */}
-        <div style={{ backgroundColor: NAVY, borderRadius: '16px 16px 0 0', padding: '18px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ backgroundColor: NAVY, borderRadius: '16px 16px 0 0', padding: '16px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
-            <div style={{ fontSize: '11px', color: SEP, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '2px' }}>
-              {paso < 3 ? `Paso ${paso} de 3` : resultado ? 'Importación completada' : 'Paso 3 de 3'}
+            <div style={{ fontSize: 11, color: SEP, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              {paso < 3 ? `Paso ${paso} de 3` : resultado ? 'Completado' : 'Importando...'}
             </div>
-            <div style={{ fontSize: '16px', fontWeight: 700, color: '#fff' }}>{titulos[paso - 1]}</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: '#fff' }}>
+              {paso === 1 ? 'Subir archivo' : paso === 2 ? 'Mapear columnas' : resultado ? 'Importación completada' : 'Importando...'}
+            </div>
           </div>
-          <button onClick={onCerrar} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: '8px', color: '#fff', fontSize: '18px', width: 36, height: 36, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700 }}>✕</button>
+          <button onClick={onCerrar} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: 8, color: '#fff', fontSize: 18, width: 34, height: 34, cursor: 'pointer', fontWeight: 700 }}>✕</button>
         </div>
-
-        {/* Barra progreso */}
-        {!resultado && <BarraProgreso paso={paso} />}
+        {!resultado && <BarraProgreso paso={paso} labels={['Subir archivo', 'Mapear columnas', 'Resultado']} />}
 
         {/* Cuerpo */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px' }}>
-          {error && (
-            <div style={{ backgroundColor: '#FFF5F5', border: `1px solid ${RED}`, borderRadius: '8px', padding: '10px 14px', color: RED, fontSize: '13px', marginBottom: '16px', fontWeight: 500 }}>
-              ⚠️ {error}
-            </div>
-          )}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '16px 24px' }}>
+          {error && <div style={{ backgroundColor: '#FFF5F5', border: `1px solid ${RED}`, borderRadius: 8, padding: '10px 14px', color: RED, fontSize: 13, marginBottom: 14, fontWeight: 500 }}>⚠️ {error}</div>}
 
           {/* ══ PASO 1 ══ */}
           {paso === 1 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
-              <div
-                onDragOver={e => { e.preventDefault(); setDrag(true); }}
-                onDragLeave={() => setDrag(false)}
-                onDrop={onDrop}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div onDragOver={e => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)}
+                onDrop={e => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files[0]; if (f) aceptar(f); }}
                 onClick={() => inputRef.current?.click()}
-                style={{ border: `2px dashed ${drag ? BLUE : archivo ? GREEN : '#CBD5E0'}`, borderRadius: '12px', padding: '36px 24px', textAlign: 'center', cursor: 'pointer', transition: 'all 0.2s', backgroundColor: drag ? '#EBF8FF' : archivo ? '#F0FFF4' : '#FAFAFA' }}
-              >
-                <div style={{ fontSize: '48px', marginBottom: '12px' }}>{archivo ? '✅' : '📊'}</div>
-                {archivo ? (
-                  <>
-                    <div style={{ fontSize: '15px', fontWeight: 700, color: GREEN, marginBottom: '4px' }}>{archivo.name}</div>
-                    <div style={{ fontSize: '12px', color: GRAY }}>Clic para cambiar archivo</div>
-                  </>
-                ) : (
-                  <>
-                    <div style={{ fontSize: '15px', fontWeight: 600, color: TEXT, marginBottom: '6px' }}>Arrastrá tu Excel aquí</div>
-                    <div style={{ fontSize: '13px', color: GRAY }}>o hacé clic para seleccionar</div>
-                    <div style={{ fontSize: '11px', color: GRAY, marginTop: '8px' }}>Acepta .xls y .xlsx</div>
-                  </>
-                )}
+                style={{ border: `2px dashed ${drag ? BLUE : archivo ? GREEN : '#CBD5E0'}`, borderRadius: 12, padding: '32px 24px', textAlign: 'center', cursor: 'pointer', backgroundColor: drag ? '#EBF8FF' : archivo ? '#F0FFF4' : '#FAFAFA' }}>
+                <div style={{ fontSize: 42, marginBottom: 10 }}>{archivo ? '✅' : '📊'}</div>
+                {archivo
+                  ? <><div style={{ fontSize: 15, fontWeight: 700, color: GREEN }}>{archivo.name}</div><div style={{ fontSize: 12, color: GRAY }}>Clic para cambiar</div></>
+                  : <><div style={{ fontSize: 14, fontWeight: 600, color: TEXT }}>Arrastrá tu Excel aquí</div><div style={{ fontSize: 12, color: GRAY, marginTop: 4 }}>o hacé clic — acepta .xls y .xlsx</div></>}
               </div>
-              <input ref={inputRef} type="file" accept=".xls,.xlsx" style={{ display: 'none' }}
-                onChange={e => { const f = e.target.files?.[0]; if (f) aceptarArchivo(f); }} />
+              <input ref={inputRef} type="file" accept=".xls,.xlsx" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) aceptar(f); }} />
               <div>
                 <label style={labelSt}>Nombre del proveedor <span style={{ color: RED }}>*</span></label>
-                <input type="text" value={proveedor} onChange={e => setProveedor(e.target.value)}
-                  placeholder="Ej: BERGER, LALO GAS, LEKONS" style={inputStyle} />
+                <input style={{ ...inputSt, fontSize: 14, padding: '8px 12px' }} value={proveedor} onChange={e => setProveedor(e.target.value)} placeholder="Ej: BERGER, LALO GAS, LEKONS" />
               </div>
+              {hojas.length === 0 && archivo && proveedor.trim() && (
+                <div style={{ fontSize: 13, color: GRAY }}>Listo para analizar. El sistema detectará las hojas y columnas.</div>
+              )}
             </div>
           )}
 
           {/* ══ PASO 2 ══ */}
           {paso === 2 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              {mapeoGuardado && (
-                <div style={{ backgroundColor: '#F0FFF4', border: `1px solid ${GREEN}`, borderRadius: '8px', padding: '10px 14px', color: GREEN, fontSize: '13px', fontWeight: 600 }}>
-                  ✅ Mapeo guardado encontrado para <strong>{proveedor}</strong> — se precargó automáticamente
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {/* Hojas detectadas */}
+              <div style={{ backgroundColor: '#F7FAFC', borderRadius: 10, padding: '12px 16px' }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: NAVY, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                  Hojas detectadas — seleccioná las que importar:
                 </div>
-              )}
-              <p style={{ margin: 0, fontSize: '13px', color: GRAY }}>
-                Se detectaron <strong>{columnas.length}</strong> columnas y <strong>{totalFilas}</strong> filas.
-                Indicá qué columna corresponde a cada campo.
-              </p>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                {CAMPOS_LIBRE.map(({ campo, label, obligatorio }) => (
-                  <div key={campo}>
-                    <label style={labelSt}>{label} {obligatorio && <span style={{ color: RED }}>*</span>}</label>
-                    <select value={mapeo[campo] || ''} onChange={e => setMapeo(prev => ({ ...prev, [campo]: e.target.value }))}
-                      style={{ ...selectStyle, width: '100%' }}>
-                      <option value="">— No usar —</option>
-                      {columnas.map(c => <option key={c} value={c}>{c}</option>)}
-                    </select>
-                  </div>
-                ))}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {hojas.map(h => (
+                    <label key={h.nombre} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', padding: '5px 10px', borderRadius: 8, border: `1.5px solid ${hojasOk.includes(h.nombre) ? BLUE : '#CBD5E0'}`, backgroundColor: hojasOk.includes(h.nombre) ? '#EBF8FF' : '#fff', fontSize: 13 }}>
+                      <input type="checkbox" checked={hojasOk.includes(h.nombre)} onChange={() => toggleHoja(h.nombre)} style={{ accentColor: BLUE }} />
+                      <strong>{h.nombre}</strong>
+                      <span style={{ color: GRAY, fontSize: 11 }}>({h.total_filas} filas, {h.columnas.length} cols)</span>
+                    </label>
+                  ))}
+                </div>
               </div>
 
-              {/* Vista previa tiempo real */}
-              {camposConMapeo.length > 0 && previaMuestra.length > 0 && (
-                <div>
-                  <div style={{ fontSize: '12px', fontWeight: 600, color: NAVY, marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
-                    Vista previa con mapeo actual
-                  </div>
-                  <div style={{ overflowX: 'auto', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
-                      <thead>
-                        <tr style={{ backgroundColor: '#EBF4FF' }}>
-                          {camposConMapeo.map(c => (
-                            <th key={c.campo} style={{ padding: '8px 10px', textAlign: 'left', color: NAVY, fontWeight: 600, borderBottom: `1px solid ${SEP}`, whiteSpace: 'nowrap' }}>
-                              {c.label}
-                            </th>
-                          ))}
+              {/* Descripción multi-columna */}
+              <div style={{ backgroundColor: '#FFFBF0', borderRadius: 10, padding: '12px 16px', border: `1px solid ${YELLOW}` }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: NAVY, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                  Descripción del producto <span style={{ color: RED }}>*</span> — columnas que la forman (en orden):
+                </div>
+                <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+                  {descCols.map((c, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, backgroundColor: '#fff', border: `1px solid ${YELLOW}`, borderRadius: 8, padding: '3px 8px', fontSize: 13 }}>
+                      <span style={{ fontWeight: 600 }}>{i + 1}.</span> {c}
+                      <button onClick={() => moveDescCol(i, -1)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: GRAY, fontSize: 14, padding: '0 2px' }} title="Subir">↑</button>
+                      <button onClick={() => moveDescCol(i, 1)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: GRAY, fontSize: 14, padding: '0 2px' }} title="Bajar">↓</button>
+                      <button onClick={() => removeDescCol(i)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: RED, fontWeight: 700, fontSize: 14, padding: '0 2px' }}>✕</button>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <select style={{ ...selectSt, width: 'auto', minWidth: 180 }} onChange={e => { if (e.target.value) addDescCol(e.target.value); e.target.value = ''; }} defaultValue="">
+                    <option value="">＋ Agregar columna...</option>
+                    {allColumnas.filter(c => !descCols.includes(c)).map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                  {descCols.length > 0 && (
+                    <div style={{ fontSize: 12, color: GRAY }}>
+                      Preview: <strong style={{ color: NAVY }}>{(muestraActual[0] ? descCols.map(c => muestraActual[0][c] || '').filter(Boolean).join(' ') : '—')}</strong>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Tabla de mapeo */}
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: NAVY, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Mapeo de columnas:</div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ backgroundColor: '#EBF4FF' }}>
+                        <th style={{ padding: '7px 10px', textAlign: 'left', color: NAVY, fontWeight: 700, borderBottom: `2px solid ${SEP}`, width: '40%' }}>Campo sistema</th>
+                        <th style={{ padding: '7px 10px', textAlign: 'left', color: NAVY, fontWeight: 700, borderBottom: `2px solid ${SEP}` }}>Columna del Excel</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {CAMPOS_MAPEO.map(({ campo, label, obligatorio }) => (
+                        <tr key={campo} style={{ backgroundColor: obligatorio ? '#FFFFF0' : '#fff' }}>
+                          <td style={{ padding: '6px 10px', borderBottom: '1px solid #EDF2F7', fontWeight: obligatorio ? 600 : 400 }}>
+                            {label} {obligatorio && <span style={{ color: RED }}>*</span>}
+                          </td>
+                          <td style={{ padding: '4px 10px', borderBottom: '1px solid #EDF2F7' }}>
+                            <select style={{ ...selectSt, width: '100%' }} value={mapeo[campo] || ''} onChange={e => setMapeo(prev => ({ ...prev, [campo]: e.target.value }))}>
+                              <option value="">— No usar —</option>
+                              {allColumnas.map(c => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                          </td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {previaMuestra.map((fila, i) => (
-                          <tr key={i} style={{ backgroundColor: i % 2 === 0 ? '#fff' : '#F7FAFC' }}>
-                            {camposConMapeo.map(c => (
-                              <td key={c.campo} style={{ padding: '7px 10px', color: TEXT, borderBottom: '1px solid #EDF2F7' }}>
-                                {String(fila[mapeo[c.campo]] ?? '—')}
-                              </td>
-                            ))}
-                          </tr>
-                        ))}
-                      </tbody>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Campos masivos */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div>
+                  <label style={labelSt}>Marca para todos (si no viene del Excel)</label>
+                  <input style={{ ...inputSt, fontSize: 13, padding: '7px 10px' }} value={marcaDef} onChange={e => setMarcaDef(e.target.value)} placeholder="Ej: BERGER" />
+                </div>
+                <div>
+                  <label style={labelSt}>Rubro para todos (si no viene del Excel)</label>
+                  <input style={{ ...inputSt, fontSize: 13, padding: '7px 10px' }} value={rubroDef} onChange={e => setRubroDef(e.target.value)} placeholder="Ej: CAÑOS" />
+                </div>
+              </div>
+
+              {/* Vista previa */}
+              {preview3.some(f => Object.keys(f).length > 0) && (
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: NAVY, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Vista previa (3 filas):</div>
+                  <div style={{ overflowX: 'auto', border: '1px solid #E2E8F0', borderRadius: 8 }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                      <thead><tr style={{ backgroundColor: '#EBF4FF' }}>
+                        {Object.keys(preview3[0] || {}).map(k => <th key={k} style={{ padding: '6px 10px', textAlign: 'left', color: NAVY, fontWeight: 600, borderBottom: `1px solid ${SEP}`, whiteSpace: 'nowrap' }}>{k}</th>)}
+                      </tr></thead>
+                      <tbody>{preview3.map((f, i) => (
+                        <tr key={i} style={{ backgroundColor: i % 2 === 0 ? '#fff' : '#F7FAFC' }}>
+                          {Object.values(f).map((v, j) => <td key={j} style={{ padding: '5px 10px', borderBottom: '1px solid #EDF2F7', color: TEXT }}>{v || '—'}</td>)}
+                        </tr>
+                      ))}</tbody>
                     </table>
                   </div>
                 </div>
               )}
 
-              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: TEXT, cursor: 'pointer' }}>
-                <input type="checkbox" checked={guardarMapeo} onChange={e => setGuardarMapeo(e.target.checked)} style={{ width: 16, height: 16, cursor: 'pointer' }} />
-                Guardar este mapeo para la próxima vez
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: TEXT, cursor: 'pointer' }}>
+                <input type="checkbox" checked={guardarMapeo} onChange={e => setGuardarMapeo(e.target.checked)} style={{ accentColor: BLUE }} />
+                Guardar este mapeo para <strong>{proveedor}</strong>
               </label>
             </div>
           )}
 
           {/* ══ PASO 3 ══ */}
           {paso === 3 && (
-            <div style={{ textAlign: 'center', padding: '32px 0' }}>
-              {!resultado ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {cargando && !resultado && (
+                <div style={{ textAlign: 'center', padding: '32px 0' }}>
+                  <div style={{ fontSize: 32, marginBottom: 12 }}>⏳</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: NAVY }}>Importando productos...</div>
+                  <div style={{ fontSize: 13, color: GRAY, marginTop: 6 }}>Esto puede tomar hasta 5 minutos para archivos grandes.</div>
+                </div>
+              )}
+              {resultado && (
                 <>
-                  <div style={{ fontSize: '48px', marginBottom: '16px' }}>⏳</div>
-                  <p style={{ color: GRAY, fontSize: '14px' }}>Importando {totalFilas} productos en lotes...</p>
-                </>
-              ) : (
-                <>
-                  <div style={{ fontSize: '64px', marginBottom: '16px' }}>✅</div>
-                  <h3 style={{ fontSize: '22px', fontWeight: 700, color: NAVY, margin: '0 0 20px' }}>Importación completada</h3>
-                  <div style={{ display: 'inline-grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '28px', textAlign: 'left' }}>
-                    <div style={{ backgroundColor: '#F0FFF4', borderRadius: '10px', padding: '14px 18px', borderLeft: `3px solid ${GREEN}` }}>
-                      <div style={{ fontSize: '24px', fontWeight: 700, color: GREEN }}>{resultado.importados}</div>
-                      <div style={{ fontSize: '12px', color: GRAY }}>Total procesados</div>
-                    </div>
-                    <div style={{ backgroundColor: '#EBF8FF', borderRadius: '10px', padding: '14px 18px', borderLeft: `3px solid ${BLUE}` }}>
-                      <div style={{ fontSize: '24px', fontWeight: 700, color: BLUE }}>{resultado.nuevos}</div>
-                      <div style={{ fontSize: '12px', color: GRAY }}>Productos nuevos</div>
-                    </div>
-                    <div style={{ backgroundColor: '#FFFAF0', borderRadius: '10px', padding: '14px 18px', borderLeft: `3px solid ${ORANGE}` }}>
-                      <div style={{ fontSize: '24px', fontWeight: 700, color: ORANGE }}>{resultado.actualizados}</div>
-                      <div style={{ fontSize: '12px', color: GRAY }}>Actualizados</div>
-                    </div>
-                    {resultado.errores > 0 && (
-                      <div style={{ backgroundColor: '#FFF5F5', borderRadius: '10px', padding: '14px 18px', borderLeft: `3px solid ${RED}` }}>
-                        <div style={{ fontSize: '24px', fontWeight: 700, color: RED }}>{resultado.errores}</div>
-                        <div style={{ fontSize: '12px', color: GRAY }}>Filas con error</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+                    {[['Importados', resultado.importados, GREEN], ['Nuevos', resultado.nuevos, BLUE], ['Actualizados', resultado.actualizados, ORANGE], ['Errores', resultado.errores, RED]].map(([l, v, c]) => (
+                      <div key={String(l)} style={{ backgroundColor: '#fff', border: `1px solid ${c}`, borderRadius: 10, padding: '12px 14px', textAlign: 'center' }}>
+                        <div style={{ fontSize: 22, fontWeight: 700, color: String(c) }}>{v}</div>
+                        <div style={{ fontSize: 12, color: GRAY }}>{l}</div>
                       </div>
-                    )}
-                    <div style={{ backgroundColor: '#F7FAFC', borderRadius: '10px', padding: '14px 18px', borderLeft: `3px solid ${GRAY}` }}>
-                      <div style={{ fontSize: '15px', fontWeight: 700, color: TEXT }}>{proveedor}</div>
-                      <div style={{ fontSize: '12px', color: GRAY }}>Proveedor</div>
-                    </div>
+                    ))}
                   </div>
-                  <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
-                    <button style={btnStyle(GREEN)} onClick={() => { onExito(); onCerrar(); }}>Ver productos</button>
-                    <button style={btnStyle(BLUE)} onClick={reiniciar}>Importar otro</button>
+                  <div style={{ backgroundColor: '#F7FAFC', borderRadius: 10, padding: '12px 16px' }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: NAVY, marginBottom: 8 }}>Por hoja:</div>
+                    {resultado.por_hoja.map(h => (
+                      <div key={h.hoja} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid #EDF2F7', fontSize: 13 }}>
+                        <span style={{ fontWeight: 600 }}>{h.hoja}</span>
+                        <span style={{ color: GRAY }}>
+                          <span style={{ color: GREEN }}>{h.nuevos} nuevos</span>
+                          {' · '}
+                          <span style={{ color: ORANGE }}>{h.actualizados} actualizados</span>
+                          {h.errores > 0 && <> · <span style={{ color: RED }}>{h.errores} errores</span></>}
+                        </span>
+                      </div>
+                    ))}
                   </div>
                 </>
               )}
@@ -460,632 +483,339 @@ function ModalImportador({ onCerrar, onExito }: { onCerrar: () => void; onExito:
         </div>
 
         {/* Footer */}
-        {paso < 3 && (
-          <div style={{ borderTop: '1px solid #E2E8F0', padding: '14px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderRadius: '0 0 16px 16px', backgroundColor: '#FAFAFA' }}>
-            <div>
-              {paso > 1 && (
-                <button onClick={() => { setError(''); setPaso(p => p - 1); }} disabled={cargando} style={btnStyle('#EDF2F7', GRAY, cargando)}>
-                  ← Anterior
-                </button>
-              )}
-            </div>
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-              {cargando && <span style={{ fontSize: '13px', color: GRAY, fontStyle: 'italic' }}>{paso === 1 ? 'Analizando...' : 'Procesando...'}</span>}
-              {paso === 1 && (
-                <button onClick={analizar} disabled={cargando} style={btnStyle(BLUE, '#fff', cargando)}>
-                  {cargando ? '⏳' : 'Siguiente →'}
-                </button>
-              )}
-              {paso === 2 && (
-                <button onClick={importar} disabled={cargando} style={btnStyle(GREEN, '#fff', cargando)}>
-                  {cargando ? '⏳' : `Importar ${totalFilas} productos →`}
-                </button>
-              )}
-            </div>
+        <div style={{ borderTop: '1px solid #E2E8F0', padding: '14px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            {paso > 1 && paso < 3 && !cargando && (
+              <button style={btnStyle('#EDF2F7', GRAY)} onClick={() => { setPaso(p => p - 1 as 1 | 2); setError(''); }}>← Anterior</button>
+            )}
           </div>
-        )}
+          <div style={{ display: 'flex', gap: 8 }}>
+            {paso === 1 && (
+              <button style={btnStyle(BLUE, '#fff', cargando)} disabled={cargando} onClick={analizar}>
+                {cargando ? '⏳ Analizando...' : 'Analizar Excel →'}
+              </button>
+            )}
+            {paso === 2 && (
+              <button style={btnStyle(GREEN, '#fff', cargando || hojasOk.length === 0)} disabled={cargando || hojasOk.length === 0} onClick={importar}>
+                {cargando ? '⏳ Importando...' : `Importar ${hojasOk.length} hoja(s) →`}
+              </button>
+            )}
+            {paso === 3 && resultado && (
+              <>
+                <button style={btnStyle('#EDF2F7', GRAY)} onClick={() => { setPaso(1); setArchivo(null); setHojas([]); setHojasOk([]); setMapeo({}); setDescCols([]); setResultado(null); setError(''); setProveedor(''); }}>
+                  Importar otro
+                </button>
+                <button style={btnStyle(GREEN)} onClick={() => { onExito(); onCerrar(); }}>Cerrar</button>
+              </>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// MODAL EDITAR PRODUCTO
+// ════════════════════════════════════════════════════════════════════════════
+
+interface ModalEditProps {
+  producto: ProductoReal;
+  proveedores: { id: number; nombre: string }[];
+  clienteId: number | null;
+  token: string;
+  onCerrar: () => void;
+  onGuardado: (p: ProductoReal) => void;
+}
+
+function ModalEditarProducto({ producto, proveedores, clienteId, token, onCerrar, onGuardado }: ModalEditProps) {
+  const [tab, setTab]           = useState<'datos' | 'precios' | 'stock'>('datos');
+  const [form, setForm]         = useState({ ...producto, alicuota_iva_str: String(producto.alicuota_iva || 0) });
+  const [guardando, setGuardando] = useState(false);
+  const [error, setError]       = useState('');
+  const [historial, setHistorial] = useState<{ precio_costo_anterior: number; precio_venta_anterior: number; fecha: string }[]>([]);
+  const [pvActivo, setPvActivo] = useState<1 | 2 | 3>(1);
+
+  const n = (v: any) => parseFloat(String(v)) || 0;
+  const pcFinal = calcPcFinal(n(form.precio_costo), n(form.dto_1), n(form.dto_2), n(form.dto_3));
+  const pv1 = calcPv(pcFinal, n(form.imp_1), n(form.imp_2), n(form.alicuota_iva), n(form.utilidad_1));
+  const pv2 = calcPv(pcFinal, n(form.imp_1), n(form.imp_2), n(form.alicuota_iva), n(form.utilidad_2));
+  const pv3 = calcPv(pcFinal, n(form.imp_1), n(form.imp_2), n(form.alicuota_iva), n(form.utilidad_3));
+
+  const set = (campo: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
+    setForm(prev => ({ ...prev, [campo]: e.target.value }));
+
+  useEffect(() => {
+    if (tab === 'stock') {
+      fetch(`${API}/api/superadmin/importador/productos/${clienteId}/${producto.id}/historial`, {
+        headers: { 'x-superadmin-token': token },
+      }).then(r => r.json()).then(d => setHistorial(d.historial || [])).catch(() => {});
+    }
+  }, [tab, clienteId, producto.id, token]);
+
+  const guardar = async () => {
+    if (!form.descripcion.trim()) { setError('La descripción es obligatoria'); return; }
+    setError(''); setGuardando(true);
+    try {
+      const pvFinal = pvActivo === 1 ? pv1 : pvActivo === 2 ? pv2 : pv3;
+      const body = {
+        cliente_id: clienteId,
+        productos: [{
+          id: producto.id,
+          precio_costo:    n(form.precio_costo),
+          descuento_1:     n(form.dto_1),    descuento_2: n(form.dto_2),    descuento_3: n(form.dto_3),
+          impuesto_1:      n(form.imp_1),    impuesto_2: n(form.imp_2),
+          iva:             n(form.alicuota_iva),
+          utilidad_1:      n(form.utilidad_1), utilidad_2: n(form.utilidad_2), utilidad_3: n(form.utilidad_3),
+          precio_venta_final: pvFinal,
+          precio_venta_2: pv2, precio_venta_3: pv3,
+          marca:           form.marca || null, rubro: form.rubro || null,
+          unidad_medida:   form.unidad_medida || null,
+          stock_minimo:    n(form.stock_minimo),
+          activo:          form.activo,
+        }],
+      };
+      const r = await fetch(`${API}/api/superadmin/importador/actualizar-precios-v2`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json', 'x-superadmin-token': token },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json();
+      if (!r.ok || !d.ok) throw new Error(d.mensaje || 'Error al guardar');
+      onGuardado({ ...producto, ...form, precio_venta_final: pvFinal, precio_venta_2: pv2, precio_venta_3: pv3 });
+    } catch (e: any) { setError(e.message); }
+    finally { setGuardando(false); }
+  };
+
+  const tabBtn = (t: 'datos' | 'precios' | 'stock', label: string) => (
+    <button onClick={() => setTab(t)} style={{ padding: '8px 16px', fontSize: 13, fontWeight: tab === t ? 700 : 400, color: tab === t ? BLUE : GRAY, background: tab === t ? '#EBF8FF' : 'transparent', border: 'none', borderBottom: `2px solid ${tab === t ? BLUE : 'transparent'}`, cursor: 'pointer' }}>{label}</button>
+  );
+
+  const numInput = (campo: string, label: string, suffix = '') => (
+    <div>
+      <label style={labelSt}>{label}</label>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <input type="number" step="any" style={{ ...inputSt, fontSize: 13, padding: '7px 10px' }} value={(form as any)[campo]} onChange={set(campo)} />
+        {suffix && <span style={{ fontSize: 12, color: GRAY }}>{suffix}</span>}
+      </div>
+    </div>
+  );
+  const calcRow = (label: string, value: number, color = BLUE) => (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', backgroundColor: color === BLUE ? CALC_BG : CALC_BG2, borderRadius: 8, marginTop: 4 }}>
+      <span style={{ fontSize: 13, fontWeight: 600, color }}>{label}</span>
+      <span style={{ fontSize: 15, fontWeight: 700, color }}>${numFmt(value)}</span>
+    </div>
+  );
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}
+      onClick={e => { if (e.target === e.currentTarget) onCerrar(); }}>
+      <div style={{ backgroundColor: '#fff', borderRadius: 16, width: '100%', maxWidth: 640, maxHeight: '92vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+        <div style={{ backgroundColor: NAVY, borderRadius: '16px 16px 0 0', padding: '14px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: '#fff' }}>✏️ Editar producto</div>
+          <button onClick={onCerrar} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: 8, color: '#fff', fontSize: 18, width: 32, height: 32, cursor: 'pointer', fontWeight: 700 }}>✕</button>
+        </div>
+        <div style={{ display: 'flex', borderBottom: '1px solid #E2E8F0' }}>
+          {tabBtn('datos', '📋 Datos')} {tabBtn('precios', '💰 Precios')} {tabBtn('stock', '📦 Stock')}
+        </div>
+        {error && <div style={{ backgroundColor: '#FFF5F5', borderLeft: `4px solid ${RED}`, padding: '8px 16px', color: RED, fontSize: 13, margin: '0 16px 0' }}>⚠️ {error}</div>}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px' }}>
+
+          {/* TAB DATOS */}
+          {tab === 'datos' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div>
+                  <label style={labelSt}>Código</label>
+                  <input style={{ ...inputSt, fontSize: 13, padding: '7px 10px' }} value={form.codigo || ''} onChange={set('codigo')} />
+                </div>
+                <div>
+                  <label style={labelSt}>Unidad de medida</label>
+                  <input style={{ ...inputSt, fontSize: 13, padding: '7px 10px' }} value={form.unidad_medida || ''} onChange={set('unidad_medida')} />
+                </div>
+              </div>
+              <div>
+                <label style={labelSt}>Descripción <span style={{ color: RED }}>*</span></label>
+                <textarea style={{ ...inputSt, fontSize: 13, padding: '7px 10px', minHeight: 64, resize: 'vertical' }} value={form.descripcion} onChange={set('descripcion')} />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div>
+                  <label style={labelSt}>Marca</label>
+                  <input style={{ ...inputSt, fontSize: 13, padding: '7px 10px' }} value={form.marca || ''} onChange={set('marca')} />
+                </div>
+                <div>
+                  <label style={labelSt}>Rubro</label>
+                  <input style={{ ...inputSt, fontSize: 13, padding: '7px 10px' }} value={form.rubro || ''} onChange={set('rubro')} />
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div>
+                  <label style={labelSt}>Proveedor</label>
+                  <select style={{ ...selectSt, fontSize: 13, padding: '7px 10px' }} value={form.proveedor_id || ''} onChange={set('proveedor_id')}>
+                    <option value="">Sin proveedor</option>
+                    {proveedores.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={labelSt}>EAN / Código de barras</label>
+                  <input style={{ ...inputSt, fontSize: 13, padding: '7px 10px' }} value={form.ean || ''} onChange={set('ean')} />
+                </div>
+              </div>
+              <div>
+                <label style={labelSt}>Imagen URL</label>
+                <input style={{ ...inputSt, fontSize: 13, padding: '7px 10px' }} value={form.imagen_url || ''} onChange={set('imagen_url')} />
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <label style={{ fontSize: 13, fontWeight: 600, color: TEXT, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={form.activo} onChange={e => setForm(prev => ({ ...prev, activo: e.target.checked }))} style={{ accentColor: GREEN }} />
+                  Producto activo
+                </label>
+              </div>
+              <div style={{ fontSize: 12, color: GRAY }}>Fecha importación: {fmtFecha(form.creado_en)}</div>
+            </div>
+          )}
+
+          {/* TAB PRECIOS */}
+          {tab === 'precios' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {numInput('precio_costo', 'PC Base (precio costo)', '$')}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+                {numInput('dto_1', 'Descuento 1%', '%')}
+                {numInput('dto_2', 'Descuento 2%', '%')}
+                {numInput('dto_3', 'Descuento 3%', '%')}
+              </div>
+              {calcRow('PC Final', pcFinal)}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+                {numInput('imp_1', 'Impuesto 1%', '%')}
+                {numInput('imp_2', 'Impuesto 2%', '%')}
+                {numInput('alicuota_iva', 'IVA%', '%')}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+                {numInput('utilidad_1', 'Utilidad 1%', '%')}
+                {numInput('utilidad_2', 'Utilidad 2%', '%')}
+                {numInput('utilidad_3', 'Utilidad 3%', '%')}
+              </div>
+              {calcRow('PV1', pv1, GREEN)}
+              {calcRow('PV2', pv2, GREEN)}
+              {calcRow('PV3', pv3, GREEN)}
+              <div style={{ marginTop: 8 }}>
+                <label style={labelSt}>PV activo (precio de venta principal):</label>
+                <div style={{ display: 'flex', gap: 10 }}>
+                  {([1, 2, 3] as const).map(n => (
+                    <label key={n} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13 }}>
+                      <input type="radio" name="pvActivo" checked={pvActivo === n} onChange={() => setPvActivo(n)} style={{ accentColor: GREEN }} />
+                      PV{n} (${numFmt(n === 1 ? pv1 : n === 2 ? pv2 : pv3)})
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB STOCK */}
+          {tab === 'stock' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div>
+                  <label style={labelSt}>Stock actual (solo lectura)</label>
+                  <div style={{ padding: '8px 12px', backgroundColor: '#F7FAFC', borderRadius: 8, fontSize: 14, fontWeight: 700, color: NAVY }}>{numFmt(form.stock_actual, 0)}</div>
+                </div>
+                {numInput('stock_minimo', 'Stock mínimo')}
+              </div>
+              <div>
+                <label style={labelSt}>Historial de precios (últimas 5):</label>
+                {historial.length === 0
+                  ? <div style={{ color: GRAY, fontSize: 13 }}>Sin historial registrado.</div>
+                  : <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginTop: 4 }}>
+                      <thead><tr style={{ backgroundColor: '#EBF4FF' }}>
+                        <th style={{ padding: '6px 10px', textAlign: 'left', color: NAVY }}>Fecha</th>
+                        <th style={{ padding: '6px 10px', textAlign: 'right', color: NAVY }}>PC anterior</th>
+                        <th style={{ padding: '6px 10px', textAlign: 'right', color: NAVY }}>PV anterior</th>
+                      </tr></thead>
+                      <tbody>{historial.map((h, i) => (
+                        <tr key={i} style={{ backgroundColor: i % 2 === 0 ? '#fff' : '#F7FAFC' }}>
+                          <td style={{ padding: '5px 10px', borderBottom: '1px solid #EDF2F7' }}>{fmtFecha(h.fecha)}</td>
+                          <td style={{ padding: '5px 10px', borderBottom: '1px solid #EDF2F7', textAlign: 'right' }}>${numFmt(h.precio_costo_anterior)}</td>
+                          <td style={{ padding: '5px 10px', borderBottom: '1px solid #EDF2F7', textAlign: 'right' }}>${numFmt(h.precio_venta_anterior)}</td>
+                        </tr>
+                      ))}</tbody>
+                    </table>}
+              </div>
+            </div>
+          )}
+        </div>
+        <div style={{ borderTop: '1px solid #E2E8F0', padding: '12px 20px', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button style={btnStyle('#EDF2F7', GRAY)} onClick={onCerrar}>Cancelar</button>
+          <button style={btnStyle(GREEN, '#fff', guardando)} disabled={guardando} onClick={guardar}>
+            {guardando ? '⏳ Guardando...' : '✅ Guardar cambios'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// HOOK useDebounce
+// ════════════════════════════════════════════════════════════════════════════
+
+function useDebounce<T>(value: T, delay: number): T {
+  const [dv, setDv] = useState(value);
+  useEffect(() => { const t = setTimeout(() => setDv(value), delay); return () => clearTimeout(t); }, [value, delay]);
+  return dv;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
 // COMPONENTE PRINCIPAL
 // ════════════════════════════════════════════════════════════════════════════
 
-interface ProductoReal {
-  id: number; codigo: string; descripcion: string; descripcion_corta: string;
-  marca: string; proveedor_id: number | null; rubro: string; tipo: string;
-  precio_costo: number; precio_costo_final: number;
-  precio_venta_1: number; precio_venta_2: number; precio_venta_final: number;
-  precio_venta_3: number;
-  alicuota_iva: number; stock: number; stock_minimo: number;
-  dto_1: number; dto_2: number; dto_3: number; dto_4: number;
-  imp_1: number; imp_2: number;
-  utilidad_1: number; utilidad_2: number; utilidad_3: number;
-  unidad_medida: string; ean: string; imagen_url: string | null; activo: boolean;
-  fecha_importacion: string;
-}
-
-interface EditPrecios {
-  precio_costo: string;
-  dto_1: string; dto_2: string; dto_3: string;
-  imp_1: string; imp_2: string; iva: string;
-  utilidad_1: string; utilidad_2: string; utilidad_3: string;
-}
-
-interface FiltrosOpciones {
-  proveedores: { id: number; nombre: string }[];
-  marcas: string[];
-  rubros: string[];
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// MODAL PRODUCTO (Agregar / Editar)
-// ════════════════════════════════════════════════════════════════════════════
-
-interface ProductoForm {
-  codigo: string; descripcion: string; descripcion_corta: string;
-  marca: string; proveedor_id: string; rubro: string; tipo: string;
-  unidad_medida: string; ean: string; imagen_url: string; activo: boolean;
-  precio_costo: string; dto_1: string; dto_2: string; dto_3: string; dto_4: string;
-  precio_costo_final: string;
-  imp_1: string; imp_2: string; alicuota_iva: string;
-  utilidad_1: string; utilidad_2: string;
-  precio_venta_1: string; precio_venta_2: string; precio_venta_final: string;
-  stock: string; stock_minimo: string; punto_reposicion: string;
-}
-
-const FORM_INICIAL: ProductoForm = {
-  codigo: '', descripcion: '', descripcion_corta: '',
-  marca: '', proveedor_id: '', rubro: '', tipo: '',
-  unidad_medida: '', ean: '', imagen_url: '', activo: true,
-  precio_costo: '', dto_1: '', dto_2: '', dto_3: '', dto_4: '',
-  precio_costo_final: '',
-  imp_1: '', imp_2: '', alicuota_iva: '21',
-  utilidad_1: '', utilidad_2: '',
-  precio_venta_1: '', precio_venta_2: '', precio_venta_final: '',
-  stock: '', stock_minimo: '', punto_reposicion: '',
-};
-
-function calcCostoFinal(f: ProductoForm): number {
-  const costo = parseFloat(f.precio_costo) || 0;
-  const d1 = (parseFloat(f.dto_1) || 0) / 100;
-  const d2 = (parseFloat(f.dto_2) || 0) / 100;
-  const d3 = (parseFloat(f.dto_3) || 0) / 100;
-  const d4 = (parseFloat(f.dto_4) || 0) / 100;
-  return costo * (1 - d1) * (1 - d2) * (1 - d3) * (1 - d4);
-}
-
-function calcVenta(costoFinal: number, utilidad: string): number {
-  const u = parseFloat(utilidad) || 0;
-  return costoFinal * (1 + u / 100);
-}
-
-function fmt2(n: number): string {
-  return n === 0 ? '' : n.toFixed(2);
-}
-
-function ModalProducto({
-  producto, proveedores, onCerrar, onGuardado, clienteId, token,
-}: {
-  producto: ProductoReal | null;
-  proveedores: { id: number; nombre: string }[];
-  onCerrar: () => void;
-  onGuardado: () => void;
-  clienteId: number | null;
-  token: string;
-}) {
-  const esEdicion = producto !== null;
-
-  const formDesdeProducto = (p: ProductoReal): ProductoForm => ({
-    codigo: p.codigo || '',
-    descripcion: p.descripcion || '',
-    descripcion_corta: p.descripcion_corta || '',
-    marca: p.marca || '',
-    proveedor_id: p.proveedor_id ? String(p.proveedor_id) : '',
-    rubro: p.rubro || '',
-    tipo: p.tipo || '',
-    unidad_medida: p.unidad_medida || '',
-    ean: p.ean || '',
-    imagen_url: p.imagen_url || '',
-    activo: p.activo,
-    precio_costo: p.precio_costo ? String(p.precio_costo) : '',
-    dto_1: (p as any).dto_1 ? String((p as any).dto_1) : '',
-    dto_2: (p as any).dto_2 ? String((p as any).dto_2) : '',
-    dto_3: (p as any).dto_3 ? String((p as any).dto_3) : '',
-    dto_4: (p as any).dto_4 ? String((p as any).dto_4) : '',
-    precio_costo_final: p.precio_costo_final ? String(p.precio_costo_final) : '',
-    imp_1: (p as any).imp_1 ? String((p as any).imp_1) : '',
-    imp_2: (p as any).imp_2 ? String((p as any).imp_2) : '',
-    alicuota_iva: p.alicuota_iva != null ? String(p.alicuota_iva) : '21',
-    utilidad_1: (p as any).utilidad_1 ? String((p as any).utilidad_1) : '',
-    utilidad_2: (p as any).utilidad_2 ? String((p as any).utilidad_2) : '',
-    precio_venta_1: p.precio_venta_1 ? String(p.precio_venta_1) : '',
-    precio_venta_2: p.precio_venta_2 ? String(p.precio_venta_2) : '',
-    precio_venta_final: p.precio_venta_final ? String(p.precio_venta_final) : '',
-    stock: p.stock ? String(p.stock) : '',
-    stock_minimo: p.stock_minimo ? String(p.stock_minimo) : '',
-    punto_reposicion: (p as any).punto_reposicion ? String((p as any).punto_reposicion) : '',
-  });
-
-  const [form, setForm] = useState<ProductoForm>(
-    esEdicion ? formDesdeProducto(producto!) : FORM_INICIAL
-  );
-  const [tab, setTab]         = useState<'general' | 'precios'>('general');
-  const [guardando, setGuardando] = useState(false);
-  const [error, setError]     = useState('');
-
-  // Recalcular precios automáticamente al cambiar costos/utilidades
-  React.useEffect(() => {
-    const costoFinal = calcCostoFinal(form);
-    const venta1     = calcVenta(costoFinal, form.utilidad_1);
-    const venta2     = calcVenta(costoFinal, form.utilidad_2);
-    const cfStr      = fmt2(costoFinal);
-    const v1Str      = fmt2(venta1);
-    const v2Str      = fmt2(venta2);
-    setForm(prev => {
-      if (prev.precio_costo_final === cfStr &&
-          prev.precio_venta_1 === v1Str &&
-          prev.precio_venta_2 === v2Str) return prev;
-      return { ...prev, precio_costo_final: cfStr, precio_venta_1: v1Str, precio_venta_2: v2Str };
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.precio_costo, form.dto_1, form.dto_2, form.dto_3, form.dto_4, form.utilidad_1, form.utilidad_2]);
-
-  const set = (k: keyof ProductoForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
-    setForm(prev => ({ ...prev, [k]: e.target.value }));
-
-  const guardar = async () => {
-    if (!form.descripcion.trim()) { setError('La descripción es obligatoria'); return; }
-    if (!clienteId) { setError('No se encontró el cliente'); return; }
-    setGuardando(true); setError('');
-    const body = {
-      ...form,
-      precio_costo: parseFloat(form.precio_costo) || 0,
-      dto_1: parseFloat(form.dto_1) || 0,
-      dto_2: parseFloat(form.dto_2) || 0,
-      dto_3: parseFloat(form.dto_3) || 0,
-      dto_4: parseFloat(form.dto_4) || 0,
-      precio_costo_final: parseFloat(form.precio_costo_final) || 0,
-      imp_1: parseFloat(form.imp_1) || 0,
-      imp_2: parseFloat(form.imp_2) || 0,
-      alicuota_iva: parseFloat(form.alicuota_iva) || 0,
-      utilidad_1: parseFloat(form.utilidad_1) || 0,
-      utilidad_2: parseFloat(form.utilidad_2) || 0,
-      precio_venta_1: parseFloat(form.precio_venta_1) || 0,
-      precio_venta_2: parseFloat(form.precio_venta_2) || 0,
-      precio_venta_final: parseFloat(form.precio_venta_final) || 0,
-      stock: parseFloat(form.stock) || 0,
-      stock_minimo: parseFloat(form.stock_minimo) || 0,
-      punto_reposicion: parseFloat(form.punto_reposicion) || 0,
-      proveedor_id: form.proveedor_id ? parseInt(form.proveedor_id, 10) : null,
-    };
-    try {
-      const url = esEdicion
-        ? `${API}/api/superadmin/importador/productos/${clienteId}/${producto!.id}`
-        : `${API}/api/superadmin/importador/productos/${clienteId}`;
-      const r = await fetch(url, {
-        method: esEdicion ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-superadmin-token': token },
-        body: JSON.stringify(body),
-      });
-      const d = await r.json();
-      if (!r.ok) { setError(d.mensaje || 'Error al guardar'); return; }
-      onGuardado();
-      onCerrar();
-    } catch { setError('Error de conexión'); }
-    finally { setGuardando(false); }
-  };
-
-  const inpN = (label: string, k: keyof ProductoForm, readOnly = false) => (
-    <div>
-      <label style={labelSt}>{label}</label>
-      <input type="number" step="any" value={form[k] as string}
-        onChange={readOnly ? undefined : set(k)}
-        readOnly={readOnly}
-        style={{ ...inputStyle, backgroundColor: readOnly ? '#F7FAFC' : '#fff', color: readOnly ? BLUE : TEXT, fontWeight: readOnly ? 700 : 400 }} />
-    </div>
-  );
-
-  const inpT = (label: string, k: keyof ProductoForm, placeholder = '') => (
-    <div>
-      <label style={labelSt}>{label}</label>
-      <input type="text" value={form[k] as string} onChange={set(k)}
-        placeholder={placeholder} style={inputStyle} />
-    </div>
-  );
-
-  const tabStyle = (active: boolean): React.CSSProperties => ({
-    padding: '10px 20px', fontSize: '13px', fontWeight: 700, cursor: 'pointer', border: 'none',
-    borderBottom: active ? `3px solid ${BLUE}` : '3px solid transparent',
-    backgroundColor: 'transparent', color: active ? BLUE : GRAY,
-  });
-
-  return (
-    <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 1002, padding: '24px 16px', overflowY: 'auto' }}
-      onClick={e => { if (e.target === e.currentTarget) onCerrar(); }}>
-      <div style={{ backgroundColor: '#fff', borderRadius: 16, width: '100%', maxWidth: 680, boxShadow: '0 20px 60px rgba(0,0,0,0.3)', marginTop: 8, marginBottom: 24 }}>
-        {/* Header */}
-        <div style={{ backgroundColor: NAVY, borderRadius: '16px 16px 0 0', padding: '18px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontSize: 16, fontWeight: 700, color: '#fff' }}>{esEdicion ? '✏️ Editar producto' : '＋ Agregar producto'}</span>
-          <button onClick={onCerrar} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: 8, color: '#fff', fontSize: 18, width: 36, height: 36, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700 }}>✕</button>
-        </div>
-
-        {/* Tabs */}
-        <div style={{ display: 'flex', borderBottom: '1px solid #EDF2F7', backgroundColor: '#F7FAFC' }}>
-          <button style={tabStyle(tab === 'general')} onClick={() => setTab('general')}>📋 Datos generales</button>
-          <button style={tabStyle(tab === 'precios')} onClick={() => setTab('precios')}>💲 Precios y stock</button>
-        </div>
-
-        <div style={{ padding: '20px 24px', maxHeight: '65vh', overflowY: 'auto' }}>
-
-          {/* ── TAB 1: Datos generales ── */}
-          {tab === 'general' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-                {inpT('Código', 'codigo', 'Ej: ART-001')}
-                <div>
-                  <label style={labelSt}>Proveedor</label>
-                  <select value={form.proveedor_id} onChange={set('proveedor_id')} style={{ ...selectStyle, width: '100%', boxSizing: 'border-box' }}>
-                    <option value="">Sin proveedor</option>
-                    {proveedores.map(p => <option key={p.id} value={String(p.id)}>{p.nombre}</option>)}
-                  </select>
-                </div>
-              </div>
-              <div>
-                <label style={labelSt}>Descripción <span style={{ color: RED }}>*</span></label>
-                <input type="text" value={form.descripcion} onChange={set('descripcion')}
-                  placeholder="Nombre del producto" style={inputStyle} />
-              </div>
-              {inpT('Descripción corta', 'descripcion_corta', 'Subtítulo breve')}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-                {inpT('Marca', 'marca', 'Ej: Samsung')}
-                {inpT('Rubro', 'rubro', 'Ej: Electrónica')}
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-                {inpT('Tipo', 'tipo', 'Ej: Producto / Servicio')}
-                {inpT('Unidad de medida', 'unidad_medida', 'Ej: UN / KG / LT')}
-              </div>
-              {inpT('Código de barras EAN', 'ean', 'Ej: 7790001234567')}
-              <div>
-                <label style={labelSt}>Imagen URL</label>
-                <input type="text" value={form.imagen_url} onChange={set('imagen_url')}
-                  placeholder="https://..." style={inputStyle} />
-                {form.imagen_url && (
-                  <div style={{ marginTop: 8, textAlign: 'center' }}>
-                    <img src={form.imagen_url} alt="Vista previa"
-                      style={{ maxWidth: '100%', maxHeight: 140, objectFit: 'contain', borderRadius: 8, border: '1px solid #EDF2F7' }}
-                      onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
-                  </div>
-                )}
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <label style={{ ...labelSt, marginBottom: 0 }}>Estado</label>
-                <button onClick={() => setForm(p => ({ ...p, activo: !p.activo }))}
-                  style={{ padding: '6px 18px', borderRadius: 20, border: 'none', fontSize: 13, fontWeight: 700, cursor: 'pointer',
-                    backgroundColor: form.activo ? '#F0FFF4' : '#FFF5F5', color: form.activo ? GREEN : RED }}>
-                  {form.activo ? '● Activo' : '○ Inactivo'}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* ── TAB 2: Precios y stock ── */}
-          {tab === 'precios' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-
-              {/* COSTOS */}
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 700, color: NAVY, textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 12, paddingBottom: 6, borderBottom: `2px solid ${SEP}` }}>COSTOS</div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                  {inpN('Precio costo', 'precio_costo')}
-                  {inpN('Descuento 1 (%)', 'dto_1')}
-                  {inpN('Descuento 2 (%)', 'dto_2')}
-                  {inpN('Descuento 3 (%)', 'dto_3')}
-                  {inpN('Descuento 4 (%)', 'dto_4')}
-                  {inpN('Precio costo final', 'precio_costo_final', true)}
-                </div>
-              </div>
-
-              {/* IMPUESTOS */}
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 700, color: NAVY, textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 12, paddingBottom: 6, borderBottom: `2px solid ${SEP}` }}>IMPUESTOS</div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                  {inpN('Impuesto 1 (%)', 'imp_1')}
-                  {inpN('Impuesto 2 (%)', 'imp_2')}
-                  <div>
-                    <label style={labelSt}>IVA %</label>
-                    <select value={form.alicuota_iva} onChange={set('alicuota_iva')} style={{ ...selectStyle, width: '100%', boxSizing: 'border-box' }}>
-                      <option value="0">0%</option>
-                      <option value="10.5">10.5%</option>
-                      <option value="21">21%</option>
-                      <option value="27">27%</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
-
-              {/* UTILIDAD Y VENTA */}
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 700, color: NAVY, textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 12, paddingBottom: 6, borderBottom: `2px solid ${SEP}` }}>UTILIDAD Y PRECIO DE VENTA</div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                  {inpN('Utilidad 1 (%)', 'utilidad_1')}
-                  {inpN('Precio venta 1', 'precio_venta_1', true)}
-                  {inpN('Utilidad 2 (%)', 'utilidad_2')}
-                  {inpN('Precio venta 2', 'precio_venta_2', true)}
-                </div>
-                <div style={{ marginTop: 12 }}>
-                  <label style={labelSt}>Precio venta final <span style={{ color: GRAY, fontWeight: 400, textTransform: 'none' }}>(editable)</span></label>
-                  <input type="number" step="any" value={form.precio_venta_final}
-                    onChange={set('precio_venta_final')}
-                    placeholder="Precio final de venta al público"
-                    style={{ ...inputStyle, fontWeight: 700, color: GREEN }} />
-                </div>
-              </div>
-
-              {/* STOCK */}
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 700, color: NAVY, textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 12, paddingBottom: 6, borderBottom: `2px solid ${SEP}` }}>STOCK</div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-                  {inpN('Stock actual', 'stock')}
-                  {inpN('Stock mínimo', 'stock_minimo')}
-                  {inpN('Punto de reposición', 'punto_reposicion')}
-                </div>
-              </div>
-
-            </div>
-          )}
-        </div>
-
-        {/* Footer */}
-        {error && (
-          <div style={{ margin: '0 24px', padding: '10px 14px', backgroundColor: '#FFF5F5', border: '1px solid #FEB2B2', borderRadius: 8, color: RED, fontSize: 13 }}>
-            ⚠️ {error}
-          </div>
-        )}
-        <div style={{ padding: '16px 24px', display: 'flex', justifyContent: 'flex-end', gap: 10, borderTop: '1px solid #EDF2F7' }}>
-          <button style={btnStyle('#EDF2F7', GRAY)} onClick={onCerrar}>Cancelar</button>
-          <button style={btnStyle(GREEN, '#fff', guardando)} onClick={guardar} disabled={guardando}>
-            {guardando ? '⏳ Guardando...' : '✓ Guardar producto'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// MODAL CONFIRMAR DESACTIVAR
-// ════════════════════════════════════════════════════════════════════════════
-
-function ModalConfirmarDesactivar({
-  producto, onCerrar, onConfirmado, clienteId, token,
-}: {
-  producto: ProductoReal;
-  onCerrar: () => void;
-  onConfirmado: () => void;
-  clienteId: number | null;
-  token: string;
-}) {
-  const [cargando, setCargando] = useState(false);
-  const [error, setError]       = useState('');
-
-  const desactivar = async () => {
-    if (!clienteId) return;
-    setCargando(true); setError('');
-    try {
-      const r = await fetch(`${API}/api/superadmin/importador/productos/${clienteId}/${producto.id}`, {
-        method: 'DELETE',
-        headers: { 'x-superadmin-token': token },
-      });
-      const d = await r.json();
-      if (!r.ok) { setError(d.mensaje || 'Error'); return; }
-      onConfirmado();
-      onCerrar();
-    } catch { setError('Error de conexión'); }
-    finally { setCargando(false); }
-  };
-
-  return (
-    <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1003, padding: 16 }}
-      onClick={e => { if (e.target === e.currentTarget) onCerrar(); }}>
-      <div style={{ backgroundColor: '#fff', borderRadius: 16, width: '100%', maxWidth: 400, boxShadow: '0 20px 60px rgba(0,0,0,0.3)', overflow: 'hidden' }}>
-        <div style={{ backgroundColor: RED, padding: '18px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontSize: 16, fontWeight: 700, color: '#fff' }}>🗑️ Desactivar producto</span>
-          <button onClick={onCerrar} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: 8, color: '#fff', fontSize: 18, width: 36, height: 36, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700 }}>✕</button>
-        </div>
-        <div style={{ padding: '24px', textAlign: 'center' }}>
-          <div style={{ fontSize: 42, marginBottom: 12 }}>⚠️</div>
-          <p style={{ fontSize: 15, fontWeight: 700, color: TEXT, margin: '0 0 8px' }}>¿Desactivar este producto?</p>
-          <p style={{ fontSize: 13, color: GRAY, margin: '0 0 6px' }}><strong>{producto.descripcion}</strong></p>
-          <p style={{ fontSize: 13, color: GRAY, margin: 0 }}>El producto no se eliminará,<br />solo quedará inactivo.</p>
-          {error && <p style={{ color: RED, fontSize: 13, marginTop: 10 }}>⚠️ {error}</p>}
-        </div>
-        <div style={{ padding: '0 24px 20px', display: 'flex', gap: 10, justifyContent: 'center' }}>
-          <button style={btnStyle('#EDF2F7', GRAY)} onClick={onCerrar}>Cancelar</button>
-          <button style={btnStyle(RED, '#fff', cargando)} onClick={desactivar} disabled={cargando}>
-            {cargando ? '⏳ Desactivando...' : '🗑️ Desactivar'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Modal Imprimir ────────────────────────────────────────────────────────────
-
-const COLS_IMPRESION = [
-  { key: 'codigo',            label: 'Código',             def: true  },
-  { key: 'descripcion',       label: 'Descripción',        def: true  },
-  { key: 'marca',             label: 'Marca',              def: true  },
-  { key: 'precio_venta_final',label: 'Precio venta final', def: true  },
-  { key: 'stock',             label: 'Stock',              def: true  },
-  { key: 'precio_costo',      label: 'Precio costo',       def: false },
-  { key: 'rubro',             label: 'Rubro',              def: false },
-  { key: 'ean',               label: 'EAN',                def: false },
+const COLS: { key: string; label: string; width?: number }[] = [
+  { key: 'codigo',          label: 'Código',       width: 90 },
+  { key: 'descripcion',     label: 'Descripción',  width: 200 },
+  { key: 'marca',           label: 'Marca',        width: 90 },
+  { key: 'rubro',           label: 'Rubro',        width: 90 },
+  { key: 'proveedor',       label: 'Proveedor',    width: 100 },
+  { key: 'ean',             label: 'EAN',          width: 110 },
+  { key: 'precio_costo',    label: 'PC Base',      width: 80 },
+  { key: 'dto_1',           label: 'Dt1%',         width: 60 },
+  { key: 'dto_2',           label: 'Dt2%',         width: 60 },
+  { key: 'dto_3',           label: 'Dt3%',         width: 60 },
+  { key: '_pcf',            label: 'PC Final',     width: 80 },
+  { key: 'imp_1',           label: 'Imp1%',        width: 60 },
+  { key: 'imp_2',           label: 'Imp2%',        width: 60 },
+  { key: 'alicuota_iva',    label: 'IVA%',         width: 60 },
+  { key: 'utilidad_1',      label: 'Ut1%',         width: 60 },
+  { key: 'utilidad_2',      label: 'Ut2%',         width: 60 },
+  { key: 'utilidad_3',      label: 'Ut3%',         width: 60 },
+  { key: '_pv1',            label: 'PV1',          width: 80 },
+  { key: '_pv2',            label: 'PV2',          width: 80 },
+  { key: '_pv3',            label: 'PV3',          width: 80 },
+  { key: 'stock_actual',    label: 'Stock',        width: 60 },
+  { key: 'stock_minimo',    label: 'Stock Min',    width: 70 },
+  { key: 'unidad_medida',   label: 'Unidad',       width: 70 },
+  { key: 'creado_en',       label: 'F. Import',    width: 90 },
+  { key: 'activo',          label: 'Estado',       width: 75 },
 ];
 
-function ModalImpresion({
-  productos, nombreNegocio, filtrosDesc, onCerrar,
-}: {
-  productos: ProductoReal[]; nombreNegocio: string; filtrosDesc: string; onCerrar: () => void;
-}) {
-  const [orientacion, setOrientacion] = useState<'A4v' | 'A4h' | 'A5'>('A4v');
-  const [cols, setCols]               = useState<Record<string, boolean>>(
-    Object.fromEntries(COLS_IMPRESION.map(c => [c.key, c.def]))
-  );
+const CAMPOS_MASIVOS = [
+  { campo: 'marca',         label: 'Marca',          tipo: 'text' },
+  { campo: 'rubro',         label: 'Rubro',          tipo: 'text' },
+  { campo: 'utilidad_1',    label: 'Utilidad 1%',    tipo: 'number' },
+  { campo: 'utilidad_2',    label: 'Utilidad 2%',    tipo: 'number' },
+  { campo: 'utilidad_3',    label: 'Utilidad 3%',    tipo: 'number' },
+  { campo: 'alicuota_iva',  label: 'IVA%',           tipo: 'number' },
+  { campo: 'stock_minimo',  label: 'Stock mínimo',   tipo: 'number' },
+  { campo: 'unidad_medida', label: 'Unidad medida',  tipo: 'text' },
+  { campo: 'activo',        label: 'Estado',         tipo: 'bool' },
+];
 
-  const colsActivas = COLS_IMPRESION.filter(c => cols[c.key]);
-  const fecha       = new Date().toLocaleDateString('es-AR');
-
-  const generarHTML = () => {
-    const pageSize = orientacion === 'A4v' ? 'A4 portrait' : orientacion === 'A4h' ? 'A4 landscape' : 'A5 portrait';
-    const filas    = productos.map(p => `<tr>${colsActivas.map(c => {
-      const v = (p as any)[c.key];
-      const s = v == null ? '—' : typeof v === 'number' ? `$${Number(v).toLocaleString('es-AR')}` : String(v);
-      return `<td>${s}</td>`;
-    }).join('')}</tr>`).join('');
-
-    return `<!DOCTYPE html><html><head><meta charset="utf-8">
-<title>Lista de Productos</title>
-<style>
-  @page { size: ${pageSize}; margin: 15mm; }
-  body { font-family: Arial, sans-serif; font-size: 11px; color: #222; }
-  h1 { font-size: 16px; margin: 0 0 2px; color: #1B2A4A; }
-  .sub { font-size: 11px; color: #718096; margin-bottom: 12px; }
-  table { width: 100%; border-collapse: collapse; }
-  th { background: #1B2A4A; color: #fff; padding: 6px 8px; text-align: left; font-size: 10px; }
-  td { padding: 5px 8px; border-bottom: 1px solid #E2E8F0; font-size: 10px; }
-  tr:nth-child(even) td { background: #F7FAFC; }
-  @media print { button { display: none; } }
-</style></head><body>
-<h1>📦 Lista de Productos — ${nombreNegocio}</h1>
-<div class="sub">Fecha: ${fecha} &nbsp;|&nbsp; ${productos.length} productos &nbsp;|&nbsp; ${filtrosDesc || 'Sin filtros'}</div>
-<table><thead><tr>${colsActivas.map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
-<tbody>${filas}</tbody></table>
-</body></html>`;
-  };
-
-  const vistaPrevia = () => {
-    const w = window.open('', '_blank');
-    if (w) { w.document.write(generarHTML()); w.document.close(); }
-  };
-
-  const imprimir = () => {
-    const w = window.open('', '_blank');
-    if (w) {
-      w.document.write(generarHTML());
-      w.document.close();
-      w.focus();
-      setTimeout(() => { w.print(); }, 500);
-    }
-  };
-
-  const descargarPDF = () => {
-    const w = window.open('', '_blank');
-    if (w) {
-      w.document.write(generarHTML() + `<script>window.onload=()=>{window.print();}<\/script>`);
-      w.document.close();
-    }
-  };
-
-  return (
-    <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1001, padding: 16 }}
-      onClick={e => { if (e.target === e.currentTarget) onCerrar(); }}>
-      <div style={{ backgroundColor: '#fff', borderRadius: 16, width: '100%', maxWidth: 520, boxShadow: '0 20px 60px rgba(0,0,0,0.3)', overflow: 'hidden' }}>
-        {/* header */}
-        <div style={{ backgroundColor: NAVY, padding: '18px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontSize: 16, fontWeight: 700, color: '#fff' }}>🖨️ Imprimir lista de productos</span>
-          <button onClick={onCerrar} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: 8, color: '#fff', fontSize: 18, width: 36, height: 36, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700 }}>✕</button>
-        </div>
-        <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 18 }}>
-          {/* orientación */}
-          <div>
-            <div style={labelSt}>Tamaño de página</div>
-            <div style={{ display: 'flex', gap: 12 }}>
-              {(['A4v', 'A4h', 'A5'] as const).map(o => (
-                <label key={o} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer', color: TEXT }}>
-                  <input type="radio" name="orientacion" value={o} checked={orientacion === o} onChange={() => setOrientacion(o)} />
-                  {o === 'A4v' ? 'A4 vertical' : o === 'A4h' ? 'A4 horizontal' : 'A5'}
-                </label>
-              ))}
-            </div>
-          </div>
-          {/* columnas */}
-          <div>
-            <div style={labelSt}>Columnas a incluir</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 16px' }}>
-              {COLS_IMPRESION.map(c => (
-                <label key={c.key} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, cursor: 'pointer', color: TEXT }}>
-                  <input type="checkbox" checked={!!cols[c.key]} onChange={() => setCols(prev => ({ ...prev, [c.key]: !prev[c.key] }))} />
-                  {c.label}
-                </label>
-              ))}
-            </div>
-          </div>
-          {/* info */}
-          <div style={{ backgroundColor: '#EBF4FF', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: BLUE }}>
-            📄 Se imprimirán <strong>{productos.length}</strong> productos con los filtros activos en pantalla.
-          </div>
-          {/* botones */}
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-            <button style={btnStyle('#EDF2F7', GRAY)} onClick={vistaPrevia}>Vista previa</button>
-            <button style={btnStyle(NAVY)} onClick={imprimir}>🖨️ Imprimir</button>
-            <button style={btnStyle(BLUE)} onClick={descargarPDF}>⬇️ Descargar PDF</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── SheetJS (usa el xlsx ya instalado en node_modules via importador backend) ─
-// En el frontend lo cargamos dinámicamente para no añadir dependencia nueva
-async function exportarExcel(productos: any[], nombreCliente: string) {
-  // Cargamos SheetJS desde CDN de forma dinámica (ya disponible en React CRA)
-  // Si ya está en window lo usamos
-  let XLSX: any = (window as any).XLSX;
-  if (!XLSX) {
-    await new Promise<void>((resolve, reject) => {
-      const s = document.createElement('script');
-      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
-      s.onload = () => resolve();
-      s.onerror = reject;
-      document.head.appendChild(s);
-    }).catch(() => null);
-    XLSX = (window as any).XLSX;
-  }
-  if (!XLSX) { alert('No se pudo cargar la librería Excel. Intentá de nuevo.'); return; }
-
-  const cabeceras = ['Código','Descripción','Marca','Proveedor','Rubro','Precio Costo','Precio Venta 1','Precio Venta 2','Precio Venta Final','IVA%','Stock','Stock Mínimo','Unidad','EAN','Activo','Fecha Importación'];
-  const filas = productos.map((p: any) => [
-    p.codigo || '', p.descripcion || '', p.marca || '', p.proveedor || '',
-    p.rubro || '', p.precio_costo || 0, p.precio_venta_1 || 0,
-    p.precio_venta_2 || 0, p.precio_venta_final || 0, p.alicuota_iva || 0,
-    p.stock || 0, p.stock_minimo || 0, p.unidad_medida || '', p.ean || '',
-    p.activo ? 'Sí' : 'No', p.fecha_importacion ? new Date(p.fecha_importacion).toLocaleDateString('es-AR') : '',
-  ]);
-  const ws = XLSX.utils.aoa_to_sheet([cabeceras, ...filas]);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Productos');
-  const fecha = new Date().toISOString().slice(0, 10);
-  XLSX.writeFile(wb, `Productos_${nombreCliente}_${fecha}.xlsx`);
-}
-
-// COLUMNAS_TABLA — 22 columnas definidas en el render manual de thead
-const POR_PAGINA_OPCIONES = [10, 25, 50];
-
-function useDebounce(value: string, delay: number) {
-  const [debouncedValue, setDebouncedValue] = useState(value);
-  React.useEffect(() => {
-    const t = setTimeout(() => setDebouncedValue(value), delay);
-    return () => clearTimeout(t);
-  }, [value, delay]);
-  return debouncedValue;
-}
+const POR_PAG_OPTS = [10, 25, 50, 100];
 
 function RobertoProductos() {
+  const navigate = useNavigate();
+  const token     = getToken();
+  const clienteId = getClienteId();
+
+  // Filtros
   const [busqueda,        setBusqueda]        = useState('');
   const [filtroProveedor, setFiltroProveedor] = useState('');
   const [filtroMarca,     setFiltroMarca]     = useState('');
@@ -1096,645 +826,515 @@ function RobertoProductos() {
   const [fechaTipo,       setFechaTipo]       = useState<'importacion' | 'actualizacion'>('importacion');
   const [porPagina,       setPorPagina]       = useState(25);
   const [pagina,          setPagina]          = useState(1);
-  const [modalAbierto,    setModalAbierto]    = useState(false);
-  const [modalImprimir,   setModalImprimir]   = useState(false);
-  const [exportando,      setExportando]      = useState(false);
-  const [modoPrecios,    setModoPrecios]    = useState(false);
-  const [preciosEdit,    setPreciosEdit]    = useState<Record<number, EditPrecios>>({});
-  const [pvActivo,       setPvActivo]       = useState<1 | 2 | 3>(1);
-  const [popupMasivo,    setPopupMasivo]    = useState<{ campo: keyof EditPrecios; label: string; valor: string } | null>(null);
-  const [actualizando,   setActualizando]   = useState(false);
-  const [msgActualizar,  setMsgActualizar]  = useState('');
-  const [modalProducto,   setModalProducto]   = useState(false);
-  const [productoEditar,  setProductoEditar]  = useState<ProductoReal | null>(null);
-  const [productoDesactivar, setProductoDesactivar] = useState<ProductoReal | null>(null);
-  const [productos,       setProductos]       = useState<ProductoReal[]>([]);
-  const [total,           setTotal]           = useState(0);
-  const [totalPaginas,    setTotalPaginas]    = useState(1);
-  const [cargandoLista,   setCargandoLista]   = useState(false);
-  const [filtrosOpts,     setFiltrosOpts]     = useState<FiltrosOpciones>({ proveedores: [], marcas: [], rubros: [] });
+  const busquedaDb = useDebounce(busqueda, 350);
 
-  const busquedaDebounced = useDebounce(busqueda, 300);
-  const token     = getToken();
-  const clienteId = getClienteId();
+  // Datos
+  const [productos,    setProductos]    = useState<ProductoReal[]>([]);
+  const [total,        setTotal]        = useState(0);
+  const [totalPags,    setTotalPags]    = useState(1);
+  const [cargando,     setCargando]     = useState(false);
+  const [filtrosOpts,  setFiltrosOpts]  = useState<FiltrosOpts>({ proveedores: [], marcas: [], rubros: [] });
+  const [exportando,   setExportando]   = useState(false);
 
-  const nombreNegocio = (() => {
-    try { return JSON.parse(localStorage.getItem('roberto_portal_session') || '{}').cliente?.nombre_comercial || 'Mi Negocio'; } catch { return 'Mi Negocio'; }
-  })();
+  // Orden
+  const [ordenCol, setOrdenCol] = useState('');
+  const [ordenDir, setOrdenDir] = useState<'asc' | 'desc'>('asc');
 
+  // Selección
+  const [seleccionados, setSeleccionados] = useState<Set<number>>(new Set());
+
+  // Edición inline
+  const [modoEdit,   setModoEdit]   = useState(false);
+  const [edits,      setEdits]      = useState<Record<number, EditState>>({});
+  const [pvActivo,   setPvActivo]   = useState<1 | 2 | 3>(1);
+  const [guardando,  setGuardando]  = useState(false);
+  const [msgGuardar, setMsgGuardar] = useState('');
+
+  // Acciones masivas
+  const [campoMasivo, setCampoMasivo] = useState('');
+  const [valorMasivo, setValorMasivo] = useState('');
+  const [aplicandoMasivo, setAplicandoMasivo] = useState(false);
+
+  // Modals
+  const [modalImportador, setModalImportador] = useState(false);
+  const [modalEditar, setModalEditar]         = useState<ProductoReal | null>(null);
+
+  // ── Helpers edición ──────────────────────────────────────────
+  const defEdit = (p: ProductoReal): EditState => ({
+    precio_costo: String(p.precio_costo || 0),
+    dto_1: String(p.dto_1 || 0), dto_2: String(p.dto_2 || 0), dto_3: String(p.dto_3 || 0),
+    imp_1: String(p.imp_1 || 0), imp_2: String(p.imp_2 || 0),
+    alicuota_iva: String(p.alicuota_iva || 0),
+    utilidad_1: String(p.utilidad_1 || 0), utilidad_2: String(p.utilidad_2 || 0), utilidad_3: String(p.utilidad_3 || 0),
+    marca: p.marca || '', rubro: p.rubro || '', unidad_medida: p.unidad_medida || '',
+    ean: p.ean || '', stock_minimo: String(p.stock_minimo || 0),
+  });
+
+  const getE = (p: ProductoReal, campo: keyof EditState): string => {
+    const e = edits[p.id];
+    return e ? (e[campo] ?? '') : (defEdit(p)[campo] ?? '');
+  };
+
+  const setE = (p: ProductoReal, campo: keyof EditState, v: string) => {
+    setEdits(prev => ({ ...prev, [p.id]: { ...defEdit(p), ...prev[p.id], [campo]: v } }));
+  };
+
+  const n = (v: string) => parseFloat(v) || 0;
+
+  const calcRow = (p: ProductoReal) => {
+    const pc = n(getE(p, 'precio_costo'));
+    const d1 = n(getE(p, 'dto_1')), d2 = n(getE(p, 'dto_2')), d3 = n(getE(p, 'dto_3'));
+    const i1 = n(getE(p, 'imp_1')), i2 = n(getE(p, 'imp_2')), iva = n(getE(p, 'alicuota_iva'));
+    const u1 = n(getE(p, 'utilidad_1')), u2 = n(getE(p, 'utilidad_2')), u3 = n(getE(p, 'utilidad_3'));
+    const pcF = calcPcFinal(pc, d1, d2, d3);
+    return { pcF, pv1: calcPv(pcF, i1, i2, iva, u1), pv2: calcPv(pcF, i1, i2, iva, u2), pv3: calcPv(pcF, i1, i2, iva, u3) };
+  };
+
+  // ── Carga datos ──────────────────────────────────────────────
   const buildParams = useCallback((extra: Record<string, string> = {}) => {
     const p = new URLSearchParams(extra);
-    if (busquedaDebounced.trim()) p.set('buscar', busquedaDebounced.trim());
+    if (busquedaDb.trim()) p.set('buscar', busquedaDb.trim());
     if (filtroProveedor) p.set('proveedor_id', filtroProveedor);
-    if (filtroMarca)     p.set('marca', filtroMarca);
-    if (filtroRubro)     p.set('rubro', filtroRubro);
-    if (filtroEstado)    p.set('activo', filtroEstado === 'activo' ? 'true' : 'false');
-    if (fechaDesde)      p.set('fecha_desde', fechaDesde);
-    if (fechaHasta)      p.set('fecha_hasta', fechaHasta);
+    if (filtroMarca) p.set('marca', filtroMarca);
+    if (filtroRubro) p.set('rubro', filtroRubro);
+    if (filtroEstado) p.set('activo', filtroEstado === 'activo' ? 'true' : 'false');
+    if (fechaDesde) p.set('fecha_desde', fechaDesde);
+    if (fechaHasta) p.set('fecha_hasta', fechaHasta);
     if (fechaDesde || fechaHasta) p.set('fecha_tipo', fechaTipo);
     return p;
-  }, [busquedaDebounced, filtroProveedor, filtroMarca, filtroRubro, filtroEstado, fechaDesde, fechaHasta, fechaTipo]);
+  }, [busquedaDb, filtroProveedor, filtroMarca, filtroRubro, filtroEstado, fechaDesde, fechaHasta, fechaTipo]);
+
+  const cargarProductos = useCallback(async (pg: number) => {
+    if (!clienteId) return;
+    setCargando(true);
+    try {
+      const params = buildParams({ page: String(pg), limit: String(porPagina) });
+      const r = await fetch(`${API}/api/superadmin/importador/productos/${clienteId}?${params}`, { headers: { 'x-superadmin-token': token } });
+      if (r.ok) { const d = await r.json(); setProductos(d.productos || []); setTotal(d.total || 0); setTotalPags(d.paginas || 1); }
+    } catch {} finally { setCargando(false); }
+  }, [clienteId, token, buildParams, porPagina]);
 
   const cargarFiltros = useCallback(async () => {
     if (!clienteId) return;
     try {
-      const r = await fetch(`${API}/api/superadmin/importador/productos/${clienteId}/filtros`, {
-        headers: { 'x-superadmin-token': token },
-      });
+      const r = await fetch(`${API}/api/superadmin/importador/productos/${clienteId}/filtros`, { headers: { 'x-superadmin-token': token } });
       if (r.ok) setFiltrosOpts(await r.json());
     } catch {}
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clienteId]);
+  }, [clienteId, token]);
 
-  const cargarProductos = useCallback(async (pg: number) => {
-    if (!clienteId) return;
-    setCargandoLista(true);
-    try {
-      const params = buildParams({ page: String(pg), limit: String(porPagina) });
-      const r = await fetch(`${API}/api/superadmin/importador/productos/${clienteId}?${params}`, {
-        headers: { 'x-superadmin-token': token },
-      });
-      if (r.ok) {
-        const d = await r.json();
-        setProductos(d.productos || []);
-        setTotal(d.total || 0);
-        setTotalPaginas(d.paginas || 1);
-      }
-    } catch {}
-    finally { setCargandoLista(false); }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clienteId, buildParams, porPagina]);
+  useEffect(() => { cargarFiltros(); }, [cargarFiltros]);
+  useEffect(() => { setPagina(1); cargarProductos(1); }, [cargarProductos]);
 
-  const handleExportar = async () => {
-    if (!clienteId || exportando) return;
-    setExportando(true);
-    try {
-      const params = buildParams();
-      const r = await fetch(`${API}/api/superadmin/importador/productos/${clienteId}/exportar?${params}`, {
-        headers: { 'x-superadmin-token': token },
-      });
-      if (r.ok) {
-        const d = await r.json();
-        await exportarExcel(d.productos || [], nombreNegocio);
-      }
-    } catch (e) { alert('Error al exportar'); }
-    finally { setExportando(false); }
+  // ── Orden ────────────────────────────────────────────────────
+  const handleOrden = (key: string) => {
+    if (key.startsWith('_')) return;
+    if (ordenCol === key) setOrdenDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setOrdenCol(key); setOrdenDir('asc'); }
   };
 
-  React.useEffect(() => { cargarFiltros(); }, [cargarFiltros]);
-  React.useEffect(() => { setPagina(1); cargarProductos(1); }, [cargarProductos]);
-
-  const irAPagina = (pg: number) => { setPagina(pg); cargarProductos(pg); };
-
-  const limpiarFiltros = () => {
-    setBusqueda(''); setFiltroProveedor(''); setFiltroMarca('');
-    setFiltroRubro(''); setFiltroEstado(''); setPagina(1);
-  };
-
-  const limpiarFechas = () => { setFechaDesde(''); setFechaHasta(''); };
-
-  // ── Helpers para edición inline de precios ────────────────────
-  const defEdit = (p: ProductoReal): EditPrecios => ({
-    precio_costo: String(p.precio_costo || 0),
-    dto_1: String(p.dto_1 || 0), dto_2: String(p.dto_2 || 0), dto_3: String(p.dto_3 || 0),
-    imp_1: String(p.imp_1 || 0), imp_2: String(p.imp_2 || 0),
-    iva: String(p.alicuota_iva || 0),
-    utilidad_1: String(p.utilidad_1 || 0), utilidad_2: String(p.utilidad_2 || 0),
-    utilidad_3: String(p.utilidad_3 || 0),
+  const productosSorted = [...productos].sort((a, b) => {
+    if (!ordenCol) return 0;
+    const va = (a as any)[ordenCol] ?? ''; const vb = (b as any)[ordenCol] ?? '';
+    const cmp = typeof va === 'number' ? va - vb : String(va).localeCompare(String(vb), 'es-AR');
+    return ordenDir === 'asc' ? cmp : -cmp;
   });
 
-  const getF = (p: ProductoReal, campo: keyof EditPrecios): number => {
-    const e = preciosEdit[p.id];
-    if (e?.[campo] !== undefined && e[campo] !== '') return parseFloat(e[campo]) || 0;
-    const map: Record<keyof EditPrecios, number> = {
-      precio_costo: p.precio_costo, dto_1: p.dto_1, dto_2: p.dto_2, dto_3: p.dto_3,
-      imp_1: p.imp_1, imp_2: p.imp_2, iva: p.alicuota_iva,
-      utilidad_1: p.utilidad_1, utilidad_2: p.utilidad_2, utilidad_3: p.utilidad_3,
-    };
-    return map[campo] || 0;
+  const provNombre = (id: number | null) => filtrosOpts.proveedores.find(p => p.id === id)?.nombre || '—';
+
+  // ── Selección ────────────────────────────────────────────────
+  const toggleSel = (id: number) => setSeleccionados(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
+  const toggleTodos = () => {
+    if (seleccionados.size === productos.length) setSeleccionados(new Set());
+    else setSeleccionados(new Set(productos.map(p => p.id)));
   };
 
-  const calcP = (p: ProductoReal) => {
-    const pc = getF(p, 'precio_costo');
-    const d1 = getF(p, 'dto_1'), d2 = getF(p, 'dto_2'), d3 = getF(p, 'dto_3');
-    const i1 = getF(p, 'imp_1'), i2 = getF(p, 'imp_2'), iva = getF(p, 'iva');
-    const u1 = getF(p, 'utilidad_1'), u2 = getF(p, 'utilidad_2'), u3 = getF(p, 'utilidad_3');
-    const pcFinal = pc * (1 - d1 / 100) * (1 - d2 / 100) * (1 - d3 / 100);
-    const base = pcFinal * (1 + i1 / 100) * (1 + i2 / 100) * (1 + iva / 100);
-    return { pcFinal, pv1: base * (1 + u1 / 100), pv2: base * (1 + u2 / 100), pv3: base * (1 + u3 / 100) };
-  };
-
-  const setEditF = (p: ProductoReal, campo: keyof EditPrecios, valor: string) => {
-    setPreciosEdit(prev => ({ ...prev, [p.id]: { ...defEdit(p), ...prev[p.id], [campo]: valor } }));
-  };
-
-  const applyMasivo = (campo: keyof EditPrecios, valor: string) => {
-    setPreciosEdit(prev => {
-      const next = { ...prev };
-      for (const p of productos) {
-        next[p.id] = { ...defEdit(p), ...prev[p.id], [campo]: valor };
-      }
-      return next;
-    });
-    setPopupMasivo(null);
-  };
-
-  const numFmt = (n: number) => n > 0 ? n.toLocaleString('es-AR', { maximumFractionDigits: 2 }) : '—';
-  const pctFmt = (n: number) => n > 0 ? `${n}%` : '—';
-
-  const handleActualizarPrecios = async () => {
-    if (!modoPrecios) {
-      setModoPrecios(true); setPreciosEdit({}); setMsgActualizar(''); return;
-    }
-    const modificados = Object.keys(preciosEdit).map(Number);
-    if (modificados.length === 0) { setModoPrecios(false); return; }
-    setActualizando(true);
+  // ── Guardar edición inline ────────────────────────────────────
+  const handleGuardar = async () => {
+    const modificados = Object.keys(edits).map(Number);
+    if (!modificados.length) { setModoEdit(false); return; }
+    setGuardando(true); setMsgGuardar('');
     try {
       const body = {
         cliente_id: clienteId,
         productos: modificados.map(id => {
           const p = productos.find(x => x.id === id)!;
-          const e = preciosEdit[id];
-          const { pv1, pv2, pv3 } = calcP(p);
+          const { pv1, pv2, pv3 } = calcRow(p);
           const pvFinal = pvActivo === 1 ? pv1 : pvActivo === 2 ? pv2 : pv3;
           return {
             id,
-            precio_costo:    parseFloat(e.precio_costo) || 0,
-            descuento_1:     parseFloat(e.dto_1) || 0,
-            descuento_2:     parseFloat(e.dto_2) || 0,
-            descuento_3:     parseFloat(e.dto_3) || 0,
-            impuesto_1:      parseFloat(e.imp_1) || 0,
-            impuesto_2:      parseFloat(e.imp_2) || 0,
-            iva:             parseFloat(e.iva) || 0,
-            utilidad_1:      parseFloat(e.utilidad_1) || 0,
-            utilidad_2:      parseFloat(e.utilidad_2) || 0,
-            utilidad_3:      parseFloat(e.utilidad_3) || 0,
-            precio_venta_final: pvFinal,
-            precio_venta_2:  pv2,
-            precio_venta_3:  pv3,
+            precio_costo:    n(getE(p, 'precio_costo')),
+            descuento_1:     n(getE(p, 'dto_1')),  descuento_2: n(getE(p, 'dto_2')), descuento_3: n(getE(p, 'dto_3')),
+            impuesto_1:      n(getE(p, 'imp_1')),  impuesto_2: n(getE(p, 'imp_2')),
+            iva:             n(getE(p, 'alicuota_iva')),
+            utilidad_1:      n(getE(p, 'utilidad_1')), utilidad_2: n(getE(p, 'utilidad_2')), utilidad_3: n(getE(p, 'utilidad_3')),
+            precio_venta_final: pvFinal, precio_venta_2: pv2, precio_venta_3: pv3,
+            marca:           getE(p, 'marca') || null,  rubro: getE(p, 'rubro') || null,
+            unidad_medida:   getE(p, 'unidad_medida') || null,
+            stock_minimo:    n(getE(p, 'stock_minimo')),
           };
         }),
       };
-      const r = await fetch(`${API}/api/superadmin/importador/actualizar-precios`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', 'x-superadmin-token': token },
-        body: JSON.stringify(body),
+      const r = await fetch(`${API}/api/superadmin/importador/actualizar-precios-v2`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json', 'x-superadmin-token': token }, body: JSON.stringify(body),
       });
       const d = await r.json();
-      if (r.ok && d.ok) {
-        setMsgActualizar(`✅ ${d.actualizados} precios actualizados`);
-        setModoPrecios(false); setPreciosEdit({});
-        cargarProductos(pagina);
-      } else {
-        setMsgActualizar(`❌ ${d.mensaje || 'Error al actualizar'}`);
-      }
-    } catch { setMsgActualizar('❌ Error de conexión'); }
-    finally { setActualizando(false); }
+      if (r.ok && d.ok) { setMsgGuardar(`✅ ${d.actualizados} actualizados`); setModoEdit(false); setEdits({}); cargarProductos(pagina); }
+      else setMsgGuardar(`❌ ${d.mensaje || 'Error'}`);
+    } catch { setMsgGuardar('❌ Error de conexión'); }
+    finally { setGuardando(false); }
   };
 
-  const hayFiltros   = busqueda || filtroProveedor || filtroMarca || filtroRubro || filtroEstado;
-  const hayFechas    = fechaDesde || fechaHasta;
+  // ── Acciones masivas ──────────────────────────────────────────
+  const handleMasivo = async () => {
+    if (!campoMasivo || seleccionados.size === 0) return;
+    const meta = CAMPOS_MASIVOS.find(c => c.campo === campoMasivo);
+    const valorParsed = meta?.tipo === 'number' ? parseFloat(valorMasivo) || 0
+      : meta?.tipo === 'bool' ? (valorMasivo === 'true') : valorMasivo;
+    setAplicandoMasivo(true);
+    try {
+      const r = await fetch(`${API}/api/superadmin/importador/actualizar-masivo`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json', 'x-superadmin-token': token },
+        body: JSON.stringify({ cliente_id: clienteId, ids: Array.from(seleccionados), campo: campoMasivo, valor: valorParsed }),
+      });
+      const d = await r.json();
+      if (r.ok && d.ok) { setSeleccionados(new Set()); cargarProductos(pagina); cargarFiltros(); }
+      else alert(d.mensaje || 'Error al aplicar');
+    } catch { alert('Error de conexión'); }
+    finally { setAplicandoMasivo(false); }
+  };
 
-  const filtrosDesc = [
-    busqueda && `Búsqueda: "${busqueda}"`,
-    filtroMarca && `Marca: ${filtroMarca}`,
-    filtroRubro && `Rubro: ${filtroRubro}`,
-    filtroEstado && `Estado: ${filtroEstado}`,
-    fechaDesde && `Desde: ${fechaDesde}`,
-    fechaHasta && `Hasta: ${fechaHasta}`,
-  ].filter(Boolean).join(' | ');
+  // ── Export ────────────────────────────────────────────────────
+  const handleExportar = async () => {
+    if (exportando) return;
+    setExportando(true);
+    try {
+      const params = buildParams();
+      const r = await fetch(`${API}/api/superadmin/importador/productos/${clienteId}/exportar?${params}`, { headers: { 'x-superadmin-token': token } });
+      if (!r.ok) { alert('Error al exportar'); return; }
+      const d = await r.json();
+      let XLSX: any = (window as any).XLSX;
+      if (!XLSX) {
+        await new Promise<void>((res, rej) => { const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'; s.onload = () => res(); s.onerror = rej; document.head.appendChild(s); });
+        XLSX = (window as any).XLSX;
+      }
+      const cabeceras = ['Código','Descripción','Marca','Proveedor','Rubro','PC Base','Dt1%','Dt2%','Dt3%','PC Final','Imp1%','Imp2%','IVA%','Ut1%','Ut2%','Ut3%','PV1','PV2','PV3','Stock','Stock Min','Unidad','EAN','Activo','F.Import'];
+      const filas = (d.productos || []).map((p: any) => {
+        const pcF = calcPcFinal(p.precio_costo||0, p.dto_1||0, p.dto_2||0, p.dto_3||0);
+        const base = pcF*(1+(p.imp_1||0)/100)*(1+(p.imp_2||0)/100)*(1+(p.alicuota_iva||0)/100);
+        return [p.codigo||'', p.descripcion||'', p.marca||'', p.proveedor||'', p.rubro||'',
+          p.precio_costo||0, p.dto_1||0, p.dto_2||0, p.dto_3||0, +pcF.toFixed(2),
+          p.imp_1||0, p.imp_2||0, p.alicuota_iva||0, p.utilidad_1||0, p.utilidad_2||0, p.utilidad_3||0,
+          +(base*(1+(p.utilidad_1||0)/100)).toFixed(2),
+          +(base*(1+(p.utilidad_2||0)/100)).toFixed(2),
+          +(base*(1+(p.utilidad_3||0)/100)).toFixed(2),
+          p.stock||0, p.stock_minimo||0, p.unidad_medida||'', p.ean||'',
+          p.activo?'Sí':'No', p.fecha_importacion?new Date(p.fecha_importacion).toLocaleDateString('es-AR'):''];
+      });
+      const ws = XLSX.utils.aoa_to_sheet([cabeceras, ...filas]);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Productos');
+      XLSX.writeFile(wb, `Productos_${getClienteNombre()}_${new Date().toISOString().slice(0,10)}.xlsx`);
+    } catch (e) { alert('Error al exportar'); }
+    finally { setExportando(false); }
+  };
+
+  // ── Render ────────────────────────────────────────────────────
+  const cantEdit = Object.keys(edits).length;
+  const cantSel  = seleccionados.size;
+  const hayFiltros = busqueda || filtroProveedor || filtroMarca || filtroRubro || filtroEstado || fechaDesde || fechaHasta;
+
+  const eInput = (p: ProductoReal, campo: keyof EditState, w = 60) => (
+    modoEdit ? (
+      <input type="number" step="any" style={{ ...inputSt, width: w, textAlign: 'right', padding: '3px 5px', fontSize: 11 }}
+        value={getE(p, campo)} onChange={e => setE(p, campo, e.target.value)} />
+    ) : null
+  );
+  const eText = (p: ProductoReal, campo: keyof EditState, w = 80) => (
+    modoEdit ? (
+      <input type="text" style={{ ...inputSt, width: w, padding: '3px 5px', fontSize: 11 }}
+        value={getE(p, campo)} onChange={e => setE(p, campo, e.target.value)} />
+    ) : null
+  );
 
   return (
-    <div style={{ minHeight: '100vh', backgroundColor: BG, padding: '28px' }}>
+    <div style={{ minHeight: '100vh', backgroundColor: BG }}>
+      {/* MODALS */}
+      {modalImportador && <ModalImportadorV2 onCerrar={() => setModalImportador(false)} onExito={() => { cargarProductos(1); cargarFiltros(); }} />}
+      {modalEditar && <ModalEditarProducto producto={modalEditar} proveedores={filtrosOpts.proveedores} clienteId={clienteId} token={token}
+        onCerrar={() => setModalEditar(null)}
+        onGuardado={updated => { setProductos(prev => prev.map(p => p.id === updated.id ? updated : p)); setModalEditar(null); }} />}
 
-      {/* ── POPUP MASIVO ─────────────────────────────────────────── */}
-      {popupMasivo && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.3)' }}
-          onClick={() => setPopupMasivo(null)}>
-          <div style={{ backgroundColor: '#fff', borderRadius: 12, padding: '20px 24px', boxShadow: '0 8px 32px rgba(0,0,0,0.2)', minWidth: 300 }}
-            onClick={e => e.stopPropagation()}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: NAVY, marginBottom: 14 }}>
-              Aplicar {popupMasivo.label} a todos los productos visibles
-            </div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <input type="number" autoFocus value={popupMasivo.valor}
-                onChange={e => setPopupMasivo(prev => prev ? { ...prev, valor: e.target.value } : null)}
-                onKeyDown={e => { if (e.key === 'Enter') applyMasivo(popupMasivo.campo, popupMasivo.valor); }}
-                style={{ ...selectStyle, width: 100, boxSizing: 'border-box' }} placeholder="0" />
-              <span style={{ color: GRAY, fontSize: 13 }}>%</span>
-              <button style={btnStyle(ORANGE)} onClick={() => applyMasivo(popupMasivo.campo, popupMasivo.valor)}>
-                Aplicar
+      {/* HEADER */}
+      <div style={{ backgroundColor: NAVY, padding: '14px 24px', display: 'flex', alignItems: 'center', gap: 12, position: 'sticky', top: 0, zIndex: 10 }}>
+        <button style={{ ...btnStyle('#2D3748', '#fff'), fontSize: 13 }} onClick={() => navigate('/roberto/dashboard')}>
+          ← Volver
+        </button>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: '#fff' }}>📦 Productos</div>
+          <div style={{ fontSize: 12, color: SEP }}>{cargando ? 'Cargando...' : `${total} productos`}</div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {modoEdit ? (
+            <>
+              <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                {([1,2,3] as const).map(v => (
+                  <label key={v} style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#fff', fontSize: 12, cursor: 'pointer' }}>
+                    <input type="radio" name="pvH" checked={pvActivo === v} onChange={() => setPvActivo(v)} style={{ accentColor: GREEN }} />PV{v}
+                  </label>
+                ))}
+              </div>
+              <button style={btnStyle(GREEN, '#fff', guardando || cantEdit === 0)} disabled={guardando || cantEdit === 0} onClick={handleGuardar}>
+                {guardando ? '⏳ Guardando...' : `✅ Guardar${cantEdit > 0 ? ` (${cantEdit})` : ''}`}
               </button>
-              <button style={btnStyle('#EDF2F7', GRAY)} onClick={() => setPopupMasivo(null)}>✕</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {modalAbierto && (
-        <ModalImportador
-          onCerrar={() => setModalAbierto(false)}
-          onExito={() => { cargarProductos(1); cargarFiltros(); }}
-        />
-      )}
-      {modalImprimir && (
-        <ModalImpresion
-          productos={productos}
-          nombreNegocio={nombreNegocio}
-          filtrosDesc={filtrosDesc}
-          onCerrar={() => setModalImprimir(false)}
-        />
-      )}
-      {modalProducto && (
-        <ModalProducto
-          producto={productoEditar}
-          proveedores={filtrosOpts.proveedores}
-          clienteId={clienteId}
-          token={token}
-          onCerrar={() => { setModalProducto(false); setProductoEditar(null); }}
-          onGuardado={() => { cargarProductos(pagina); cargarFiltros(); }}
-        />
-      )}
-      {productoDesactivar && (
-        <ModalConfirmarDesactivar
-          producto={productoDesactivar}
-          clienteId={clienteId}
-          token={token}
-          onCerrar={() => setProductoDesactivar(null)}
-          onConfirmado={() => { cargarProductos(pagina); }}
-        />
-      )}
-
-      {/* ── HEADER ─────────────────────────────────────────────── */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px', marginBottom: '22px' }}>
-        <div>
-          <h2 style={{ fontSize: '20px', fontWeight: 700, color: NAVY, margin: '0 0 3px' }}>📦 Productos</h2>
-          <p style={{ fontSize: '13px', color: GRAY, margin: 0 }}>
-            {cargandoLista ? 'Cargando...' : `${total} productos registrados`}
-          </p>
-        </div>
-        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-          <button style={btnStyle(GREEN)} onClick={() => { setProductoEditar(null); setModalProducto(true); }}>
-            ＋ Agregar producto
-          </button>
-          <button style={btnStyle(BLUE)} onClick={() => setModalAbierto(true)}>
-            📥 Importar Excel
-          </button>
-          {msgActualizar && (
-            <span style={{ fontSize: '12px', fontWeight: 600, color: msgActualizar.startsWith('✅') ? GREEN : RED, alignSelf: 'center' }}>
-              {msgActualizar}
-            </span>
+              <button style={btnStyle('#718096', '#fff')} onClick={() => { setModoEdit(false); setEdits({}); setMsgGuardar(''); }}>✗ Cancelar</button>
+            </>
+          ) : (
+            <button style={btnStyle(ORANGE)} onClick={() => { setModoEdit(true); setEdits({}); setMsgGuardar(''); }}>✏️ Editar precios</button>
           )}
-          <button style={btnStyle(actualizando ? GRAY : ORANGE, '#fff', actualizando)} disabled={actualizando} onClick={handleActualizarPrecios}>
-            {actualizando ? '⏳ Guardando...' : modoPrecios ? `✅ Guardar${Object.keys(preciosEdit).length > 0 ? ` (${Object.keys(preciosEdit).length})` : ''}` : '💲 Actualizar precios'}
-          </button>
-          {modoPrecios && !actualizando && (
-            <button style={btnStyle('#EDF2F7', GRAY)} onClick={() => { setModoPrecios(false); setPreciosEdit({}); setMsgActualizar(''); }}>
-              ✗ Cancelar
-            </button>
-          )}
-          <button style={btnStyle('#2F855A')} onClick={handleExportar} disabled={exportando}>
-            {exportando ? '⏳ Exportando...' : '📤 Exportar Excel'}
-          </button>
-          <button style={btnStyle(NAVY)} onClick={() => setModalImprimir(true)}>
-            🖨️ Imprimir / PDF
+          {msgGuardar && <span style={{ color: msgGuardar.startsWith('✅') ? '#9AE6B4' : '#FC8181', fontSize: 12, alignSelf: 'center' }}>{msgGuardar}</span>}
+          <button style={btnStyle(BLUE)} onClick={() => setModalImportador(true)}>📥 Importar Excel</button>
+          <button style={btnStyle('#2F855A', '#fff', exportando)} disabled={exportando} onClick={handleExportar}>
+            {exportando ? '⏳' : '📤 Exportar'}
           </button>
         </div>
       </div>
 
-      {/* ── BUSCADOR Y FILTROS ──────────────────────────────────── */}
-      <div style={{ backgroundColor: '#fff', borderRadius: '12px', boxShadow: '0 1px 4px rgba(0,0,0,0.07)', padding: '16px 20px', marginBottom: '16px' }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'flex-end' }}>
-          <div style={{ flex: '1 1 220px' }}>
-            <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: GRAY, textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '4px' }}>Buscar</label>
-            <input type="text" value={busqueda} onChange={e => setBusqueda(e.target.value)}
-              placeholder="Código o descripción..." style={{ ...selectStyle, width: '100%', boxSizing: 'border-box' }} />
+      {/* BARRA ACCIONES MASIVAS */}
+      {cantSel > 0 && (
+        <div style={{ backgroundColor: '#FFFBEB', borderBottom: `2px solid ${YELLOW}`, padding: '10px 24px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: NAVY }}>{cantSel} seleccionado{cantSel !== 1 ? 's' : ''}</span>
+          <select style={{ ...selectSt, width: 'auto', minWidth: 160, fontSize: 13 }} value={campoMasivo} onChange={e => { setCampoMasivo(e.target.value); setValorMasivo(''); }}>
+            <option value="">Seleccionar campo...</option>
+            {CAMPOS_MASIVOS.map(c => <option key={c.campo} value={c.campo}>{c.label}</option>)}
+          </select>
+          {campoMasivo && (() => {
+            const meta = CAMPOS_MASIVOS.find(c => c.campo === campoMasivo);
+            if (meta?.tipo === 'bool') return (
+              <select style={{ ...selectSt, width: 'auto', fontSize: 13 }} value={valorMasivo} onChange={e => setValorMasivo(e.target.value)}>
+                <option value="">—</option><option value="true">Activo</option><option value="false">Inactivo</option>
+              </select>
+            );
+            return <input type={meta?.tipo === 'number' ? 'number' : 'text'} step="any" placeholder="Valor..." style={{ ...inputSt, width: 120, fontSize: 13, padding: '6px 10px' }} value={valorMasivo} onChange={e => setValorMasivo(e.target.value)} />;
+          })()}
+          {campoMasivo && valorMasivo !== '' && (
+            <button style={btnStyle(ORANGE, '#fff', aplicandoMasivo)} disabled={aplicandoMasivo} onClick={handleMasivo}>
+              {aplicandoMasivo ? '⏳' : `Aplicar a ${cantSel}`}
+            </button>
+          )}
+          <button style={btnStyle('#EDF2F7', GRAY)} onClick={() => setSeleccionados(new Set())}>✕ Limpiar</button>
+        </div>
+      )}
+
+      {/* FILTROS */}
+      <div style={{ backgroundColor: '#fff', margin: '16px 16px 0', borderRadius: 12, padding: '14px 16px', boxShadow: '0 1px 4px rgba(0,0,0,0.07)' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'flex-end' }}>
+          <div style={{ flex: '1 1 200px' }}>
+            <label style={labelSt}>Buscar</label>
+            <input style={{ ...inputSt, fontSize: 13, padding: '7px 10px' }} value={busqueda} onChange={e => setBusqueda(e.target.value)} placeholder="Código o descripción..." />
           </div>
-          <div style={{ flex: '1 1 140px' }}>
-            <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: GRAY, textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '4px' }}>Proveedor</label>
-            <select value={filtroProveedor} onChange={e => { setFiltroProveedor(e.target.value); setPagina(1); }} style={selectStyle}>
+          <div style={{ flex: '1 1 130px' }}>
+            <label style={labelSt}>Proveedor</label>
+            <select style={{ ...selectSt, fontSize: 13, padding: '7px 10px' }} value={filtroProveedor} onChange={e => { setFiltroProveedor(e.target.value); setPagina(1); }}>
               <option value="">Todos</option>
               {filtrosOpts.proveedores.map(p => <option key={p.id} value={String(p.id)}>{p.nombre}</option>)}
             </select>
           </div>
-          <div style={{ flex: '1 1 140px' }}>
-            <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: GRAY, textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '4px' }}>Marca</label>
-            <select value={filtroMarca} onChange={e => { setFiltroMarca(e.target.value); setPagina(1); }} style={selectStyle}>
+          <div style={{ flex: '1 1 120px' }}>
+            <label style={labelSt}>Marca</label>
+            <select style={{ ...selectSt, fontSize: 13, padding: '7px 10px' }} value={filtroMarca} onChange={e => { setFiltroMarca(e.target.value); setPagina(1); }}>
               <option value="">Todas</option>
               {filtrosOpts.marcas.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
           </div>
-          <div style={{ flex: '1 1 140px' }}>
-            <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: GRAY, textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '4px' }}>Rubro</label>
-            <select value={filtroRubro} onChange={e => { setFiltroRubro(e.target.value); setPagina(1); }} style={selectStyle}>
+          <div style={{ flex: '1 1 120px' }}>
+            <label style={labelSt}>Rubro</label>
+            <select style={{ ...selectSt, fontSize: 13, padding: '7px 10px' }} value={filtroRubro} onChange={e => { setFiltroRubro(e.target.value); setPagina(1); }}>
               <option value="">Todos</option>
               {filtrosOpts.rubros.map(r => <option key={r} value={r}>{r}</option>)}
             </select>
           </div>
-          <div style={{ flex: '1 1 120px' }}>
-            <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: GRAY, textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '4px' }}>Estado</label>
-            <select value={filtroEstado} onChange={e => { setFiltroEstado(e.target.value); setPagina(1); }} style={selectStyle}>
-              <option value="">Todos</option>
-              <option value="activo">Activo</option>
-              <option value="inactivo">Inactivo</option>
+          <div style={{ flex: '1 1 100px' }}>
+            <label style={labelSt}>Estado</label>
+            <select style={{ ...selectSt, fontSize: 13, padding: '7px 10px' }} value={filtroEstado} onChange={e => { setFiltroEstado(e.target.value); setPagina(1); }}>
+              <option value="">Todos</option><option value="activo">Activo</option><option value="inactivo">Inactivo</option>
             </select>
           </div>
-          {hayFiltros && (
-            <button onClick={limpiarFiltros} style={{ ...btnStyle('#EDF2F7', GRAY), alignSelf: 'flex-end' }}>
-              Limpiar filtros
-            </button>
-          )}
-        </div>
-
-        {/* ── Filtros de fecha ── */}
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'flex-end', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #EDF2F7' }}>
           <div style={{ flex: '0 0 auto' }}>
-            <label style={labelSt}>Filtrar por fecha</label>
-            <select value={fechaTipo} onChange={e => setFechaTipo(e.target.value as 'importacion' | 'actualizacion')} style={{ ...selectStyle, width: 160 }}>
-              <option value="importacion">Fecha importación</option>
-              <option value="actualizacion">Fecha actualización</option>
+            <label style={labelSt}>Fecha tipo</label>
+            <select style={{ ...selectSt, fontSize: 13, padding: '7px 10px', width: 140 }} value={fechaTipo} onChange={e => setFechaTipo(e.target.value as 'importacion' | 'actualizacion')}>
+              <option value="importacion">Importación</option><option value="actualizacion">Actualización</option>
             </select>
           </div>
           <div style={{ flex: '0 0 auto' }}>
             <label style={labelSt}>Desde</label>
-            <input type="date" value={fechaDesde} onChange={e => { setFechaDesde(e.target.value); setPagina(1); }}
-              style={{ ...selectStyle, width: 150 }} />
+            <input type="date" style={{ ...inputSt, width: 140, fontSize: 13, padding: '7px 10px' }} value={fechaDesde} onChange={e => { setFechaDesde(e.target.value); setPagina(1); }} />
           </div>
           <div style={{ flex: '0 0 auto' }}>
             <label style={labelSt}>Hasta</label>
-            <input type="date" value={fechaHasta} onChange={e => { setFechaHasta(e.target.value); setPagina(1); }}
-              style={{ ...selectStyle, width: 150 }} />
+            <input type="date" style={{ ...inputSt, width: 140, fontSize: 13, padding: '7px 10px' }} value={fechaHasta} onChange={e => { setFechaHasta(e.target.value); setPagina(1); }} />
           </div>
-          {hayFechas && (
-            <button onClick={limpiarFechas} style={{ ...btnStyle('#EDF2F7', GRAY), alignSelf: 'flex-end' }}>
-              Limpiar fechas
+          {hayFiltros && (
+            <button style={btnStyle('#EDF2F7', GRAY)} onClick={() => { setBusqueda(''); setFiltroProveedor(''); setFiltroMarca(''); setFiltroRubro(''); setFiltroEstado(''); setFechaDesde(''); setFechaHasta(''); }}>
+              ✕ Limpiar filtros
             </button>
           )}
         </div>
       </div>
 
-      {/* ── TABLA ───────────────────────────────────────────────── */}
-      <div style={{ backgroundColor: '#fff', borderRadius: '12px', boxShadow: '0 1px 4px rgba(0,0,0,0.07)', overflow: 'hidden' }}>
-        {cargandoLista ? (
-          <div style={{ padding: '48px 24px', textAlign: 'center', color: GRAY, fontSize: '14px' }}>
-            ⏳ Cargando productos...
-          </div>
-        ) : productos.length > 0 ? (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', minWidth: '2000px' }}>
-              <thead>
-                <tr style={{ backgroundColor: '#EBF4FF' }}>
-                  {/* 1 Imagen */}
-                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>Img</th>
-                  {/* 2 Código */}
-                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>Código</th>
-                  {/* 3 Descripción */}
-                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap', minWidth: 160 }}>Descripción</th>
-                  {/* 4 Marca */}
-                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>Marca</th>
-                  {/* 5 Rubro */}
-                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>Rubro</th>
-                  {/* 6 PC Base */}
-                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>PC Base</th>
-                  {/* 7 Dt1 */}
-                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>Dt 1%</th>
-                  {/* 8 Dt2 */}
-                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>Dt 2%</th>
-                  {/* 9 Dt3 */}
-                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>Dt 3%</th>
-                  {/* 10 PC Final */}
-                  <th style={{ padding: '8px 10px', fontWeight: 600, color: BLUE, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap', backgroundColor: '#EBF8FF' }}>PC Final</th>
-                  {/* 11 Imp1 */}
-                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>Imp 1%</th>
-                  {/* 12 Imp2 */}
-                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>Imp 2%</th>
-                  {/* 13 IVA */}
-                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>IVA%</th>
-                  {/* 14 Ut1 */}
-                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>
-                    Ut 1% {modoPrecios && <button onClick={() => setPopupMasivo({ campo: 'utilidad_1', label: 'Ut 1', valor: '' })} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 11, padding: '0 2px' }}>✏️</button>}
+      {/* TABLA */}
+      <div style={{ margin: '12px 16px 16px', backgroundColor: '#fff', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.07)', overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ minWidth: 2400, borderCollapse: 'collapse', width: '100%' }}>
+            <thead>
+              <tr>
+                <th style={{ ...thSt(), width: 36, textAlign: 'center' }}>
+                  <input type="checkbox" checked={seleccionados.size === productos.length && productos.length > 0} onChange={toggleTodos} style={{ accentColor: BLUE }} />
+                </th>
+                <th style={{ ...thSt(), width: 60 }}>Img</th>
+                {COLS.map(c => (
+                  <th key={c.key} style={{ ...thSt(ordenCol === c.key), width: c.width, cursor: c.key.startsWith('_') ? 'default' : 'pointer' }}
+                    onClick={() => handleOrden(c.key)}>
+                    {c.label} {ordenCol === c.key ? (ordenDir === 'asc' ? '↑' : '↓') : ''}
+                    {(c.key === '_pv1' || c.key === '_pv2' || c.key === '_pv3') && modoEdit && (
+                      <span style={{ fontSize: 9, color: pvActivo === parseInt(c.key.slice(-1)) ? GREEN : GRAY }}>
+                        {pvActivo === parseInt(c.key.slice(-1)) ? ' ★' : ''}
+                      </span>
+                    )}
                   </th>
-                  {/* 15 Ut2 */}
-                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>
-                    Ut 2% {modoPrecios && <button onClick={() => setPopupMasivo({ campo: 'utilidad_2', label: 'Ut 2', valor: '' })} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 11, padding: '0 2px' }}>✏️</button>}
-                  </th>
-                  {/* 16 Ut3 */}
-                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>
-                    Ut 3% {modoPrecios && <button onClick={() => setPopupMasivo({ campo: 'utilidad_3', label: 'Ut 3', valor: '' })} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 11, padding: '0 2px' }}>✏️</button>}
-                  </th>
-                  {/* 17 PV1 */}
-                  <th style={{ padding: '8px 6px', fontWeight: 600, color: GREEN, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap', backgroundColor: '#F0FFF4' }}>
-                    <div>PV1</div>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer', fontSize: 10, fontWeight: 400, color: pvActivo === 1 ? BLUE : GRAY }}>
-                      <input type="radio" name="pvActivo" checked={pvActivo === 1} onChange={() => setPvActivo(1)} style={{ width: 11, height: 11, cursor: 'pointer' }} />activo
-                    </label>
-                  </th>
-                  {/* 18 PV2 */}
-                  <th style={{ padding: '8px 6px', fontWeight: 600, color: GREEN, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap', backgroundColor: '#F0FFF4' }}>
-                    <div>PV2</div>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer', fontSize: 10, fontWeight: 400, color: pvActivo === 2 ? BLUE : GRAY }}>
-                      <input type="radio" name="pvActivo" checked={pvActivo === 2} onChange={() => setPvActivo(2)} style={{ width: 11, height: 11, cursor: 'pointer' }} />activo
-                    </label>
-                  </th>
-                  {/* 19 PV3 */}
-                  <th style={{ padding: '8px 6px', fontWeight: 600, color: GREEN, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap', backgroundColor: '#F0FFF4' }}>
-                    <div>PV3</div>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer', fontSize: 10, fontWeight: 400, color: pvActivo === 3 ? BLUE : GRAY }}>
-                      <input type="radio" name="pvActivo" checked={pvActivo === 3} onChange={() => setPvActivo(3)} style={{ width: 11, height: 11, cursor: 'pointer' }} />activo
-                    </label>
-                  </th>
-                  {/* 20 Stock */}
-                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>Stock</th>
-                  {/* 21 Estado */}
-                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, borderRight: '1px solid rgba(99,179,237,0.3)', whiteSpace: 'nowrap' }}>Estado</th>
-                  {/* 22 Acciones */}
-                  <th style={{ padding: '8px 10px', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, whiteSpace: 'nowrap' }}>Acciones</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(() => {
-                  const einSt: React.CSSProperties = { width: 64, border: '1.5px solid #CBD5E0', borderRadius: 4, padding: '3px 5px', fontSize: '11px', fontFamily: 'monospace', backgroundColor: '#FEFEFE', boxSizing: 'border-box' };
-                  const tdSt = (extra?: React.CSSProperties): React.CSSProperties => ({
-                    padding: '7px 8px', borderRight: '1px solid rgba(99,179,237,0.15)', fontFamily: 'monospace', fontSize: '11px', ...extra,
-                  });
-                  return productos.map((p, idx) => {
-                    const stockBajo = Number(p.stock) <= Number(p.stock_minimo) && Number(p.stock_minimo) > 0;
-                    const { pcFinal, pv1, pv2, pv3 } = calcP(p);
-                    const rowBg = idx % 2 === 0 ? '#fff' : '#F7FAFC';
-                    return (
-                      <tr key={p.id} style={{ backgroundColor: rowBg }}
-                        onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#EBF8FF'; }}
-                        onMouseLeave={e => { e.currentTarget.style.backgroundColor = rowBg; }}>
-                        {/* 1 Imagen */}
-                        <td style={{ padding: '6px 8px', borderRight: '1px solid rgba(99,179,237,0.15)' }}>
-                          {p.imagen_url
-                            ? <img src={p.imagen_url} alt="" style={{ width: 36, height: 36, objectFit: 'cover', borderRadius: 4 }} />
-                            : <div style={{ width: 36, height: 36, backgroundColor: '#EDF2F7', borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16 }}>📦</div>}
-                        </td>
-                        {/* 2 Código */}
-                        <td style={tdSt({ color: GRAY })}>{p.codigo || '—'}</td>
-                        {/* 3 Descripción */}
-                        <td style={{ padding: '7px 8px', fontWeight: 500, color: TEXT, borderRight: '1px solid rgba(99,179,237,0.15)', maxWidth: 180 }}>
-                          <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12 }}>{p.descripcion}</div>
-                          {p.descripcion_corta && <div style={{ fontSize: 10, color: GRAY }}>{p.descripcion_corta}</div>}
-                        </td>
-                        {/* 4 Marca */}
-                        <td style={tdSt({ fontFamily: 'inherit', fontSize: 11, color: TEXT })}>{p.marca || '—'}</td>
-                        {/* 5 Rubro */}
-                        <td style={tdSt({ fontFamily: 'inherit', fontSize: 11, color: GRAY })}>{p.rubro || '—'}</td>
-                        {/* 6 PC Base (editable) */}
-                        <td style={tdSt()}>
-                          {modoPrecios
-                            ? <input type="number" value={preciosEdit[p.id]?.precio_costo ?? String(p.precio_costo || 0)} onChange={e => setEditF(p, 'precio_costo', e.target.value)} style={einSt} />
-                            : numFmt(p.precio_costo)}
-                        </td>
-                        {/* 7 Dt1 (editable) */}
-                        <td style={tdSt()}>
-                          {modoPrecios
-                            ? <input type="number" value={preciosEdit[p.id]?.dto_1 ?? String(p.dto_1 || 0)} onChange={e => setEditF(p, 'dto_1', e.target.value)} style={einSt} />
-                            : pctFmt(p.dto_1)}
-                        </td>
-                        {/* 8 Dt2 (editable) */}
-                        <td style={tdSt()}>
-                          {modoPrecios
-                            ? <input type="number" value={preciosEdit[p.id]?.dto_2 ?? String(p.dto_2 || 0)} onChange={e => setEditF(p, 'dto_2', e.target.value)} style={einSt} />
-                            : pctFmt(p.dto_2)}
-                        </td>
-                        {/* 9 Dt3 (editable) */}
-                        <td style={tdSt()}>
-                          {modoPrecios
-                            ? <input type="number" value={preciosEdit[p.id]?.dto_3 ?? String(p.dto_3 || 0)} onChange={e => setEditF(p, 'dto_3', e.target.value)} style={einSt} />
-                            : pctFmt(p.dto_3)}
-                        </td>
-                        {/* 10 PC Final (calculado) */}
-                        <td style={tdSt({ color: BLUE, fontWeight: 600, backgroundColor: '#EBF8FF' })}>
-                          {numFmt(pcFinal)}
-                        </td>
-                        {/* 11 Imp1 (editable) */}
-                        <td style={tdSt()}>
-                          {modoPrecios
-                            ? <input type="number" value={preciosEdit[p.id]?.imp_1 ?? String(p.imp_1 || 0)} onChange={e => setEditF(p, 'imp_1', e.target.value)} style={einSt} />
-                            : pctFmt(p.imp_1)}
-                        </td>
-                        {/* 12 Imp2 (editable) */}
-                        <td style={tdSt()}>
-                          {modoPrecios
-                            ? <input type="number" value={preciosEdit[p.id]?.imp_2 ?? String(p.imp_2 || 0)} onChange={e => setEditF(p, 'imp_2', e.target.value)} style={einSt} />
-                            : pctFmt(p.imp_2)}
-                        </td>
-                        {/* 13 IVA (editable) */}
-                        <td style={tdSt()}>
-                          {modoPrecios
-                            ? <input type="number" value={preciosEdit[p.id]?.iva ?? String(p.alicuota_iva || 0)} onChange={e => setEditF(p, 'iva', e.target.value)} style={einSt} />
-                            : pctFmt(p.alicuota_iva)}
-                        </td>
-                        {/* 14 Ut1 (editable) */}
-                        <td style={tdSt()}>
-                          {modoPrecios
-                            ? <input type="number" value={preciosEdit[p.id]?.utilidad_1 ?? String(p.utilidad_1 || 0)} onChange={e => setEditF(p, 'utilidad_1', e.target.value)} style={einSt} />
-                            : pctFmt(p.utilidad_1)}
-                        </td>
-                        {/* 15 Ut2 (editable) */}
-                        <td style={tdSt()}>
-                          {modoPrecios
-                            ? <input type="number" value={preciosEdit[p.id]?.utilidad_2 ?? String(p.utilidad_2 || 0)} onChange={e => setEditF(p, 'utilidad_2', e.target.value)} style={einSt} />
-                            : pctFmt(p.utilidad_2)}
-                        </td>
-                        {/* 16 Ut3 (editable) */}
-                        <td style={tdSt()}>
-                          {modoPrecios
-                            ? <input type="number" value={preciosEdit[p.id]?.utilidad_3 ?? String(p.utilidad_3 || 0)} onChange={e => setEditF(p, 'utilidad_3', e.target.value)} style={einSt} />
-                            : pctFmt(p.utilidad_3)}
-                        </td>
-                        {/* 17 PV1 (calculado) */}
-                        <td style={tdSt({ color: pvActivo === 1 ? GREEN : GRAY, fontWeight: pvActivo === 1 ? 700 : 400, backgroundColor: '#F0FFF4' })}>
-                          ${numFmt(pv1)}
-                          {pvActivo === 1 && <span style={{ fontSize: 9, color: GREEN, display: 'block', fontFamily: 'inherit' }}>● activo</span>}
-                        </td>
-                        {/* 18 PV2 (calculado) */}
-                        <td style={tdSt({ color: pvActivo === 2 ? GREEN : GRAY, fontWeight: pvActivo === 2 ? 700 : 400, backgroundColor: '#F0FFF4' })}>
-                          ${numFmt(pv2)}
-                          {pvActivo === 2 && <span style={{ fontSize: 9, color: GREEN, display: 'block', fontFamily: 'inherit' }}>● activo</span>}
-                        </td>
-                        {/* 19 PV3 (calculado) */}
-                        <td style={tdSt({ color: pvActivo === 3 ? GREEN : GRAY, fontWeight: pvActivo === 3 ? 700 : 400, backgroundColor: '#F0FFF4' })}>
-                          ${numFmt(pv3)}
-                          {pvActivo === 3 && <span style={{ fontSize: 9, color: GREEN, display: 'block', fontFamily: 'inherit' }}>● activo</span>}
-                        </td>
-                        {/* 20 Stock */}
-                        <td style={{ padding: '7px 8px', textAlign: 'center', borderRight: '1px solid rgba(99,179,237,0.15)' }}>
-                          <span style={{ display: 'inline-block', padding: '2px 6px', borderRadius: 10, fontSize: 11, fontWeight: 700, backgroundColor: stockBajo ? '#FFF5F5' : '#F0FFF4', color: stockBajo ? RED : GREEN }}>
-                            {Number(p.stock || 0)}
-                          </span>
-                        </td>
-                        {/* 21 Estado */}
-                        <td style={{ padding: '7px 8px', borderRight: '1px solid rgba(99,179,237,0.15)' }}>
-                          <BadgeEstado activo={p.activo} />
-                        </td>
-                        {/* 22 Acciones */}
-                        <td style={{ padding: '7px 8px' }}>
-                          <div style={{ display: 'flex', gap: 4 }}>
-                            <button onClick={() => { setProductoEditar(p); setModalProducto(true); }}
-                              style={{ backgroundColor: '#EBF4FF', color: BLUE, border: 'none', borderRadius: 4, padding: '4px 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
-                              ✏️
-                            </button>
-                            <button onClick={() => setProductoDesactivar(p)}
-                              style={{ backgroundColor: '#FFF5F5', color: RED, border: 'none', borderRadius: 4, padding: '4px 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
-                              🗑️
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  });
-                })()}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div style={{ padding: '64px 24px', textAlign: 'center' }}>
-            <div style={{ fontSize: '56px', marginBottom: '16px' }}>📦</div>
-            <h3 style={{ fontSize: '18px', fontWeight: 700, color: NAVY, margin: '0 0 8px' }}>
-              {hayFiltros ? 'Sin resultados' : 'No hay productos cargados'}
-            </h3>
-            <p style={{ fontSize: '14px', color: GRAY, margin: '0 0 28px', lineHeight: '1.6' }}>
-              {hayFiltros ? 'Probá cambiando los filtros.' : 'Importá tu primera lista desde Excel\no agregá productos manualmente.'}
-            </p>
-            {!hayFiltros && (
-              <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
-                <button style={btnStyle(GREEN)} onClick={() => setModalAbierto(true)}>
-                  📥 Importar Excel
-                </button>
-                <button style={btnStyle(BLUE)} onClick={() => alert('Agregar manual — próximamente')}>
-                  ＋ Agregar manual
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+                ))}
+                <th style={{ ...thSt(), width: 90 }}>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cargando ? (
+                <tr><td colSpan={COLS.length + 3} style={{ textAlign: 'center', padding: 32, color: GRAY, fontSize: 14 }}>Cargando...</td></tr>
+              ) : productosSorted.length === 0 ? (
+                <tr><td colSpan={COLS.length + 3} style={{ textAlign: 'center', padding: 32, color: GRAY, fontSize: 14 }}>Sin productos</td></tr>
+              ) : productosSorted.map(p => {
+                const { pcF, pv1, pv2, pv3 } = calcRow(p);
+                const isSel = seleccionados.has(p.id);
+                const rowBg = isSel ? '#EBF8FF' : '#fff';
+                const td = { ...tdSt, backgroundColor: rowBg };
+                const calcTdR = { ...calcTd, backgroundColor: isSel ? '#C6E6FF' : CALC_BG };
+                const calcTd2R = { ...calcTd2, backgroundColor: isSel ? '#B2F5D6' : CALC_BG2 };
 
-      {/* ── PAGINACIÓN ─────────────────────────────────────────── */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '16px', flexWrap: 'wrap', gap: '10px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: GRAY }}>
-          <span>Filas por página:</span>
-          {POR_PAGINA_OPCIONES.map(n => (
-            <button key={n} onClick={() => { setPorPagina(n); setPagina(1); }}
-              style={{ backgroundColor: porPagina === n ? BLUE : '#EDF2F7', color: porPagina === n ? '#fff' : GRAY, border: 'none', borderRadius: '6px', padding: '4px 10px', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>
-              {n}
-            </button>
-          ))}
+                return (
+                  <tr key={p.id} style={{ backgroundColor: rowBg }} onDoubleClick={() => !modoEdit && setModalEditar(p)}>
+                    <td style={{ ...td, textAlign: 'center', width: 36 }}>
+                      <input type="checkbox" checked={isSel} onChange={() => toggleSel(p.id)} style={{ accentColor: BLUE }} />
+                    </td>
+                    <td style={{ ...td, width: 60, textAlign: 'center' }}>
+                      {p.imagen_url
+                        ? <img src={p.imagen_url} alt="" style={{ width: 36, height: 36, objectFit: 'contain', borderRadius: 4 }} onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                        : <span style={{ fontSize: 20 }}>📦</span>}
+                    </td>
+                    {/* Código */}
+                    <td style={{ ...td, width: 90, fontWeight: 600, color: NAVY }}>{p.codigo || '—'}</td>
+                    {/* Descripción */}
+                    <td style={{ ...td, width: 200, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }} title={p.descripcion}>{p.descripcion}</td>
+                    {/* Marca */}
+                    <td style={{ ...td, width: 90 }}>
+                      {modoEdit ? eText(p, 'marca', 85) : (p.marca || '—')}
+                    </td>
+                    {/* Rubro */}
+                    <td style={{ ...td, width: 90 }}>
+                      {modoEdit ? eText(p, 'rubro', 85) : (p.rubro || '—')}
+                    </td>
+                    {/* Proveedor */}
+                    <td style={{ ...td, width: 100 }}>{provNombre(p.proveedor_id)}</td>
+                    {/* EAN */}
+                    <td style={{ ...td, width: 110 }}>
+                      {modoEdit ? eText(p, 'ean', 105) : (p.ean || '—')}
+                    </td>
+                    {/* PC Base */}
+                    <td style={{ ...td, width: 80, textAlign: 'right' }}>
+                      {modoEdit ? eInput(p, 'precio_costo', 74) : `$${numFmt(p.precio_costo)}`}
+                    </td>
+                    {/* Dt1 */}
+                    <td style={{ ...td, width: 60, textAlign: 'right' }}>
+                      {modoEdit ? eInput(p, 'dto_1', 54) : pctFmt(p.dto_1)}
+                    </td>
+                    {/* Dt2 */}
+                    <td style={{ ...td, width: 60, textAlign: 'right' }}>
+                      {modoEdit ? eInput(p, 'dto_2', 54) : pctFmt(p.dto_2)}
+                    </td>
+                    {/* Dt3 */}
+                    <td style={{ ...td, width: 60, textAlign: 'right' }}>
+                      {modoEdit ? eInput(p, 'dto_3', 54) : pctFmt(p.dto_3)}
+                    </td>
+                    {/* PC Final */}
+                    <td style={{ ...calcTdR, width: 80, textAlign: 'right' }}>${numFmt(pcF)}</td>
+                    {/* Imp1 */}
+                    <td style={{ ...td, width: 60, textAlign: 'right' }}>
+                      {modoEdit ? eInput(p, 'imp_1', 54) : pctFmt(p.imp_1)}
+                    </td>
+                    {/* Imp2 */}
+                    <td style={{ ...td, width: 60, textAlign: 'right' }}>
+                      {modoEdit ? eInput(p, 'imp_2', 54) : pctFmt(p.imp_2)}
+                    </td>
+                    {/* IVA */}
+                    <td style={{ ...td, width: 60, textAlign: 'right' }}>
+                      {modoEdit ? eInput(p, 'alicuota_iva', 54) : pctFmt(p.alicuota_iva)}
+                    </td>
+                    {/* Ut1 */}
+                    <td style={{ ...td, width: 60, textAlign: 'right' }}>
+                      {modoEdit ? eInput(p, 'utilidad_1', 54) : pctFmt(p.utilidad_1)}
+                    </td>
+                    {/* Ut2 */}
+                    <td style={{ ...td, width: 60, textAlign: 'right' }}>
+                      {modoEdit ? eInput(p, 'utilidad_2', 54) : pctFmt(p.utilidad_2)}
+                    </td>
+                    {/* Ut3 */}
+                    <td style={{ ...td, width: 60, textAlign: 'right' }}>
+                      {modoEdit ? eInput(p, 'utilidad_3', 54) : pctFmt(p.utilidad_3)}
+                    </td>
+                    {/* PV1 */}
+                    <td style={{ ...calcTd2R, width: 80, textAlign: 'right', fontWeight: pvActivo === 1 ? 700 : 400 }}>${numFmt(pv1)}</td>
+                    {/* PV2 */}
+                    <td style={{ ...calcTd2R, width: 80, textAlign: 'right', fontWeight: pvActivo === 2 ? 700 : 400 }}>${numFmt(pv2)}</td>
+                    {/* PV3 */}
+                    <td style={{ ...calcTd2R, width: 80, textAlign: 'right', fontWeight: pvActivo === 3 ? 700 : 400 }}>${numFmt(pv3)}</td>
+                    {/* Stock */}
+                    <td style={{ ...td, width: 60, textAlign: 'right' }}>{numFmt(p.stock_actual, 0)}</td>
+                    {/* Stock Min */}
+                    <td style={{ ...td, width: 70, textAlign: 'right' }}>
+                      {modoEdit ? eInput(p, 'stock_minimo', 64) : numFmt(p.stock_minimo, 0)}
+                    </td>
+                    {/* Unidad */}
+                    <td style={{ ...td, width: 70 }}>
+                      {modoEdit ? eText(p, 'unidad_medida', 64) : (p.unidad_medida || '—')}
+                    </td>
+                    {/* F.Import */}
+                    <td style={{ ...td, width: 90 }}>{fmtFecha(p.creado_en)}</td>
+                    {/* Estado */}
+                    <td style={{ ...td, width: 75 }}><BadgeEstado activo={p.activo} /></td>
+                    {/* Acciones */}
+                    <td style={{ ...td, width: 90 }}>
+                      <button style={{ ...btnStyle(BLUE, '#fff'), padding: '4px 10px', fontSize: 11 }} onClick={() => setModalEditar(p)}>✏️ Editar</button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: GRAY }}>
-          <span>{total > 0 ? `${(pagina - 1) * porPagina + 1}–${Math.min(pagina * porPagina, total)} de ${total}` : '0 productos'}</span>
-          <button disabled={pagina <= 1} onClick={() => irAPagina(pagina - 1)}
-            style={{ backgroundColor: pagina <= 1 ? '#EDF2F7' : NAVY, color: pagina <= 1 ? GRAY : '#fff', border: 'none', borderRadius: '6px', padding: '5px 14px', fontSize: '12px', fontWeight: 600, cursor: pagina <= 1 ? 'not-allowed' : 'pointer' }}>
-            ← Anterior
-          </button>
-          <button disabled={pagina >= totalPaginas} onClick={() => irAPagina(pagina + 1)}
-            style={{ backgroundColor: pagina >= totalPaginas ? '#EDF2F7' : NAVY, color: pagina >= totalPaginas ? GRAY : '#fff', border: 'none', borderRadius: '6px', padding: '5px 14px', fontSize: '12px', fontWeight: 600, cursor: pagina >= totalPaginas ? 'not-allowed' : 'pointer' }}>
-            Siguiente →
-          </button>
+
+        {/* Paginación */}
+        <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderTop: '1px solid #EDF2F7', flexWrap: 'wrap', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 13, color: GRAY }}>Filas por página:</span>
+            <select style={{ ...selectSt, width: 70, fontSize: 13, padding: '4px 8px' }} value={porPagina} onChange={e => { setPorPagina(Number(e.target.value)); setPagina(1); }}>
+              {POR_PAG_OPTS.map(n => <option key={n} value={n}>{n}</option>)}
+            </select>
+            <span style={{ fontSize: 13, color: GRAY }}>Total: <strong>{total}</strong></span>
+          </div>
+          <div style={{ display: 'flex', gap: 4 }}>
+            <button style={btnStyle('#EDF2F7', GRAY, pagina <= 1)} disabled={pagina <= 1} onClick={() => { setPagina(1); cargarProductos(1); }}>«</button>
+            <button style={btnStyle('#EDF2F7', GRAY, pagina <= 1)} disabled={pagina <= 1} onClick={() => { const p = pagina - 1; setPagina(p); cargarProductos(p); }}>‹</button>
+            <span style={{ fontSize: 13, color: TEXT, alignSelf: 'center', padding: '0 8px' }}>Pág {pagina} / {totalPags}</span>
+            <button style={btnStyle('#EDF2F7', GRAY, pagina >= totalPags)} disabled={pagina >= totalPags} onClick={() => { const p = pagina + 1; setPagina(p); cargarProductos(p); }}>›</button>
+            <button style={btnStyle('#EDF2F7', GRAY, pagina >= totalPags)} disabled={pagina >= totalPags} onClick={() => { setPagina(totalPags); cargarProductos(totalPags); }}>»</button>
+          </div>
         </div>
       </div>
     </div>
