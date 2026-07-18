@@ -795,6 +795,226 @@ router.delete('/productos/:cliente_id/:id', async (req, res) => {
   }
 });
 
+// ════════════════════════════════════════════════════════════════
+// HELPERS — IMPORTADOR LIBRE
+// ════════════════════════════════════════════════════════════════
+
+function leerExcelConMapeoLibre(buffer, mapeo) {
+  const filas = leerExcel(buffer);
+  if (!filas.length) return [];
+  const headerIdx = detectarEncabezado(filas);
+  const enc = filas[headerIdx].map(c => String(c).trim());
+  const datos = filas.slice(headerIdx + 1).filter(f => f.some(c => c !== '' && c != null));
+  return datos.map(fila => ({
+    codigo:         val(fila, mapeo.codigo, enc),
+    descripcion:    val(fila, mapeo.descripcion, enc),
+    precio_costo:   val(fila, mapeo.precio_costo, enc),
+    precio_venta_1: val(fila, mapeo.precio_venta_1, enc),
+    precio_venta_2: val(fila, mapeo.precio_venta_2, enc),
+    precio_venta_3: val(fila, mapeo.precio_venta_3, enc),
+    marca:          val(fila, mapeo.marca, enc),
+    rubro:          val(fila, mapeo.rubro, enc),
+    unidad_medida:  val(fila, mapeo.unidad_medida, enc),
+    ean:            val(fila, mapeo.ean, enc),
+    descuento_1:    val(fila, mapeo.descuento_1, enc),
+    descuento_2:    val(fila, mapeo.descuento_2, enc),
+    descuento_3:    val(fila, mapeo.descuento_3, enc),
+    iva:            val(fila, mapeo.iva, enc),
+  }));
+}
+
+function toNum(str) {
+  if (!str) return null;
+  const n = parseFloat(String(str).replace(/[^0-9.,\-]/g, '').replace(',', '.'));
+  return isNaN(n) ? null : n;
+}
+
+async function getOrCreateProveedor(cliente_id, nombre) {
+  const row = await pool.query(
+    'SELECT id FROM proveedores WHERE cliente_id=$1 AND nombre=$2 LIMIT 1',
+    [cliente_id, nombre.trim()]
+  );
+  if (row.rows[0]) return row.rows[0].id;
+  const ins = await pool.query(
+    'INSERT INTO proveedores (cliente_id, nombre, activo) VALUES ($1,$2,true) RETURNING id',
+    [cliente_id, nombre.trim()]
+  );
+  return ins.rows[0].id;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ENDPOINT LIBRE 1 — POST /analizar-libre
+// ═══════════════════════════════════════════════════════════════
+router.post('/analizar-libre', upload.single('archivo'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ mensaje: 'Se requiere un archivo Excel' });
+    const filas = leerExcel(req.file.buffer);
+    if (!filas.length) return res.status(400).json({ mensaje: 'El archivo está vacío' });
+    const headerIdx = detectarEncabezado(filas);
+    const columnas = filas[headerIdx].map(c => String(c).trim()).filter(c => c !== '');
+    const datos = filas.slice(headerIdx + 1).filter(f => f.some(c => c !== '' && c != null));
+    const muestra = datos.slice(0, 5).map(fila =>
+      Object.fromEntries(columnas.map((col, i) => [col, fila[i] != null ? String(fila[i]) : '']))
+    );
+    res.json({ columnas, muestra, total_filas: datos.length, proveedor_sugerido: null });
+  } catch (err) {
+    console.error('POST /analizar-libre error:', err.message);
+    res.status(500).json({ mensaje: 'Error al analizar', detalle: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// ENDPOINT LIBRE 2 — GET /mapeo-proveedor/:cliente_id/:proveedor
+// ═══════════════════════════════════════════════════════════════
+router.get('/mapeo-proveedor/:cliente_id/:proveedor', async (req, res) => {
+  try {
+    const { cliente_id, proveedor } = req.params;
+    const r = await pool.query(
+      `SELECT mapeo FROM proveedores_mapeo_excel
+       WHERE cliente_id=$1 AND proveedor_nombre=$2
+       ORDER BY actualizado_en DESC LIMIT 1`,
+      [cliente_id, decodeURIComponent(proveedor)]
+    );
+    res.json({ mapeo: r.rows[0]?.mapeo || null });
+  } catch (err) {
+    console.error('GET /mapeo-proveedor error:', err.message);
+    res.status(500).json({ mensaje: 'Error', detalle: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// ENDPOINT LIBRE 3 — POST /mapeo-proveedor/:cliente_id
+// ═══════════════════════════════════════════════════════════════
+router.post('/mapeo-proveedor/:cliente_id', async (req, res) => {
+  try {
+    const { cliente_id } = req.params;
+    const { proveedor, mapeo } = req.body;
+    if (!cliente_id || !proveedor || !mapeo) return res.status(400).json({ mensaje: 'Faltan campos' });
+    const proveedor_id = await getOrCreateProveedor(cliente_id, proveedor);
+    const existe = await pool.query(
+      'SELECT id FROM proveedores_mapeo_excel WHERE cliente_id=$1 AND proveedor_id=$2 LIMIT 1',
+      [cliente_id, proveedor_id]
+    );
+    if (existe.rows[0]) {
+      await pool.query(
+        `UPDATE proveedores_mapeo_excel
+         SET mapeo=$1, proveedor_nombre=$2, actualizado_en=now()
+         WHERE cliente_id=$3 AND proveedor_id=$4`,
+        [JSON.stringify(mapeo), proveedor.trim(), cliente_id, proveedor_id]
+      );
+    } else {
+      await pool.query(
+        `INSERT INTO proveedores_mapeo_excel (cliente_id, proveedor_id, proveedor_nombre, mapeo, fila_encabezado)
+         VALUES ($1,$2,$3,$4,0)`,
+        [cliente_id, proveedor_id, proveedor.trim(), JSON.stringify(mapeo)]
+      );
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('POST /mapeo-proveedor error:', err.message);
+    res.status(500).json({ mensaje: 'Error al guardar mapeo', detalle: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// ENDPOINT LIBRE 4 — POST /aplicar-libre
+// ═══════════════════════════════════════════════════════════════
+router.post('/aplicar-libre', (req, res, next) => { req.setTimeout(300000); next(); }, async (req, res) => {
+  try {
+    const { cliente_id, proveedor_nombre, archivo_base64, mapeo } = req.body;
+    if (!cliente_id || !archivo_base64 || !mapeo) return res.status(400).json({ mensaje: 'Faltan datos obligatorios' });
+
+    const buffer = Buffer.from(archivo_base64, 'base64');
+    const filas = leerExcelConMapeoLibre(buffer, mapeo);
+    const proveedor_id = proveedor_nombre ? await getOrCreateProveedor(cliente_id, proveedor_nombre) : null;
+
+    const existRes = await pool.query(
+      'SELECT id, codigo FROM productos_propios WHERE cliente_id=$1',
+      [cliente_id]
+    );
+    const existMap = new Map(existRes.rows.map(r => [String(r.codigo || '').trim().toUpperCase(), r.id]));
+
+    let nuevos = 0, actualizados = 0, errores = 0;
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const BATCH = 100;
+      for (let i = 0; i < filas.length; i += BATCH) {
+        const lote = filas.slice(i, i + BATCH);
+        for (const prod of lote) {
+          const descripcion = prod.descripcion.trim();
+          const codigo = prod.codigo.trim();
+          if (!descripcion && !codigo) continue;
+          const key = codigo.toUpperCase();
+          try {
+            if (existMap.has(key)) {
+              await client.query(
+                `UPDATE productos_propios SET
+                   descripcion=$1,
+                   precio_costo=COALESCE($2, precio_costo),
+                   precio_venta_1=COALESCE($3, precio_venta_1),
+                   precio_venta_2=COALESCE($4, precio_venta_2),
+                   precio_venta_final=COALESCE($5, precio_venta_final),
+                   marca=COALESCE(NULLIF($6,''), marca),
+                   rubro=COALESCE(NULLIF($7,''), rubro),
+                   unidad_medida=COALESCE(NULLIF($8,''), unidad_medida),
+                   ean=COALESCE(NULLIF($9,''), ean),
+                   dto_1=COALESCE($10, dto_1), dto_2=COALESCE($11, dto_2), dto_3=COALESCE($12, dto_3),
+                   alicuota_iva=COALESCE($13, alicuota_iva),
+                   proveedor_id=COALESCE($14, proveedor_id), modificado_en=now()
+                 WHERE id=$15`,
+                [
+                  descripcion,
+                  toNum(prod.precio_costo), toNum(prod.precio_venta_1), toNum(prod.precio_venta_2),
+                  toNum(prod.precio_venta_3),
+                  prod.marca, prod.rubro, prod.unidad_medida, prod.ean,
+                  toNum(prod.descuento_1), toNum(prod.descuento_2), toNum(prod.descuento_3),
+                  toNum(prod.iva), proveedor_id, existMap.get(key),
+                ]
+              );
+              actualizados++;
+            } else {
+              await client.query(
+                `INSERT INTO productos_propios
+                   (cliente_id, proveedor_id, codigo, descripcion, precio_costo, precio_venta_1,
+                    precio_venta_2, precio_venta_final, marca, rubro, unidad_medida, ean,
+                    dto_1, dto_2, dto_3, alicuota_iva, activo)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,true)`,
+                [
+                  cliente_id, proveedor_id, codigo || null, descripcion,
+                  toNum(prod.precio_costo) ?? 0, toNum(prod.precio_venta_1) ?? 0,
+                  toNum(prod.precio_venta_2) ?? 0, toNum(prod.precio_venta_3) ?? 0,
+                  prod.marca || null, prod.rubro || null, prod.unidad_medida || null, prod.ean || null,
+                  toNum(prod.descuento_1) ?? 0, toNum(prod.descuento_2) ?? 0,
+                  toNum(prod.descuento_3) ?? 0, toNum(prod.iva) ?? 0,
+                ]
+              );
+              if (key) existMap.set(key, -1);
+              nuevos++;
+            }
+          } catch { errores++; }
+        }
+      }
+      await client.query(
+        `INSERT INTO importaciones_historial
+           (cliente_id, proveedor_id, total_excel, nuevos, aplicados, errores)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [cliente_id, proveedor_id, filas.length, nuevos, nuevos + actualizados, errores]
+      );
+      await client.query('COMMIT');
+      res.json({ ok: true, importados: nuevos + actualizados, nuevos, actualizados, errores, proveedor_id });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    console.error('POST /aplicar-libre error:', err.message);
+    res.status(500).json({ mensaje: 'Error al importar', detalle: err.message });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════
 // ENDPOINT 10 — PUT /actualizar-precios  (batch price update)
 // ═══════════════════════════════════════════════════════════════
