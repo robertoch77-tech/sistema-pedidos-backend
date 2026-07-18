@@ -87,6 +87,8 @@ async function asegurarTablas() {
       ['productos_propios', 'imp_2',               'NUMERIC DEFAULT 0'],
       ['productos_propios', 'utilidad_1',          'NUMERIC DEFAULT 0'],
       ['productos_propios', 'utilidad_2',          'NUMERIC DEFAULT 0'],
+      ['productos_propios', 'utilidad_3',          'NUMERIC DEFAULT 0'],
+      ['productos_propios', 'precio_venta_3',      'NUMERIC DEFAULT 0'],
       ['productos_propios', 'punto_reposicion',    'NUMERIC DEFAULT 0'],
       ['importaciones_historial', 'total_excel',  'INT DEFAULT 0'],
       ['importaciones_historial', 'nuevos',        'INT DEFAULT 0'],
@@ -1029,9 +1031,23 @@ router.put('/actualizar-precios', async (req, res) => {
     for (const p of productos) {
       const r = await client.query(
         `UPDATE productos_propios
-         SET precio_costo=$1, precio_venta_final=$2, modificado_en=now()
-         WHERE id=$3 AND cliente_id=$4`,
-        [p.precio_costo || 0, p.precio_venta_final || 0, p.id, cliente_id]
+         SET precio_costo=$1,
+             dto_1=$2, dto_2=$3, dto_3=$4,
+             imp_1=$5, imp_2=$6,
+             alicuota_iva=$7,
+             utilidad_1=$8, utilidad_2=$9, utilidad_3=$10,
+             precio_venta_final=$11, precio_venta_2=$12, precio_venta_3=$13,
+             modificado_en=now()
+         WHERE id=$14 AND cliente_id=$15`,
+        [
+          p.precio_costo || 0,
+          p.descuento_1 || 0, p.descuento_2 || 0, p.descuento_3 || 0,
+          p.impuesto_1 || 0, p.impuesto_2 || 0,
+          p.iva || 0,
+          p.utilidad_1 || 0, p.utilidad_2 || 0, p.utilidad_3 || 0,
+          p.precio_venta_final || 0, p.precio_venta_2 || 0, p.precio_venta_3 || 0,
+          p.id, cliente_id,
+        ]
       );
       actualizados += r.rowCount;
     }
