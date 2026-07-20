@@ -22,6 +22,7 @@ interface ClienteRoberto {
   mayorista_id: number;
   email: string;
   whatsapp: string;
+  tipo_fuente: string | null;
 }
 
 function formatFecha(iso: string | null): string {
@@ -71,6 +72,7 @@ function ClientesRoberto() {
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState('');
   const [busqueda, setBusqueda] = useState('');
+  const [eliminando, setEliminando] = useState<number | null>(null);
 
   useEffect(() => {
     const cargar = async () => {
@@ -95,6 +97,26 @@ function ClientesRoberto() {
   const toggleEstado = (id: number, estadoActual: string) => {
     const nuevo = estadoActual === 'activo' ? 'suspendido' : 'activo';
     setClientes(prev => prev.map(c => c.id === id ? { ...c, estado: nuevo } : c));
+  };
+
+  const eliminarCliente = async (id: number, nombre: string) => {
+    if (!window.confirm(`¿Seguro que querés eliminar a ${nombre}? Esta acción no se puede deshacer.`)) return;
+    setEliminando(id);
+    try {
+      const sesion = JSON.parse(localStorage.getItem('superadmin_session') || '{}');
+      const token = sesion.token || '';
+      const res = await fetch(`${API_BASE}/api/superadmin/clientes/${id}`, {
+        method: 'DELETE',
+        headers: { 'x-superadmin-token': token },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.mensaje || 'Error al eliminar');
+      setClientes(prev => prev.filter(c => c.id !== id));
+    } catch (err: any) {
+      alert(err.message || 'Error al eliminar el cliente');
+    } finally {
+      setEliminando(null);
+    }
   };
 
   const filtrados = clientes.filter(c => {
@@ -269,6 +291,22 @@ function ClientesRoberto() {
                       >
                         {c.estado === 'activo' ? '🔴 Suspender' : '🟢 Activar'}
                       </button>
+                      {c.tipo_fuente === 'roberto' && (
+                        <button
+                          onClick={() => eliminarCliente(c.id, c.nombre_comercial)}
+                          disabled={eliminando === c.id}
+                          style={{
+                            backgroundColor: '#FFF5F5', color: RED,
+                            border: `1px solid ${RED}`,
+                            borderRadius: '5px', padding: '4px 10px', fontSize: '12px', fontWeight: 600,
+                            cursor: eliminando === c.id ? 'not-allowed' : 'pointer',
+                            opacity: eliminando === c.id ? 0.6 : 1,
+                          }}
+                          title="Eliminar cliente"
+                        >
+                          {eliminando === c.id ? '...' : '🗑 Eliminar'}
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
