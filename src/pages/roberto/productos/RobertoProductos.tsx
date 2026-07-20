@@ -1121,6 +1121,22 @@ function RobertoProductos() {
   const [valorMasivo, setValorMasivo] = useState('');
   const [aplicandoMasivo, setAplicandoMasivo] = useState(false);
 
+  // Ajuste % precio
+  const [modoAjuste, setModoAjuste] = useState(false);
+  const [ajusteTipo, setAjusteTipo] = useState<'aumento_costo' | 'descuento_costo' | 'cambio_utilidad' | ''>('');
+  const [ajustePct, setAjustePct] = useState('');
+  const [ajusteUtilAnt, setAjusteUtilAnt] = useState('');
+  const [ajusteUtilNueva, setAjusteUtilNueva] = useState('');
+  const [ajustePreview, setAjustePreview] = useState<{
+    id: number; codigo: string | null; descripcion: string;
+    precio_costo_anterior: number; precio_costo_nuevo: number;
+    pv1_anterior: number; pv1_nuevo: number;
+    pv2_anterior: number; pv2_nuevo: number;
+    pv3_anterior: number; pv3_nuevo: number;
+  }[] | null>(null);
+  const [ajusteCargando, setAjusteCargando] = useState(false);
+  const [ajusteError, setAjusteError] = useState('');
+
   // Modals
   const [modalImportador, setModalImportador] = useState(false);
   const [modalEditar, setModalEditar]         = useState<ProductoReal | null>(null);
@@ -1274,6 +1290,64 @@ function RobertoProductos() {
     finally { setAplicandoMasivo(false); }
   };
 
+  // ── Ajuste % precio ───────────────────────────────────────────
+  const resetAjuste = () => {
+    setModoAjuste(false); setAjusteTipo(''); setAjustePct('');
+    setAjusteUtilAnt(''); setAjusteUtilNueva('');
+    setAjustePreview(null); setAjusteError('');
+  };
+
+  const buildBodyAjuste = (confirmar: boolean): Record<string, any> => {
+    const body: Record<string, any> = {
+      cliente_id: clienteId,
+      ids: Array.from(seleccionados),
+      tipo: ajusteTipo,
+      confirmar,
+    };
+    if (ajusteTipo === 'cambio_utilidad') {
+      body.utilidad_anterior = parseFloat(ajusteUtilAnt) || 0;
+      body.utilidad_nueva    = parseFloat(ajusteUtilNueva) || 0;
+    } else {
+      body.porcentaje = parseFloat(ajustePct) || 0;
+    }
+    return body;
+  };
+
+  const verPreviewAjuste = async () => {
+    if (!ajusteTipo) return;
+    setAjusteError(''); setAjusteCargando(true);
+    try {
+      const r = await fetch(`${API}/api/superadmin/importador/ajuste-porcentaje`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'x-superadmin-token': token },
+        body: JSON.stringify(buildBodyAjuste(false)),
+      });
+      const d = await r.json();
+      if (!r.ok || !d.ok) throw new Error(d.mensaje || 'Error al calcular');
+      setAjustePreview(d.productos);
+    } catch (e: any) { setAjusteError(e.message); }
+    finally { setAjusteCargando(false); }
+  };
+
+  const confirmarAjuste = async () => {
+    if (!ajustePreview) return;
+    setAjusteCargando(true); setAjusteError('');
+    try {
+      const r = await fetch(`${API}/api/superadmin/importador/ajuste-porcentaje`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'x-superadmin-token': token },
+        body: JSON.stringify(buildBodyAjuste(true)),
+      });
+      const d = await r.json();
+      if (!r.ok || !d.ok) throw new Error(d.mensaje || 'Error al confirmar');
+      await cargarProductos(pagina);
+      await cargarFiltros();
+      setSeleccionados(new Set());
+      resetAjuste();
+    } catch (e: any) { setAjusteError(e.message); }
+    finally { setAjusteCargando(false); }
+  };
+
   // ── Export ────────────────────────────────────────────────────
   const handleExportar = async () => {
     if (exportando) return;
@@ -1372,27 +1446,158 @@ function RobertoProductos() {
 
       {/* BARRA ACCIONES MASIVAS */}
       {cantSel > 0 && (
-        <div style={{ backgroundColor: '#FFFBEB', borderBottom: `2px solid ${YELLOW}`, padding: '10px 24px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: NAVY }}>{cantSel} seleccionado{cantSel !== 1 ? 's' : ''}</span>
-          <select style={{ ...selectSt, width: 'auto', minWidth: 160, fontSize: 13 }} value={campoMasivo} onChange={e => { setCampoMasivo(e.target.value); setValorMasivo(''); }}>
-            <option value="">Seleccionar campo...</option>
-            {CAMPOS_MASIVOS.map(c => <option key={c.campo} value={c.campo}>{c.label}</option>)}
-          </select>
-          {campoMasivo && (() => {
-            const meta = CAMPOS_MASIVOS.find(c => c.campo === campoMasivo);
-            if (meta?.tipo === 'bool') return (
-              <select style={{ ...selectSt, width: 'auto', fontSize: 13 }} value={valorMasivo} onChange={e => setValorMasivo(e.target.value)}>
-                <option value="">—</option><option value="true">Activo</option><option value="false">Inactivo</option>
-              </select>
-            );
-            return <input type={meta?.tipo === 'number' ? 'number' : 'text'} step="any" placeholder="Valor..." style={{ ...inputSt, width: 120, fontSize: 13, padding: '6px 10px' }} value={valorMasivo} onChange={e => setValorMasivo(e.target.value)} />;
-          })()}
-          {campoMasivo && valorMasivo !== '' && (
-            <button style={btnStyle(ORANGE, '#fff', aplicandoMasivo)} disabled={aplicandoMasivo} onClick={handleMasivo}>
-              {aplicandoMasivo ? '⏳' : `Aplicar a ${cantSel}`}
-            </button>
+        <div style={{ backgroundColor: '#FFFBEB', borderBottom: `2px solid ${YELLOW}`, padding: '10px 24px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+
+          {/* Fila principal */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: NAVY }}>{cantSel} seleccionado{cantSel !== 1 ? 's' : ''}</span>
+            <select style={{ ...selectSt, width: 'auto', minWidth: 160, fontSize: 13 }} value={modoAjuste ? '___ajuste___' : campoMasivo} onChange={e => {
+              if (e.target.value === '___ajuste___') { setModoAjuste(true); setCampoMasivo(''); setValorMasivo(''); }
+              else { setModoAjuste(false); resetAjuste(); setCampoMasivo(e.target.value); setValorMasivo(''); }
+            }}>
+              <option value="">Seleccionar acción...</option>
+              {CAMPOS_MASIVOS.map(c => <option key={c.campo} value={c.campo}>{c.label}</option>)}
+              <option value="___ajuste___">📊 Ajuste % precio</option>
+            </select>
+
+            {/* Acciones masivas campo fijo */}
+            {!modoAjuste && campoMasivo && (() => {
+              const meta = CAMPOS_MASIVOS.find(c => c.campo === campoMasivo);
+              if (meta?.tipo === 'bool') return (
+                <select style={{ ...selectSt, width: 'auto', fontSize: 13 }} value={valorMasivo} onChange={e => setValorMasivo(e.target.value)}>
+                  <option value="">—</option><option value="true">Activo</option><option value="false">Inactivo</option>
+                </select>
+              );
+              return <input type={meta?.tipo === 'number' ? 'number' : 'text'} step="any" placeholder="Valor..." style={{ ...inputSt, width: 120, fontSize: 13, padding: '6px 10px' }} value={valorMasivo} onChange={e => setValorMasivo(e.target.value)} />;
+            })()}
+            {!modoAjuste && campoMasivo && valorMasivo !== '' && (
+              <button style={btnStyle(ORANGE, '#fff', aplicandoMasivo)} disabled={aplicandoMasivo} onClick={handleMasivo}>
+                {aplicandoMasivo ? '⏳' : `Aplicar a ${cantSel}`}
+              </button>
+            )}
+            <button style={btnStyle('#EDF2F7', GRAY)} onClick={() => { setSeleccionados(new Set()); resetAjuste(); setCampoMasivo(''); setValorMasivo(''); }}>✕ Limpiar</button>
+          </div>
+
+          {/* Panel ajuste % */}
+          {modoAjuste && (
+            <div style={{ backgroundColor: '#fff', border: `1.5px solid ${ORANGE}`, borderRadius: 10, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: NAVY }}>📊 Ajuste de precio — {cantSel} producto{cantSel !== 1 ? 's' : ''} seleccionado{cantSel !== 1 ? 's' : ''}</div>
+
+              {ajusteError && (
+                <div style={{ backgroundColor: '#FFF5F5', border: `1px solid ${RED}`, borderRadius: 7, padding: '8px 12px', color: RED, fontSize: 13 }}>⚠️ {ajusteError}</div>
+              )}
+
+              {/* PASO 1 — Tipo */}
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {([
+                  ['aumento_costo',   '📈 Aumentar precio costo X%'],
+                  ['descuento_costo', '📉 Descontar precio costo X%'],
+                  ['cambio_utilidad', '🔧 Cambiar utilidad de X% a Y%'],
+                ] as const).map(([val, lbl]) => (
+                  <button key={val} onClick={() => { setAjusteTipo(val); setAjustePreview(null); setAjusteError(''); }}
+                    style={{
+                      padding: '7px 14px', fontSize: 13, fontWeight: ajusteTipo === val ? 700 : 400,
+                      border: `1.5px solid ${ajusteTipo === val ? ORANGE : '#CBD5E0'}`,
+                      borderRadius: 8, cursor: 'pointer',
+                      backgroundColor: ajusteTipo === val ? '#FFF3E0' : '#fff',
+                      color: ajusteTipo === val ? ORANGE : TEXT,
+                    }}>{lbl}</button>
+                ))}
+              </div>
+
+              {/* PASO 2 — Valores */}
+              {ajusteTipo && (
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                  {ajusteTipo === 'cambio_utilidad' ? (
+                    <>
+                      <div>
+                        <label style={labelSt}>Utilidad actual (%)</label>
+                        <input type="number" step="any" style={{ ...inputSt, width: 100, fontSize: 13, padding: '6px 10px' }}
+                          value={ajusteUtilAnt} onChange={e => { setAjusteUtilAnt(e.target.value); setAjustePreview(null); }} placeholder="Ej: 30" />
+                      </div>
+                      <span style={{ fontSize: 18, color: GRAY, alignSelf: 'flex-end', paddingBottom: 4 }}>→</span>
+                      <div>
+                        <label style={labelSt}>Utilidad nueva (%)</label>
+                        <input type="number" step="any" style={{ ...inputSt, width: 100, fontSize: 13, padding: '6px 10px' }}
+                          value={ajusteUtilNueva} onChange={e => { setAjusteUtilNueva(e.target.value); setAjustePreview(null); }} placeholder="Ej: 35" />
+                      </div>
+                    </>
+                  ) : (
+                    <div>
+                      <label style={labelSt}>Porcentaje (%)</label>
+                      <input type="number" step="any" min="0" style={{ ...inputSt, width: 110, fontSize: 13, padding: '6px 10px' }}
+                        value={ajustePct} onChange={e => { setAjustePct(e.target.value); setAjustePreview(null); }} placeholder="Ej: 10" />
+                    </div>
+                  )}
+
+                  {/* PASO 3 — Ver preview */}
+                  {!ajustePreview && (
+                    <button
+                      style={{ ...btnStyle(BLUE, '#fff', ajusteCargando), alignSelf: 'flex-end' }}
+                      disabled={ajusteCargando || (ajusteTipo === 'cambio_utilidad' ? (!ajusteUtilAnt || !ajusteUtilNueva) : !ajustePct)}
+                      onClick={verPreviewAjuste}
+                    >
+                      {ajusteCargando ? '⏳ Calculando...' : '🔍 Ver previsualización'}
+                    </button>
+                  )}
+                  {ajustePreview && (
+                    <button style={{ ...btnStyle('#EDF2F7', GRAY), alignSelf: 'flex-end' }} onClick={() => { setAjustePreview(null); setAjusteError(''); }}>
+                      ↩ Cambiar valores
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* PASO 3 — Tabla preview */}
+              {ajustePreview && ajustePreview.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: NAVY, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                    Previsualización — {ajustePreview.length} producto{ajustePreview.length !== 1 ? 's' : ''}
+                  </div>
+                  <div style={{ maxHeight: 260, overflowY: 'auto', borderRadius: 8, border: '1px solid #E2E8F0' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ backgroundColor: '#EBF4FF', position: 'sticky', top: 0 }}>
+                          {['Código','Descripción','Costo actual','Costo nuevo','PV1 actual','PV1 nuevo','Variación %'].map(h => (
+                            <th key={h} style={{ padding: '7px 10px', textAlign: h === 'Descripción' ? 'left' : 'right', color: NAVY, fontWeight: 700, borderBottom: `2px solid ${SEP}`, whiteSpace: 'nowrap', fontSize: 11, textAlign: 'left' }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {ajustePreview.map((p, i) => {
+                          const variacion = p.precio_costo_anterior > 0
+                            ? ((p.precio_costo_nuevo - p.precio_costo_anterior) / p.precio_costo_anterior * 100)
+                            : 0;
+                          const varColor = variacion > 0 ? RED : variacion < 0 ? GREEN : GRAY;
+                          return (
+                            <tr key={p.id} style={{ backgroundColor: i % 2 === 0 ? '#fff' : '#F7FAFC' }}>
+                              <td style={{ padding: '5px 10px', borderBottom: '1px solid #EDF2F7', fontWeight: 600, color: NAVY, whiteSpace: 'nowrap' }}>{p.codigo || '—'}</td>
+                              <td style={{ padding: '5px 10px', borderBottom: '1px solid #EDF2F7', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.descripcion}>{p.descripcion}</td>
+                              <td style={{ padding: '5px 10px', borderBottom: '1px solid #EDF2F7', textAlign: 'right', color: GRAY }}>${numFmt(p.precio_costo_anterior)}</td>
+                              <td style={{ padding: '5px 10px', borderBottom: '1px solid #EDF2F7', textAlign: 'right', fontWeight: 600, color: TEXT }}>${numFmt(p.precio_costo_nuevo)}</td>
+                              <td style={{ padding: '5px 10px', borderBottom: '1px solid #EDF2F7', textAlign: 'right', color: GRAY }}>${numFmt(p.pv1_anterior)}</td>
+                              <td style={{ padding: '5px 10px', borderBottom: '1px solid #EDF2F7', textAlign: 'right', fontWeight: 600, color: GREEN }}>${numFmt(p.pv1_nuevo)}</td>
+                              <td style={{ padding: '5px 10px', borderBottom: '1px solid #EDF2F7', textAlign: 'right', fontWeight: 700, color: varColor }}>
+                                {variacion > 0 ? '+' : ''}{variacion.toFixed(1)}%
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* PASO 4 — Confirmar */}
+                  <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                    <button style={btnStyle('#EDF2F7', GRAY)} onClick={resetAjuste} disabled={ajusteCargando}>Cancelar</button>
+                    <button style={btnStyle(GREEN, '#fff', ajusteCargando)} disabled={ajusteCargando} onClick={confirmarAjuste}>
+                      {ajusteCargando ? '⏳ Aplicando...' : `✅ Confirmar ajuste (${ajustePreview.length} productos)`}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           )}
-          <button style={btnStyle('#EDF2F7', GRAY)} onClick={() => setSeleccionados(new Set())}>✕ Limpiar</button>
         </div>
       )}
 
