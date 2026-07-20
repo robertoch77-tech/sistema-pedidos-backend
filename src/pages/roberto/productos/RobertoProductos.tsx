@@ -86,6 +86,23 @@ interface FiltrosOpts { proveedores: { id: number; nombre: string }[]; marcas: s
 
 interface HojaInfo { nombre: string; columnas: string[]; total_filas: number; muestra: Record<string, string>[]; }
 
+interface DiffItem {
+  campo: string; label: string;
+  anterior: number | string | null;
+  nuevo: number | string | null;
+}
+interface DiffAnalisis {
+  temp_id: string;
+  resumen: {
+    nuevos: number; actualizar: number; prefijados: number; ausentes: number;
+    precios_suben: number; precios_bajan: number; precios_sin_cambio: number;
+    variacion_promedio: number;
+  };
+  actualizar: { codigo: string; descripcion: string; id: number; diffs: DiffItem[] }[];
+  prefijados: { codigo_original: string; codigo_nuevo: string; descripcion: string; proveedor_existente: string }[];
+  ausentes: { codigo: string; descripcion: string; precio_costo: number }[];
+}
+
 // ── estilos ───────────────────────────────────────────────────────────────────
 
 const btnStyle = (bg: string, color = '#fff', disabled = false): React.CSSProperties => ({
@@ -191,10 +208,33 @@ function ModalImportadorV2({ onCerrar, onExito }: { onCerrar: () => void; onExit
   const [marcaDef, setMarcaDef]   = useState('');
   const [rubroDef, setRubroDef]   = useState('');
   const [guardarMapeo, setGuardarMapeo] = useState(true);
+  const [mapeoMsg, setMapeoMsg]         = useState('');
+  const [analisisDiff, setAnalisisDiff] = useState<DiffAnalisis | null>(null);
   const [resultado, setResultado] = useState<{ importados: number; nuevos: number; actualizados: number; errores: number; por_hoja: {hoja:string;nuevos:number;actualizados:number;errores:number}[] } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const token    = getToken();
   const clienteId = getClienteId();
+  const proveedorDb = useDebounce(proveedor, 700);
+
+  useEffect(() => {
+    const nombre = proveedorDb.trim();
+    if (!nombre || nombre.length < 2 || !clienteId) { setMapeoMsg(''); return; }
+    fetch(`${API}/api/superadmin/importador/mapeo-proveedor/${clienteId}/${encodeURIComponent(nombre)}`, {
+      headers: { 'x-superadmin-token': token },
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!d?.mapeo) { setMapeoMsg(''); return; }
+        const { descripcion, ...restoMapeo } = d.mapeo;
+        setMapeo(restoMapeo || {});
+        setDescCols(Array.isArray(descripcion) ? descripcion : []);
+        if (d.marca_defecto !== undefined) setMarcaDef(d.marca_defecto || '');
+        if (d.rubro_defecto !== undefined) setRubroDef(d.rubro_defecto || '');
+        setGuardarMapeo(true);
+        setMapeoMsg(`✅ Mapeo anterior cargado para ${nombre}`);
+      })
+      .catch(() => { setMapeoMsg(''); });
+  }, [proveedorDb, clienteId, token]);
 
   const allColumnas = Array.from(new Set(
     hojas.filter(h => hojasOk.includes(h.nombre)).flatMap(h => h.columnas)
@@ -227,10 +267,9 @@ function ModalImportadorV2({ onCerrar, onExito }: { onCerrar: () => void; onExit
     finally { setCargando(false); }
   };
 
-  const importar = async () => {
-    if (!mapeo['codigo'] && !descCols.length) { setError('Código o Descripción son obligatorios'); return; }
+  const analizarDiff = async () => {
     if (!descCols.length) { setError('Indicá al menos una columna para la Descripción'); return; }
-    setError(''); setCargando(true); setPaso(3);
+    setError(''); setCargando(true);
     try {
       if (guardarMapeo && proveedor.trim()) {
         try {
@@ -251,13 +290,37 @@ function ModalImportadorV2({ onCerrar, onExito }: { onCerrar: () => void; onExit
         marca_defecto: marcaDef || undefined,
         rubro_defecto: rubroDef || undefined,
       }));
+      const r = await fetch(`${API}/api/superadmin/importador/analizar-diff`, {
+        method: 'POST', headers: { 'x-superadmin-token': token }, body: fd,
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.mensaje || 'Error al analizar');
+      setAnalisisDiff(d);
+      setPaso(3);
+    } catch (e: any) { setError(e.message); }
+    finally { setCargando(false); }
+  };
+
+  const importar = async () => {
+    setError(''); setCargando(true); setPaso(4);
+    try {
+      const fd = new FormData();
+      fd.append('cliente_id', String(clienteId));
+      fd.append('proveedor', proveedor.trim());
+      fd.append('temp_id', analisisDiff!.temp_id);
+      fd.append('configuracion', JSON.stringify({
+        hojas_seleccionadas: hojasOk,
+        mapeo: { ...mapeo, descripcion: descCols },
+        marca_defecto: marcaDef || undefined,
+        rubro_defecto: rubroDef || undefined,
+      }));
       const r = await fetch(`${API}/api/superadmin/importador/importar-v2`, {
         method: 'POST', headers: { 'x-superadmin-token': token }, body: fd,
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.mensaje || 'Error al importar');
       setResultado(d);
-    } catch (e: any) { setError(e.message); setPaso(2); }
+    } catch (e: any) { setError(e.message); setPaso(3); }
     finally { setCargando(false); }
   };
 
@@ -275,30 +338,32 @@ function ModalImportadorV2({ onCerrar, onExito }: { onCerrar: () => void; onExit
     const next = [...descCols]; [next[i], next[j]] = [next[j], next[i]]; setDescCols(next);
   };
 
-  const preview3 = muestraActual.slice(0, 3).map(fila => {
+  const previewFilas = muestraActual.slice(0, 5).map(fila => {
     const desc = descCols.map(c => fila[c] || '').filter(Boolean).join(' ');
-    const fields: Record<string, string> = { 'Descripción': desc };
-    CAMPOS_MAPEO.forEach(cm => { if (mapeo[cm.campo] && fila[mapeo[cm.campo]]) fields[cm.label] = String(fila[mapeo[cm.campo]]); });
+    const fields: Record<string, string> = {};
+    if (descCols.length > 0) fields['Descripción'] = desc || '—';
+    CAMPOS_MAPEO.forEach(cm => { if (mapeo[cm.campo]) fields[cm.label] = String(fila[mapeo[cm.campo]] ?? '—'); });
     return fields;
   });
+  const previewCols = Array.from(new Set(previewFilas.flatMap(f => Object.keys(f))));
 
   return (
     <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}
       onClick={e => { if (e.target === e.currentTarget) onCerrar(); }}>
-      <div style={{ backgroundColor: '#fff', borderRadius: 16, width: '100%', maxWidth: 780, maxHeight: '92vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+      <div style={{ backgroundColor: '#fff', borderRadius: 16, width: '100%', maxWidth: 1100, maxHeight: '92vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
         {/* Header */}
         <div style={{ backgroundColor: NAVY, borderRadius: '16px 16px 0 0', padding: '16px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
             <div style={{ fontSize: 11, color: SEP, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-              {paso < 3 ? `Paso ${paso} de 3` : resultado ? 'Completado' : 'Importando...'}
+              {paso < 4 ? `Paso ${paso} de 4` : resultado ? 'Completado' : 'Importando...'}
             </div>
             <div style={{ fontSize: 16, fontWeight: 700, color: '#fff' }}>
-              {paso === 1 ? 'Subir archivo' : paso === 2 ? 'Mapear columnas' : resultado ? 'Importación completada' : 'Importando...'}
+              {paso === 1 ? 'Subir archivo' : paso === 2 ? 'Mapear columnas' : paso === 3 ? 'Confirmar importación' : resultado ? 'Importación completada' : 'Importando...'}
             </div>
           </div>
           <button onClick={onCerrar} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: 8, color: '#fff', fontSize: 18, width: 34, height: 34, cursor: 'pointer', fontWeight: 700 }}>✕</button>
         </div>
-        {!resultado && <BarraProgreso paso={paso} labels={['Subir archivo', 'Mapear columnas', 'Resultado']} />}
+        {!resultado && <BarraProgreso paso={paso} labels={['Subir archivo', 'Mapear columnas', 'Confirmar', 'Resultado']} />}
 
         {/* Cuerpo */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '16px 24px' }}>
@@ -319,8 +384,13 @@ function ModalImportadorV2({ onCerrar, onExito }: { onCerrar: () => void; onExit
               <input ref={inputRef} type="file" accept=".xls,.xlsx" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) aceptar(f); }} />
               <div>
                 <label style={labelSt}>Nombre del proveedor <span style={{ color: RED }}>*</span></label>
-                <input style={{ ...inputSt, fontSize: 14, padding: '8px 12px' }} value={proveedor} onChange={e => setProveedor(e.target.value)} placeholder="Ej: BERGER, LALO GAS, LEKONS" />
+                <input style={{ ...inputSt, fontSize: 14, padding: '8px 12px' }} value={proveedor} onChange={e => { setProveedor(e.target.value); setMapeoMsg(''); }} placeholder="Ej: BERGER, LALO GAS, LEKONS" />
               </div>
+              {mapeoMsg && (
+                <div style={{ backgroundColor: '#F0FFF4', border: `1px solid ${GREEN}`, borderRadius: 8, padding: '8px 14px', color: '#276749', fontSize: 13, fontWeight: 500 }}>
+                  {mapeoMsg}
+                </div>
+              )}
               {hojas.length === 0 && archivo && proveedor.trim() && (
                 <div style={{ fontSize: 13, color: GRAY }}>Listo para analizar. El sistema detectará las hojas y columnas.</div>
               )}
@@ -329,70 +399,66 @@ function ModalImportadorV2({ onCerrar, onExito }: { onCerrar: () => void; onExit
 
           {/* ══ PASO 2 ══ */}
           {paso === 2 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              {/* Hojas detectadas */}
-              <div style={{ backgroundColor: '#F7FAFC', borderRadius: 10, padding: '12px 16px' }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: NAVY, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
-                  Hojas detectadas — seleccioná las que importar:
-                </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                  {hojas.map(h => (
-                    <label key={h.nombre} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', padding: '5px 10px', borderRadius: 8, border: `1.5px solid ${hojasOk.includes(h.nombre) ? BLUE : '#CBD5E0'}`, backgroundColor: hojasOk.includes(h.nombre) ? '#EBF8FF' : '#fff', fontSize: 13 }}>
-                      <input type="checkbox" checked={hojasOk.includes(h.nombre)} onChange={() => toggleHoja(h.nombre)} style={{ accentColor: BLUE }} />
-                      <strong>{h.nombre}</strong>
-                      <span style={{ color: GRAY, fontSize: 11 }}>({h.total_filas} filas, {h.columnas.length} cols)</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
+            <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
 
-              {/* Descripción multi-columna */}
-              <div style={{ backgroundColor: '#FFFBF0', borderRadius: 10, padding: '12px 16px', border: `1px solid ${YELLOW}` }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: NAVY, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
-                  Descripción del producto <span style={{ color: RED }}>*</span> — columnas que la forman (en orden):
+              {/* ── COLUMNA IZQUIERDA: controles de mapeo ── */}
+              <div style={{ flex: '0 0 420px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+
+                {/* Hojas detectadas */}
+                <div style={{ backgroundColor: '#F7FAFC', borderRadius: 10, padding: '12px 16px' }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: NAVY, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                    Hojas detectadas — seleccioná las que importar:
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    {hojas.map(h => (
+                      <label key={h.nombre} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', padding: '5px 10px', borderRadius: 8, border: `1.5px solid ${hojasOk.includes(h.nombre) ? BLUE : '#CBD5E0'}`, backgroundColor: hojasOk.includes(h.nombre) ? '#EBF8FF' : '#fff', fontSize: 13 }}>
+                        <input type="checkbox" checked={hojasOk.includes(h.nombre)} onChange={() => toggleHoja(h.nombre)} style={{ accentColor: BLUE }} />
+                        <strong>{h.nombre}</strong>
+                        <span style={{ color: GRAY, fontSize: 11 }}>({h.total_filas} filas, {h.columnas.length} cols)</span>
+                      </label>
+                    ))}
+                  </div>
                 </div>
-                <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-                  {descCols.map((c, i) => (
-                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, backgroundColor: '#fff', border: `1px solid ${YELLOW}`, borderRadius: 8, padding: '3px 8px', fontSize: 13 }}>
-                      <span style={{ fontWeight: 600 }}>{i + 1}.</span> {c}
-                      <button onClick={() => moveDescCol(i, -1)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: GRAY, fontSize: 14, padding: '0 2px' }} title="Subir">↑</button>
-                      <button onClick={() => moveDescCol(i, 1)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: GRAY, fontSize: 14, padding: '0 2px' }} title="Bajar">↓</button>
-                      <button onClick={() => removeDescCol(i)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: RED, fontWeight: 700, fontSize: 14, padding: '0 2px' }}>✕</button>
-                    </div>
-                  ))}
-                </div>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+
+                {/* Descripción multi-columna */}
+                <div style={{ backgroundColor: '#FFFBF0', borderRadius: 10, padding: '12px 16px', border: `1px solid ${YELLOW}` }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: NAVY, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                    Descripción del producto <span style={{ color: RED }}>*</span> — columnas que la forman (en orden):
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+                    {descCols.map((c, i) => (
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, backgroundColor: '#fff', border: `1px solid ${YELLOW}`, borderRadius: 8, padding: '3px 8px', fontSize: 13 }}>
+                        <span style={{ fontWeight: 600 }}>{i + 1}.</span> {c}
+                        <button onClick={() => moveDescCol(i, -1)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: GRAY, fontSize: 14, padding: '0 2px' }} title="Subir">↑</button>
+                        <button onClick={() => moveDescCol(i, 1)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: GRAY, fontSize: 14, padding: '0 2px' }} title="Bajar">↓</button>
+                        <button onClick={() => removeDescCol(i)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: RED, fontWeight: 700, fontSize: 14, padding: '0 2px' }}>✕</button>
+                      </div>
+                    ))}
+                  </div>
                   <select style={{ ...selectSt, width: 'auto', minWidth: 180 }} onChange={e => { if (e.target.value) addDescCol(e.target.value); e.target.value = ''; }} defaultValue="">
                     <option value="">＋ Agregar columna...</option>
                     {allColumnas.filter(c => !descCols.includes(c)).map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
-                  {descCols.length > 0 && (
-                    <div style={{ fontSize: 12, color: GRAY }}>
-                      Preview: <strong style={{ color: NAVY }}>{(muestraActual[0] ? descCols.map(c => muestraActual[0][c] || '').filter(Boolean).join(' ') : '—')}</strong>
-                    </div>
-                  )}
                 </div>
-              </div>
 
-              {/* Tabla de mapeo */}
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 700, color: NAVY, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Mapeo de columnas:</div>
-                <div style={{ overflowX: 'auto' }}>
+                {/* Tabla de mapeo */}
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: NAVY, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Mapeo de columnas:</div>
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                     <thead>
                       <tr style={{ backgroundColor: '#EBF4FF' }}>
-                        <th style={{ padding: '7px 10px', textAlign: 'left', color: NAVY, fontWeight: 700, borderBottom: `2px solid ${SEP}`, width: '40%' }}>Campo sistema</th>
+                        <th style={{ padding: '7px 10px', textAlign: 'left', color: NAVY, fontWeight: 700, borderBottom: `2px solid ${SEP}`, width: '45%' }}>Campo sistema</th>
                         <th style={{ padding: '7px 10px', textAlign: 'left', color: NAVY, fontWeight: 700, borderBottom: `2px solid ${SEP}` }}>Columna del Excel</th>
                       </tr>
                     </thead>
                     <tbody>
                       {CAMPOS_MAPEO.map(({ campo, label, obligatorio }) => (
                         <tr key={campo} style={{ backgroundColor: obligatorio ? '#FFFFF0' : '#fff' }}>
-                          <td style={{ padding: '6px 10px', borderBottom: '1px solid #EDF2F7', fontWeight: obligatorio ? 600 : 400 }}>
+                          <td style={{ padding: '6px 10px', borderBottom: '1px solid #EDF2F7', fontWeight: obligatorio ? 600 : 400, fontSize: 12 }}>
                             {label} {obligatorio && <span style={{ color: RED }}>*</span>}
                           </td>
                           <td style={{ padding: '4px 10px', borderBottom: '1px solid #EDF2F7' }}>
-                            <select style={{ ...selectSt, width: '100%' }} value={mapeo[campo] || ''} onChange={e => setMapeo(prev => ({ ...prev, [campo]: e.target.value }))}>
+                            <select style={{ ...selectSt, width: '100%', fontSize: 12 }} value={mapeo[campo] || ''} onChange={e => setMapeo(prev => ({ ...prev, [campo]: e.target.value }))}>
                               <option value="">— No usar —</option>
                               {allColumnas.map(c => <option key={c} value={c}>{c}</option>)}
                             </select>
@@ -402,48 +468,238 @@ function ModalImportadorV2({ onCerrar, onExito }: { onCerrar: () => void; onExit
                     </tbody>
                   </table>
                 </div>
-              </div>
 
-              {/* Campos masivos */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <div>
-                  <label style={labelSt}>Marca para todos (si no viene del Excel)</label>
-                  <input style={{ ...inputSt, fontSize: 13, padding: '7px 10px' }} value={marcaDef} onChange={e => setMarcaDef(e.target.value)} placeholder="Ej: BERGER" />
-                </div>
-                <div>
-                  <label style={labelSt}>Rubro para todos (si no viene del Excel)</label>
-                  <input style={{ ...inputSt, fontSize: 13, padding: '7px 10px' }} value={rubroDef} onChange={e => setRubroDef(e.target.value)} placeholder="Ej: CAÑOS" />
-                </div>
-              </div>
-
-              {/* Vista previa */}
-              {preview3.some(f => Object.keys(f).length > 0) && (
-                <div>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: NAVY, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Vista previa (3 filas):</div>
-                  <div style={{ overflowX: 'auto', border: '1px solid #E2E8F0', borderRadius: 8 }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                      <thead><tr style={{ backgroundColor: '#EBF4FF' }}>
-                        {Object.keys(preview3[0] || {}).map(k => <th key={k} style={{ padding: '6px 10px', textAlign: 'left', color: NAVY, fontWeight: 600, borderBottom: `1px solid ${SEP}`, whiteSpace: 'nowrap' }}>{k}</th>)}
-                      </tr></thead>
-                      <tbody>{preview3.map((f, i) => (
-                        <tr key={i} style={{ backgroundColor: i % 2 === 0 ? '#fff' : '#F7FAFC' }}>
-                          {Object.values(f).map((v, j) => <td key={j} style={{ padding: '5px 10px', borderBottom: '1px solid #EDF2F7', color: TEXT }}>{v || '—'}</td>)}
-                        </tr>
-                      ))}</tbody>
-                    </table>
+                {/* Campos masivos */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <div>
+                    <label style={labelSt}>Marca por defecto</label>
+                    <input style={{ ...inputSt, fontSize: 13, padding: '7px 10px' }} value={marcaDef} onChange={e => setMarcaDef(e.target.value)} placeholder="Ej: BERGER" />
+                  </div>
+                  <div>
+                    <label style={labelSt}>Rubro por defecto</label>
+                    <input style={{ ...inputSt, fontSize: 13, padding: '7px 10px' }} value={rubroDef} onChange={e => setRubroDef(e.target.value)} placeholder="Ej: CAÑOS" />
                   </div>
                 </div>
-              )}
 
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: TEXT, cursor: 'pointer' }}>
-                <input type="checkbox" checked={guardarMapeo} onChange={e => setGuardarMapeo(e.target.checked)} style={{ accentColor: BLUE }} />
-                Guardar este mapeo para <strong>{proveedor}</strong>
-              </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: TEXT, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={guardarMapeo} onChange={e => setGuardarMapeo(e.target.checked)} style={{ accentColor: BLUE }} />
+                  Guardar este mapeo para <strong>{proveedor}</strong>
+                </label>
+              </div>
+
+              {/* ── COLUMNA DERECHA: preview en tiempo real ── */}
+              <div style={{ flex: 1, minWidth: 0, position: 'sticky', top: 0 }}>
+                <div style={{ backgroundColor: '#F7FAFC', borderRadius: 10, border: '1px solid #BEE3F8', overflow: 'hidden' }}>
+                  <div style={{ backgroundColor: BLUE, padding: '10px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: '#fff', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                      👁 Preview — cómo quedarán en la base
+                    </span>
+                    <span style={{ fontSize: 11, color: '#BEE3F8' }}>
+                      {muestraActual.length > 0 ? `${previewFilas.length} filas de muestra` : 'Sin datos'}
+                    </span>
+                  </div>
+
+                  {muestraActual.length === 0 ? (
+                    <div style={{ padding: '32px 16px', textAlign: 'center', color: GRAY, fontSize: 13 }}>
+                      Sin datos de muestra disponibles
+                    </div>
+                  ) : previewCols.length === 0 ? (
+                    <div style={{ padding: '24px 16px', textAlign: 'center' }}>
+                      <div style={{ fontSize: 28, marginBottom: 8 }}>←</div>
+                      <div style={{ fontSize: 13, color: GRAY }}>Seleccioná columnas en el mapeo<br />para ver el preview aquí</div>
+                    </div>
+                  ) : (
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                        <thead>
+                          <tr style={{ backgroundColor: '#EBF4FF' }}>
+                            {previewCols.map(k => (
+                              <th key={k} style={{ padding: '7px 10px', textAlign: 'left', color: NAVY, fontWeight: 700, borderBottom: `2px solid ${SEP}`, whiteSpace: 'nowrap', fontSize: 11 }}>{k}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {previewFilas.map((f, i) => (
+                            <tr key={i} style={{ backgroundColor: i % 2 === 0 ? '#fff' : '#F7FAFC' }}>
+                              {previewCols.map(k => (
+                                <td key={k} style={{ padding: '6px 10px', borderBottom: '1px solid #EDF2F7', color: f[k] && f[k] !== '—' ? TEXT : '#CBD5E0', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                                  title={f[k]}>
+                                  {f[k] || '—'}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* Aviso si no está mapeado el código */}
+                  {!mapeo['codigo'] && (
+                    <div style={{ margin: '10px 14px', padding: '8px 12px', backgroundColor: '#FFFBEB', border: `1px solid ${YELLOW}`, borderRadius: 8, fontSize: 12, color: '#744210' }}>
+                      ⚠️ Sin columna de <strong>Código</strong> mapeada — no se podrán detectar duplicados al importar.
+                    </div>
+                  )}
+                </div>
+              </div>
+
             </div>
           )}
 
-          {/* ══ PASO 3 ══ */}
-          {paso === 3 && (
+          {/* ══ PASO 3 — CONFIRMAR ══ */}
+          {paso === 3 && analisisDiff && (() => {
+            const r = analisisDiff.resumen;
+            const varProm = r.variacion_promedio;
+            const varColor = varProm > 0 ? RED : varProm < 0 ? GREEN : GRAY;
+            const varSign  = varProm > 0 ? '+' : '';
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+
+                {/* Tarjetas resumen */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+                  {([
+                    ['🆕 Nuevos',          r.nuevos,     BLUE,   'Se agregarán con su código original'],
+                    ['🔄 A actualizar',    r.actualizar, ORANGE, 'Mismo proveedor, código coincide'],
+                    ['⚠️ Con prefijo',    r.prefijados, YELLOW, 'Distinto proveedor, código en uso'],
+                    ['📋 Ausentes en Excel', r.ausentes, GRAY,  'Están en tu base pero no en este Excel'],
+                  ] as [string, number, string, string][]).map(([lbl, val, col, sub]) => (
+                    <div key={lbl} style={{ backgroundColor: '#fff', border: `1.5px solid ${col}`, borderRadius: 10, padding: '12px 14px' }}>
+                      <div style={{ fontSize: 20, fontWeight: 700, color: col }}>{val}</div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: TEXT, marginTop: 2 }}>{lbl}</div>
+                      <div style={{ fontSize: 11, color: GRAY, marginTop: 2 }}>{sub}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Resumen de precios */}
+                {(r.precios_suben > 0 || r.precios_bajan > 0 || r.precios_sin_cambio > 0) && (
+                  <div style={{ backgroundColor: '#F7FAFC', borderRadius: 10, padding: '12px 16px', border: '1px solid #E2E8F0' }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: NAVY, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                      Variación de precios (precio costo)
+                    </div>
+                    <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <div style={{ fontSize: 20, fontWeight: 700, color: varColor }}>{varSign}{varProm}% promedio</div>
+                      <div style={{ display: 'flex', gap: 14, fontSize: 13 }}>
+                        <span style={{ color: RED }}>↑ {r.precios_suben} suben</span>
+                        <span style={{ color: GREEN }}>↓ {r.precios_bajan} bajan</span>
+                        <span style={{ color: GRAY }}>= {r.precios_sin_cambio} sin cambio</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Lista de actualizaciones con diffs */}
+                {analisisDiff.actualizar.length > 0 && (
+                  <details style={{ backgroundColor: '#FFFAF0', borderRadius: 10, border: `1px solid ${ORANGE}` }}>
+                    <summary style={{ padding: '10px 14px', cursor: 'pointer', fontSize: 13, fontWeight: 700, color: ORANGE, userSelect: 'none' }}>
+                      🔄 {analisisDiff.actualizar.length} productos a actualizar — ver detalle
+                    </summary>
+                    <div style={{ maxHeight: 280, overflowY: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                        <thead>
+                          <tr style={{ backgroundColor: '#FFF3CD' }}>
+                            <th style={{ padding: '6px 10px', textAlign: 'left', color: NAVY, fontWeight: 700, borderBottom: `1px solid ${ORANGE}`, width: 90 }}>Código</th>
+                            <th style={{ padding: '6px 10px', textAlign: 'left', color: NAVY, fontWeight: 700, borderBottom: `1px solid ${ORANGE}`, width: 200 }}>Descripción</th>
+                            <th style={{ padding: '6px 10px', textAlign: 'left', color: NAVY, fontWeight: 700, borderBottom: `1px solid ${ORANGE}` }}>Cambios</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {analisisDiff.actualizar.map((p, i) => (
+                            <tr key={i} style={{ backgroundColor: i % 2 === 0 ? '#fff' : '#FFFBF0' }}>
+                              <td style={{ padding: '5px 10px', borderBottom: '1px solid #EDF2F7', fontWeight: 600, color: NAVY, verticalAlign: 'top' }}>{p.codigo || '—'}</td>
+                              <td style={{ padding: '5px 10px', borderBottom: '1px solid #EDF2F7', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'top' }} title={p.descripcion}>{p.descripcion}</td>
+                              <td style={{ padding: '5px 10px', borderBottom: '1px solid #EDF2F7' }}>
+                                {p.diffs.length === 0
+                                  ? <span style={{ color: GRAY, fontStyle: 'italic' }}>Sin cambios detectados</span>
+                                  : p.diffs.map((d, j) => (
+                                    <div key={j} style={{ fontSize: 11, marginBottom: 2 }}>
+                                      <span style={{ fontWeight: 600, color: NAVY }}>{d.label}:</span>{' '}
+                                      <span style={{ color: RED, textDecoration: 'line-through' }}>{String(d.anterior ?? '—')}</span>
+                                      {' → '}
+                                      <span style={{ color: GREEN, fontWeight: 600 }}>{String(d.nuevo ?? '—')}</span>
+                                    </div>
+                                  ))
+                                }
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </details>
+                )}
+
+                {/* Lista de prefijados */}
+                {analisisDiff.prefijados.length > 0 && (
+                  <details style={{ backgroundColor: '#FFFFF0', borderRadius: 10, border: `1px solid ${YELLOW}` }}>
+                    <summary style={{ padding: '10px 14px', cursor: 'pointer', fontSize: 13, fontWeight: 700, color: '#744210', userSelect: 'none' }}>
+                      ⚠️ {analisisDiff.prefijados.length} con prefijo automático — ver detalle
+                    </summary>
+                    <div style={{ padding: '8px 14px 12px', fontSize: 12, color: '#744210', borderBottom: `1px solid ${YELLOW}` }}>
+                      El código ya existe en tu base asignado a otro proveedor. Se agrega como nuevo con prefijo para no pisar el original.
+                    </div>
+                    <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                        <thead>
+                          <tr style={{ backgroundColor: '#FEFCBF' }}>
+                            <th style={{ padding: '6px 10px', textAlign: 'left', color: NAVY, fontWeight: 700, borderBottom: `1px solid ${YELLOW}` }}>Código original</th>
+                            <th style={{ padding: '6px 10px', textAlign: 'left', color: NAVY, fontWeight: 700, borderBottom: `1px solid ${YELLOW}` }}>Código nuevo</th>
+                            <th style={{ padding: '6px 10px', textAlign: 'left', color: NAVY, fontWeight: 700, borderBottom: `1px solid ${YELLOW}` }}>Proveedor que tiene el original</th>
+                            <th style={{ padding: '6px 10px', textAlign: 'left', color: NAVY, fontWeight: 700, borderBottom: `1px solid ${YELLOW}` }}>Descripción</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {analisisDiff.prefijados.map((p, i) => (
+                            <tr key={i} style={{ backgroundColor: i % 2 === 0 ? '#fff' : '#FEFCBF' }}>
+                              <td style={{ padding: '5px 10px', borderBottom: '1px solid #EDF2F7', fontWeight: 600, color: NAVY }}>{p.codigo_original}</td>
+                              <td style={{ padding: '5px 10px', borderBottom: '1px solid #EDF2F7', fontWeight: 700, color: ORANGE }}>{p.codigo_nuevo}</td>
+                              <td style={{ padding: '5px 10px', borderBottom: '1px solid #EDF2F7', color: GRAY }}>{p.proveedor_existente}</td>
+                              <td style={{ padding: '5px 10px', borderBottom: '1px solid #EDF2F7', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.descripcion}>{p.descripcion}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </details>
+                )}
+
+                {/* Ausentes en Excel */}
+                {analisisDiff.ausentes.length > 0 && (
+                  <details style={{ backgroundColor: '#F7FAFC', borderRadius: 10, border: '1px solid #CBD5E0' }}>
+                    <summary style={{ padding: '10px 14px', cursor: 'pointer', fontSize: 13, fontWeight: 700, color: GRAY, userSelect: 'none' }}>
+                      📋 {analisisDiff.ausentes.length} productos en tu base que NO están en este Excel
+                    </summary>
+                    <div style={{ padding: '8px 14px 12px', fontSize: 12, color: GRAY, borderBottom: '1px solid #CBD5E0' }}>
+                      ℹ️ Estos productos <strong>NO se eliminarán automáticamente</strong>. Quedan en tu base sin cambios.
+                    </div>
+                    <div style={{ maxHeight: 200, overflowY: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                        <thead>
+                          <tr style={{ backgroundColor: '#EDF2F7' }}>
+                            <th style={{ padding: '6px 10px', textAlign: 'left', color: NAVY, fontWeight: 700, borderBottom: '1px solid #CBD5E0', width: 100 }}>Código</th>
+                            <th style={{ padding: '6px 10px', textAlign: 'left', color: NAVY, fontWeight: 700, borderBottom: '1px solid #CBD5E0' }}>Descripción</th>
+                            <th style={{ padding: '6px 10px', textAlign: 'right', color: NAVY, fontWeight: 700, borderBottom: '1px solid #CBD5E0', width: 100 }}>PC actual</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {analisisDiff.ausentes.map((p, i) => (
+                            <tr key={i} style={{ backgroundColor: i % 2 === 0 ? '#fff' : '#F7FAFC' }}>
+                              <td style={{ padding: '5px 10px', borderBottom: '1px solid #EDF2F7', color: GRAY }}>{p.codigo || '—'}</td>
+                              <td style={{ padding: '5px 10px', borderBottom: '1px solid #EDF2F7', color: TEXT }}>{p.descripcion}</td>
+                              <td style={{ padding: '5px 10px', borderBottom: '1px solid #EDF2F7', textAlign: 'right', color: GRAY }}>${p.precio_costo.toLocaleString('es-AR')}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </details>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* ══ PASO 4 — RESULTADO ══ */}
+          {paso === 4 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               {cargando && !resultado && (
                 <div style={{ textAlign: 'center', padding: '32px 0' }}>
@@ -485,8 +741,11 @@ function ModalImportadorV2({ onCerrar, onExito }: { onCerrar: () => void; onExit
         {/* Footer */}
         <div style={{ borderTop: '1px solid #E2E8F0', padding: '14px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
-            {paso > 1 && paso < 3 && !cargando && (
-              <button style={btnStyle('#EDF2F7', GRAY)} onClick={() => { setPaso(p => p - 1 as 1 | 2); setError(''); }}>← Anterior</button>
+            {paso === 2 && !cargando && (
+              <button style={btnStyle('#EDF2F7', GRAY)} onClick={() => { setPaso(1); setError(''); }}>← Anterior</button>
+            )}
+            {paso === 3 && !cargando && (
+              <button style={btnStyle('#EDF2F7', GRAY)} onClick={() => { setPaso(2); setError(''); }}>← Volver al mapeo</button>
             )}
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -496,13 +755,18 @@ function ModalImportadorV2({ onCerrar, onExito }: { onCerrar: () => void; onExit
               </button>
             )}
             {paso === 2 && (
-              <button style={btnStyle(GREEN, '#fff', cargando || hojasOk.length === 0)} disabled={cargando || hojasOk.length === 0} onClick={importar}>
-                {cargando ? '⏳ Importando...' : `Importar ${hojasOk.length} hoja(s) →`}
+              <button style={btnStyle(BLUE, '#fff', cargando || hojasOk.length === 0)} disabled={cargando || hojasOk.length === 0} onClick={analizarDiff}>
+                {cargando ? '⏳ Analizando...' : `Ver resumen antes de importar →`}
               </button>
             )}
-            {paso === 3 && resultado && (
+            {paso === 3 && (
+              <button style={btnStyle(GREEN, '#fff', cargando)} disabled={cargando} onClick={importar}>
+                {cargando ? '⏳ Analizando...' : '✅ Confirmar e importar'}
+              </button>
+            )}
+            {paso === 4 && resultado && (
               <>
-                <button style={btnStyle('#EDF2F7', GRAY)} onClick={() => { setPaso(1); setArchivo(null); setHojas([]); setHojasOk([]); setMapeo({}); setDescCols([]); setResultado(null); setError(''); setProveedor(''); }}>
+                <button style={btnStyle('#EDF2F7', GRAY)} onClick={() => { setPaso(1); setArchivo(null); setHojas([]); setHojasOk([]); setMapeo({}); setDescCols([]); setResultado(null); setAnalisisDiff(null); setError(''); setProveedor(''); }}>
                   Importar otro
                 </button>
                 <button style={btnStyle(GREEN)} onClick={() => { onExito(); onCerrar(); }}>Cerrar</button>
@@ -815,6 +1079,7 @@ function RobertoProductos() {
   const navigate = useNavigate();
   const token     = getToken();
   const clienteId = getClienteId();
+  const todosLosProductos = useRef<Map<number, ProductoReal>>(new Map());
 
   // Filtros
   const [busqueda,        setBusqueda]        = useState('');
@@ -911,7 +1176,7 @@ function RobertoProductos() {
     try {
       const params = buildParams({ page: String(pg), limit: String(porPagina) });
       const r = await fetch(`${API}/api/superadmin/importador/productos/${clienteId}?${params}`, { headers: { 'x-superadmin-token': token } });
-      if (r.ok) { const d = await r.json(); setProductos(d.productos || []); setTotal(d.total || 0); setTotalPags(d.paginas || 1); }
+      if (r.ok) { const d = await r.json(); const prods: ProductoReal[] = d.productos || []; prods.forEach(p => todosLosProductos.current.set(p.id, p)); setProductos(prods); setTotal(d.total || 0); setTotalPags(d.paginas || 1); }
     } catch {} finally { setCargando(false); }
   }, [clienteId, token, buildParams, porPagina]);
 
@@ -958,7 +1223,8 @@ function RobertoProductos() {
       const body = {
         cliente_id: clienteId,
         productos: modificados.map(id => {
-          const p = productos.find(x => x.id === id)!;
+          const p = todosLosProductos.current.get(id);
+          if (!p) return null as any;
           const { pv1, pv2, pv3 } = calcRow(p);
           const pvFinal = pvActivo === 1 ? pv1 : pvActivo === 2 ? pv2 : pv3;
           return {
@@ -973,7 +1239,7 @@ function RobertoProductos() {
             unidad_medida:   getE(p, 'unidad_medida') || null,
             stock_minimo:    n(getE(p, 'stock_minimo')),
           };
-        }),
+        }).filter(Boolean),
       };
       console.log('TOKEN:', token);
       console.log('CLIENTE:', clienteId);

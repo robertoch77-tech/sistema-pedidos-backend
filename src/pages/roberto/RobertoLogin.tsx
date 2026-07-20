@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 
-const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:4000';
+import { API_BASE } from '../../config/api';
 
 const BLUE  = '#2B6CB0';
 const NAVY  = '#1B2A4A';

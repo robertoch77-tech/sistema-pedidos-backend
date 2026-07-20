@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import LogoRCH from '../../components/superadmin/LogoRCH';
 
-const API = 'https://sistema-pedidos-backend-2hec.onrender.com';
+import { API_BASE } from '../../config/api';
+const API = API_BASE;
 
 function SuperAdminLogin() {
   const [cuit, setCuit] = useState('');

@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 
-const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:4000';
-const BASE_URL = 'sistemagestiopedidos.netlify.app';
+import { API_BASE } from '../../../config/api';
+const BASE_URL = 'sistemagestionpedidos.netlify.app';
 
 const BLUE  = '#2B6CB0';
 const NAVY  = '#1B2A4A';
@@ -371,6 +371,18 @@ function DetalleCliente() {
         </div>
       )}
 
+      {/* ── SECCIÓN ARCA ──────────────────────────────────── */}
+      {modulos['arca'] && (
+        <div style={{ backgroundColor: '#fff', borderRadius: '14px', boxShadow: '0 2px 8px rgba(0,0,0,0.07)', overflow: 'hidden', marginBottom: '20px' }}>
+          <div style={{ padding: '20px 24px', borderBottom: `2px solid ${SEP}` }}>
+            <h3 style={{ fontSize: '14px', fontWeight: 700, color: NAVY, margin: 0, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              📄 ARCA — Facturación Electrónica
+            </h3>
+          </div>
+          <TabARCA clienteId={cliente.id} />
+        </div>
+      )}
+
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 380px', gap: '20px', alignItems: 'start' }}>
 
         {/* COLUMNA IZQUIERDA */}
@@ -547,6 +559,224 @@ function DetalleCliente() {
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── TAB ARCA ──────────────────────────────────────────────────
+function TabARCA({ clienteId }: { clienteId: number }) {
+  const [config, setConfig]         = useState<any>(null);
+  const [cargando, setCargando]     = useState(true);
+  const [guardando, setGuardando]   = useState(false);
+  const [probando, setProbando]     = useState(false);
+  const [resultTest, setResultTest] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [form, setForm] = useState({
+    cuit: '', razon_social: '', condicion_iva: '', punto_venta: '1',
+    modo: 'homologacion', certificado: '', clave_privada: '',
+    emite_factura_a: false, emite_factura_b: true, emite_factura_c: false,
+    emite_nota_credito: false, emite_nota_debito: false,
+  });
+
+  const cargar = async () => {
+    setCargando(true);
+    try {
+      const r = await fetch(`${API_BASE}/api/superadmin/arca/config/${clienteId}`, {
+        headers: { 'x-superadmin-token': getToken() },
+      });
+      if (r.ok) {
+        const d = await r.json();
+        setConfig(d);
+        if (d.configurado) {
+          setForm(f => ({ ...f,
+            cuit: d.cuit || '', razon_social: d.razon_social || '',
+            condicion_iva: d.condicion_iva || '', punto_venta: String(d.punto_venta || 1),
+            modo: d.modo || 'homologacion',
+            emite_factura_a: !!d.emite_factura_a, emite_factura_b: !!d.emite_factura_b,
+            emite_factura_c: !!d.emite_factura_c, emite_nota_credito: !!d.emite_nota_credito,
+            emite_nota_debito: !!d.emite_nota_debito,
+          }));
+        }
+      }
+    } finally { setCargando(false); }
+  };
+
+  useEffect(() => { cargar(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const guardar = async () => {
+    setGuardando(true);
+    try {
+      await fetch(`${API_BASE}/api/superadmin/arca/config/${clienteId}`, {
+        method: 'PUT', headers: { 'x-superadmin-token': getToken(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...form, punto_venta: parseInt(form.punto_venta) || 1 }),
+      });
+      cargar();
+    } finally { setGuardando(false); }
+  };
+
+  const probarConexion = async () => {
+    setProbando(true); setResultTest(null);
+    try {
+      const r = await fetch(`${API_BASE}/api/superadmin/arca/config/${clienteId}/test`, {
+        method: 'POST', headers: { 'x-superadmin-token': getToken(), 'Content-Type': 'application/json' },
+      });
+      const d = await r.json();
+      if (d.ok) {
+        const exp = d.expira_en ? new Date(d.expira_en).toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'}) : '—';
+        setResultTest({ ok: true, msg: `✅ Conexión exitosa. Token válido hasta ${exp}` });
+      } else {
+        setResultTest({ ok: false, msg: `❌ Error: ${d.error || d.mensaje || 'Sin respuesta'}` });
+      }
+      cargar();
+    } finally { setProbando(false); }
+  };
+
+  const badgeEstadoConexion = () => {
+    const e = config?.estado_conexion || 'sin_configurar';
+    if (e === 'ok')             return { icon: '🟢', label: 'Conectado',      color: '#38A169' };
+    if (e === 'error')          return { icon: '🔴', label: 'Error',           color: '#E53E3E' };
+    if (e === 'token_vencido')  return { icon: '🟡', label: 'Token vencido',   color: '#DD6B20' };
+    return                             { icon: '⚪', label: 'Sin configurar',  color: '#718096' };
+  };
+
+  if (cargando) return <div style={{ padding: '24px', color: GRAY, textAlign: 'center' }}>Cargando configuración ARCA...</div>;
+
+  const badge = badgeEstadoConexion();
+  const inp: React.CSSProperties = { width: '100%', padding: '8px 10px', border: '1.5px solid #CBD5E0', borderRadius: '7px', fontSize: '13px', boxSizing: 'border-box' };
+  const lbl: React.CSSProperties = { display: 'block', fontSize: '12px', fontWeight: 600, color: GRAY, marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.4px' };
+
+  return (
+    <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+
+      {/* Estado conexión */}
+      <div style={{ backgroundColor: '#fff', borderRadius: '12px', padding: '20px', boxShadow: '0 2px 8px rgba(0,0,0,0.07)', borderLeft: `4px solid ${badge.color}` }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+          <span style={{ fontSize: '22px' }}>{badge.icon}</span>
+          <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: badge.color }}>{badge.label}</h3>
+          <span style={{ fontSize: '11px', fontWeight: 700, color: '#fff',
+            backgroundColor: form.modo === 'produccion' ? '#38A169' : '#DD6B20',
+            borderRadius: '10px', padding: '2px 10px', marginLeft: '8px' }}>
+            {form.modo === 'produccion' ? 'PRODUCCIÓN' : 'HOMOLOGACIÓN'}
+          </span>
+        </div>
+        {config?.ultima_conexion && (
+          <p style={{ margin: 0, fontSize: '12px', color: GRAY }}>
+            Última conexión: {new Date(config.ultima_conexion).toLocaleString('es-AR')}
+          </p>
+        )}
+        {config?.ultimo_error && config.estado_conexion === 'error' && (
+          <p style={{ margin: '6px 0 0', fontSize: '12px', color: '#E53E3E' }}>{config.ultimo_error}</p>
+        )}
+        {resultTest && (
+          <div style={{ marginTop: '10px', padding: '10px 14px', borderRadius: '7px', fontSize: '13px', fontWeight: 600,
+            backgroundColor: resultTest.ok ? '#F0FFF4' : '#FFF5F5', color: resultTest.ok ? '#38A169' : '#E53E3E' }}>
+            {resultTest.msg}
+          </div>
+        )}
+      </div>
+
+      {/* Configuración */}
+      <div style={{ backgroundColor: '#fff', borderRadius: '12px', boxShadow: '0 2px 8px rgba(0,0,0,0.07)', overflow: 'hidden' }}>
+        <div style={{ padding: '14px 20px', borderBottom: `2px solid ${SEP}` }}>
+          <h3 style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: NAVY, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Configuración</h3>
+        </div>
+        <div style={{ padding: '20px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+          <div>
+            <label style={lbl}>CUIT del cliente</label>
+            <input value={form.cuit} onChange={e => setForm(f => ({ ...f, cuit: e.target.value }))} placeholder="20-12345678-9" style={inp} />
+          </div>
+          <div>
+            <label style={lbl}>Razón social</label>
+            <input value={form.razon_social} onChange={e => setForm(f => ({ ...f, razon_social: e.target.value }))} style={inp} />
+          </div>
+          <div>
+            <label style={lbl}>Condición IVA</label>
+            <select value={form.condicion_iva} onChange={e => setForm(f => ({ ...f, condicion_iva: e.target.value }))} style={{ ...inp, background: '#fff' }}>
+              <option value="">Seleccionar...</option>
+              <option value="1">Responsable Inscripto</option>
+              <option value="4">Exento</option>
+              <option value="6">Monotributista</option>
+            </select>
+          </div>
+          <div>
+            <label style={lbl}>Punto de venta</label>
+            <input type="number" value={form.punto_venta} onChange={e => setForm(f => ({ ...f, punto_venta: e.target.value }))} min="1" max="9999" style={inp} />
+          </div>
+          <div style={{ gridColumn: '1/-1' }}>
+            <label style={lbl}>Modo</label>
+            <div style={{ display: 'flex', gap: '16px', marginTop: '4px' }}>
+              {[{ v: 'homologacion', label: 'Homologación (pruebas)' }, { v: 'produccion', label: 'Producción (real)' }].map(m => (
+                <label key={m.v} style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '13px' }}>
+                  <input type="radio" name="modo_arca" value={m.v} checked={form.modo === m.v} onChange={() => setForm(f => ({ ...f, modo: m.v }))} />
+                  {m.label}
+                </label>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Certificado y clave */}
+      <div style={{ backgroundColor: '#fff', borderRadius: '12px', boxShadow: '0 2px 8px rgba(0,0,0,0.07)', overflow: 'hidden' }}>
+        <div style={{ padding: '14px 20px', borderBottom: `2px solid ${SEP}` }}>
+          <h3 style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: NAVY, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Certificado y clave privada</h3>
+        </div>
+        <div style={{ padding: '16px 20px', backgroundColor: '#FFFAF0', borderBottom: '1px solid #EDF2F7', fontSize: '12px', color: '#744210' }}>
+          <strong>Instrucciones:</strong> 1. Entrá a ARCA con el CUIT del cliente · 2. Ir a Mis Servicios → WSFE · 3. Generar certificado de {form.modo === 'homologacion' ? 'homologación' : 'producción'} · 4. Pegar el contenido aquí
+        </div>
+        <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+              <label style={lbl}>Certificado (.crt)</label>
+              {config?.tiene_certificado && <span style={{ fontSize: '11px', fontWeight: 700, color: '#38A169', backgroundColor: '#F0FFF4', borderRadius: '10px', padding: '2px 8px' }}>✓ Cargado</span>}
+            </div>
+            <textarea value={form.certificado} onChange={e => setForm(f => ({ ...f, certificado: e.target.value }))}
+              placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"
+              rows={4} style={{ ...inp, resize: 'vertical', fontFamily: 'monospace', fontSize: '11px' }} />
+          </div>
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+              <label style={lbl}>Clave privada (.key)</label>
+              {config?.tiene_clave && <span style={{ fontSize: '11px', fontWeight: 700, color: '#38A169', backgroundColor: '#F0FFF4', borderRadius: '10px', padding: '2px 8px' }}>✓ Cargada</span>}
+            </div>
+            <textarea value={form.clave_privada} onChange={e => setForm(f => ({ ...f, clave_privada: e.target.value }))}
+              placeholder="-----BEGIN PRIVATE KEY-----&#10;...&#10;-----END PRIVATE KEY-----"
+              rows={4} style={{ ...inp, resize: 'vertical', fontFamily: 'monospace', fontSize: '11px' }} />
+          </div>
+        </div>
+      </div>
+
+      {/* Tipos de comprobante */}
+      <div style={{ backgroundColor: '#fff', borderRadius: '12px', boxShadow: '0 2px 8px rgba(0,0,0,0.07)', overflow: 'hidden' }}>
+        <div style={{ padding: '14px 20px', borderBottom: `2px solid ${SEP}` }}>
+          <h3 style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: NAVY, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Tipos de comprobante habilitados</h3>
+        </div>
+        <div style={{ padding: '16px 20px', display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+          {[
+            { f: 'emite_factura_a',    label: 'Factura A' },
+            { f: 'emite_factura_b',    label: 'Factura B' },
+            { f: 'emite_factura_c',    label: 'Factura C' },
+            { f: 'emite_nota_credito', label: 'Nota de Crédito' },
+            { f: 'emite_nota_debito',  label: 'Nota de Débito' },
+          ].map(({ f, label }) => (
+            <label key={f} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px' }}>
+              <input type="checkbox" checked={(form as any)[f]} onChange={e => setForm(prev => ({ ...prev, [f]: e.target.checked }))} />
+              {label}
+            </label>
+          ))}
+        </div>
+      </div>
+
+      {/* Botones */}
+      <div style={{ display: 'flex', gap: '10px' }}>
+        <button onClick={guardar} disabled={guardando}
+          style={{ padding: '10px 22px', backgroundColor: guardando ? '#C6F6D5' : '#38A169', color: '#fff', border: 'none', borderRadius: '8px', cursor: guardando ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: 700 }}>
+          {guardando ? 'Guardando...' : '✅ Guardar configuración'}
+        </button>
+        <button onClick={probarConexion} disabled={probando}
+          style={{ padding: '10px 22px', backgroundColor: probando ? '#BEE3F8' : BLUE, color: '#fff', border: 'none', borderRadius: '8px', cursor: probando ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: 700 }}>
+          {probando ? '⏳ Conectando...' : '🔌 Probar conexión'}
+        </button>
       </div>
     </div>
   );

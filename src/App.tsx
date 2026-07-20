@@ -31,10 +31,35 @@ import RobertoClientes from './pages/roberto/clientes/RobertoClientes';
 import RobertoPresupuestos from './pages/roberto/presupuestos/RobertoPresupuestos';
 import RobertoRemitos from './pages/roberto/remitos/RobertoRemitos';
 import RobertoProveedores from './pages/roberto/proveedores/RobertoProveedores';
+import RobertoGastos from './pages/roberto/gastos/RobertoGastos';
+import RobertoCuentaCorriente from './pages/roberto/cuentacorriente/RobertoCuentaCorriente';
+import RobertoCaja from './pages/roberto/caja/RobertoCaja';
+import RobertoCheques from './pages/roberto/cheques/RobertoCheques';
+import RobertoNotas from './pages/roberto/notas/RobertoNotas';
+import RobertoArca from './pages/roberto/arca/RobertoArca';
+import RobertoReportes from './pages/roberto/reportes/RobertoReportes';
+import PiLogin from './pages/pedidos-inteligentes/PiLogin';
+import PiDashboard from './pages/pedidos-inteligentes/PiDashboard';
+import PiProductos from './pages/pedidos-inteligentes/productos/PiProductos';
+import PiClientes  from './pages/pedidos-inteligentes/clientes/PiClientes';
+import PiNuevoPedido from './pages/pedidos-inteligentes/pedido/PiNuevoPedido';
+import PiNotaPedido  from './pages/pedidos-inteligentes/pedido/PiNotaPedido';
+import PiPedidos     from './pages/pedidos-inteligentes/pedido/PiPedidos';
+import PiConfig      from './pages/pedidos-inteligentes/PiConfig';
 
 function RedirectToLogin() {
   const location = useLocation();
   return <Navigate to={`/login${location.search}`} replace />;
+}
+
+function RootRedirect() {
+  const location = useLocation();
+  const params = new URLSearchParams(location.search);
+  const m = params.get('m');
+  if (m) {
+    return <Navigate to={`/login?m=${m}`} replace />;
+  }
+  return <Navigate to="/login" replace />;
 }
 
 function App() {
@@ -44,6 +69,7 @@ function App() {
   return (
     <BrowserRouter>
       <Routes>
+        <Route path="/" element={<RootRedirect />} />
         <Route path="/admin" element={<Admin />} />
         <Route path="/login" element={<Login />} />
         <Route path="/dashboard" element={
@@ -108,6 +134,21 @@ function App() {
         <Route path="/roberto/presupuestos" element={<RobertoPresupuestos />} />
         <Route path="/roberto/remitos" element={<RobertoRemitos />} />
         <Route path="/roberto/proveedores" element={<RobertoProveedores />} />
+        <Route path="/roberto/gastos" element={<RobertoGastos />} />
+        <Route path="/roberto/cuenta-corriente" element={<RobertoCuentaCorriente />} />
+        <Route path="/roberto/caja" element={<RobertoCaja />} />
+        <Route path="/roberto/cheques" element={<RobertoCheques />} />
+        <Route path="/roberto/notas" element={<RobertoNotas />} />
+        <Route path="/roberto/arca" element={<RobertoArca />} />
+        <Route path="/roberto/reportes" element={<RobertoReportes />} />
+        <Route path="/pedidos-inteligentes/login"     element={<PiLogin />} />
+        <Route path="/pedidos-inteligentes/dashboard"  element={<PiDashboard />} />
+        <Route path="/pedidos-inteligentes/productos"  element={<PiProductos />} />
+        <Route path="/pedidos-inteligentes/clientes"   element={<PiClientes />} />
+        <Route path="/pedidos-inteligentes/nuevo-pedido" element={<PiNuevoPedido />} />
+        <Route path="/pedidos-inteligentes/nota/:id"    element={<PiNotaPedido />} />
+        <Route path="/pedidos-inteligentes/pedidos"         element={<PiPedidos />} />
+        <Route path="/pedidos-inteligentes/configuracion"  element={<PiConfig />} />
         <Route path="*" element={<RedirectToLogin />} />
       </Routes>
     </BrowserRouter>

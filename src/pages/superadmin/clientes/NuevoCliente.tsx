@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { API_BASE } from '../../../config/api';
 
 const BLUE = '#2B6CB0';
 const NAVY = '#1B2A4A';
@@ -8,8 +9,7 @@ const TEXT = '#2D3748';
 const ERROR_COLOR = '#E53E3E';
 const GREEN = '#38A169';
 const BG = '#F4F6F9';
-const BASE_URL = 'sistemagestiopedidos.netlify.app';
-const API_BASE = (process.env.REACT_APP_API_URL || 'http://localhost:4000');
+const BASE_URL = 'sistemagestionpedidos.netlify.app';
 
 // ─── PASO 1 ───────────────────────────────────────────────────
 const rubros = ['Ferretería', 'Distribuidora', 'Librería-Imprenta', 'Supermercado', 'Otro'];
