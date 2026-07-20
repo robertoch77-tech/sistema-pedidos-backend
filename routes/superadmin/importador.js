@@ -178,6 +178,20 @@ async function asegurarTablas() {
 }
 asegurarTablas();
 
+// ── Temp file cache (30 min TTL) ─────────────────────────────
+const tempFiles = new Map();
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, f] of tempFiles) if (f.expires < now) tempFiles.delete(id);
+}, 5 * 60 * 1000);
+
+function genTempId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+function calcPrefix(nombre) {
+  return (nombre || '').trim().split(/\s+/).map(w => (w[0] || '').toUpperCase()).join('');
+}
+
 // ── Helpers ───────────────────────────────────────────────────
 
 // Leer Excel y devolver array de filas (cada fila es array de valores)
@@ -1111,6 +1125,192 @@ router.get('/productos/:cliente_id/:id/historial', async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
+// POST /analizar-diff  — clasificar sin importar (paso 3 UI)
+// ═══════════════════════════════════════════════════════════════
+router.post('/analizar-diff', upload.single('archivo'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ mensaje: 'Se requiere un archivo Excel' });
+    const { cliente_id, proveedor } = req.body;
+    if (!cliente_id) return res.status(400).json({ mensaje: 'cliente_id requerido' });
+
+    const cfg = typeof req.body.configuracion === 'string'
+      ? JSON.parse(req.body.configuracion) : (req.body.configuracion || {});
+    const { hojas_seleccionadas = [], mapeo = {}, marca_defecto, rubro_defecto } = cfg;
+
+    // Guardar archivo temporal 30 min
+    const tempId = genTempId();
+    tempFiles.set(tempId, { buffer: req.file.buffer, expires: Date.now() + 30 * 60 * 1000 });
+
+    // Resolver proveedor_id
+    let proveedor_id = null;
+    if (proveedor && proveedor.trim()) {
+      const pe = await pool.query('SELECT id FROM proveedores WHERE cliente_id=$1 AND nombre=$2 LIMIT 1', [cliente_id, proveedor.trim()]);
+      if (pe.rows[0]) proveedor_id = pe.rows[0].id;
+    }
+    const prefix = calcPrefix(proveedor);
+
+    // Cargar DB — productos del cliente
+    const dbRes = await pool.query(
+      `SELECT id, codigo, proveedor_id, descripcion,
+              COALESCE(precio_costo,0)::numeric       AS precio_costo,
+              COALESCE(precio_venta_1,0)::numeric     AS precio_venta_1,
+              COALESCE(precio_venta_2,0)::numeric     AS precio_venta_2,
+              COALESCE(precio_venta_final,0)::numeric AS precio_venta_final,
+              COALESCE(precio_venta_3,0)::numeric     AS precio_venta_3,
+              marca, rubro, unidad_medida, ean,
+              COALESCE(dto_1,0)::numeric AS dto_1,
+              COALESCE(dto_2,0)::numeric AS dto_2,
+              COALESCE(dto_3,0)::numeric AS dto_3,
+              COALESCE(alicuota_iva,0)::numeric AS alicuota_iva,
+              COALESCE(stock_actual,0)::numeric AS stock_actual,
+              COALESCE(stock_minimo,0)::numeric AS stock_minimo
+       FROM productos_propios WHERE cliente_id=$1`,
+      [cliente_id]
+    );
+    const dbMap = new Map(dbRes.rows.map(r => [String(r.codigo || '').trim().toUpperCase(), r]));
+
+    // Nombres de proveedores para mostrar en UI
+    const provRes = await pool.query('SELECT id, nombre FROM proveedores WHERE cliente_id=$1', [cliente_id]);
+    const provNombres = new Map(provRes.rows.map(r => [Number(r.id), r.nombre]));
+
+    // Leer Excel
+    const wb = XLSX.read(req.file.buffer, { type: 'buffer', cellDates: true });
+
+    const CAMPOS_DIFF = [
+      { campo: 'precio_costo',      label: 'Precio costo', tipo: 'num' },
+      { campo: 'precio_venta_1',    label: 'PV1',          tipo: 'num' },
+      { campo: 'precio_venta_2',    label: 'PV2',          tipo: 'num' },
+      { campo: 'precio_venta_final',label: 'PV Final',     tipo: 'num' },
+      { campo: 'precio_venta_3',    label: 'PV3',          tipo: 'num' },
+      { campo: 'descripcion',       label: 'Descripción',  tipo: 'str' },
+      { campo: 'marca',             label: 'Marca',        tipo: 'str' },
+      { campo: 'rubro',             label: 'Rubro',        tipo: 'str' },
+      { campo: 'unidad_medida',     label: 'Unidad',       tipo: 'str' },
+      { campo: 'ean',               label: 'EAN',          tipo: 'str' },
+      { campo: 'dto_1',             label: 'Descuento 1%', tipo: 'num' },
+      { campo: 'dto_2',             label: 'Descuento 2%', tipo: 'num' },
+      { campo: 'dto_3',             label: 'Descuento 3%', tipo: 'num' },
+      { campo: 'alicuota_iva',      label: 'IVA%',         tipo: 'num' },
+      { campo: 'stock_actual',      label: 'Stock',        tipo: 'num' },
+      { campo: 'stock_minimo',      label: 'Stock mínimo', tipo: 'num' },
+    ];
+
+    const nuevos = [], actualizar = [], prefijados = [];
+    const codigosEnExcel = new Set();
+    let preciosSuben = 0, preciosBajan = 0, preciosSinCambio = 0, sumVar = 0, cntVar = 0;
+
+    for (const hojaName of hojas_seleccionadas) {
+      if (!wb.Sheets[hojaName]) continue;
+      const filas = XLSX.utils.sheet_to_json(wb.Sheets[hojaName], { header: 1, defval: '' });
+      if (!filas.length) continue;
+      const headerIdx = detectarEncabezado(filas);
+      const enc = filas[headerIdx].map(c => String(c).trim());
+      const datos = filas.slice(headerIdx + 1).filter(f => f.some(c => c !== '' && c != null));
+
+      for (const fila of datos) {
+        const descCols = Array.isArray(mapeo.descripcion) ? mapeo.descripcion : (mapeo.descripcion ? [mapeo.descripcion] : []);
+        const descripcion = descCols.map(c => val(fila, c, enc)).filter(Boolean).join(' ').trim();
+        const codigo = val(fila, mapeo.codigo, enc) || null;
+        if (!descripcion && !codigo) continue;
+
+        const key = codigo ? codigo.trim().toUpperCase() : null;
+        if (key) codigosEnExcel.add(key);
+
+        const camposExcel = {
+          precio_costo:       numVal(fila, mapeo.precio_costo, enc),
+          precio_venta_1:     numVal(fila, mapeo.precio_venta_1, enc),
+          precio_venta_2:     numVal(fila, mapeo.precio_venta_2, enc),
+          precio_venta_final: numVal(fila, mapeo.precio_venta_3, enc),
+          precio_venta_3:     numVal(fila, mapeo.precio_venta_3, enc),
+          descripcion:        descripcion || null,
+          marca:              val(fila, mapeo.marca, enc) || marca_defecto || null,
+          rubro:              val(fila, mapeo.rubro, enc) || rubro_defecto || null,
+          unidad_medida:      val(fila, mapeo.unidad_medida, enc) || null,
+          ean:                val(fila, mapeo.ean, enc) || null,
+          dto_1:              numVal(fila, mapeo.descuento_1, enc),
+          dto_2:              numVal(fila, mapeo.descuento_2, enc),
+          dto_3:              numVal(fila, mapeo.descuento_3, enc),
+          alicuota_iva:       numVal(fila, mapeo.iva, enc),
+          stock_actual:       numVal(fila, mapeo.stock, enc),
+          stock_minimo:       numVal(fila, mapeo.stock_minimo, enc),
+        };
+
+        const existing = key ? dbMap.get(key) : null;
+
+        if (!existing) {
+          nuevos.push({ codigo, descripcion });
+        } else {
+          const mismoProv = proveedor_id === null ||
+            existing.proveedor_id === null ||
+            Number(existing.proveedor_id) === Number(proveedor_id);
+
+          if (mismoProv) {
+            // Mismo proveedor → calcular diffs
+            const diffs = [];
+            for (const { campo, label, tipo } of CAMPOS_DIFF) {
+              const vEx = camposExcel[campo];
+              if (vEx === null || vEx === undefined) continue;
+              const vDb = existing[campo];
+              const changed = tipo === 'num'
+                ? Math.abs((parseFloat(vEx) || 0) - (parseFloat(vDb) || 0)) > 0.001
+                : String(vEx || '').trim() !== String(vDb || '').trim();
+              if (changed) diffs.push({ campo, label, anterior: vDb ?? null, nuevo: vEx });
+            }
+
+            // Estadísticas de precio
+            const pcDb = parseFloat(existing.precio_costo) || 0;
+            const pcEx = camposExcel.precio_costo;
+            if (pcEx !== null) {
+              if (pcEx > pcDb)      { preciosSuben++;    sumVar += pcDb > 0 ? ((pcEx - pcDb) / pcDb) * 100 : 0; cntVar++; }
+              else if (pcEx < pcDb) { preciosBajan++;    sumVar += pcDb > 0 ? ((pcEx - pcDb) / pcDb) * 100 : 0; cntVar++; }
+              else                   preciosSinCambio++;
+            }
+
+            actualizar.push({ codigo, descripcion, id: existing.id, diffs });
+          } else {
+            // Distinto proveedor → prefijo automático
+            const codigoPrefijado = prefix ? `${prefix}-${codigo}` : codigo;
+            const provNombre = provNombres.get(Number(existing.proveedor_id)) || `(sin nombre)`;
+            prefijados.push({ codigo_original: codigo, codigo_nuevo: codigoPrefijado, descripcion, proveedor_existente: provNombre });
+          }
+        }
+      }
+    }
+
+    // Productos del mismo proveedor en DB que NO están en el Excel
+    const ausentes = [];
+    for (const [key, row] of dbMap) {
+      const esMismoProv = proveedor_id === null ||
+        row.proveedor_id === null ||
+        Number(row.proveedor_id) === Number(proveedor_id);
+      if (esMismoProv && !codigosEnExcel.has(key) && row.codigo) {
+        ausentes.push({ codigo: row.codigo, descripcion: row.descripcion, precio_costo: parseFloat(row.precio_costo) || 0 });
+      }
+    }
+
+    res.json({
+      temp_id: tempId,
+      resumen: {
+        nuevos:             nuevos.length,
+        actualizar:         actualizar.length,
+        prefijados:         prefijados.length,
+        ausentes:           ausentes.length,
+        precios_suben:      preciosSuben,
+        precios_bajan:      preciosBajan,
+        precios_sin_cambio: preciosSinCambio,
+        variacion_promedio: cntVar > 0 ? Math.round(sumVar / cntVar * 10) / 10 : 0,
+      },
+      actualizar,
+      prefijados,
+      ausentes,
+    });
+  } catch (err) {
+    console.error('POST /analizar-diff error:', err.message);
+    res.status(500).json({ mensaje: 'Error al analizar', detalle: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
 // POST /analizar-v2  — detectar todas las hojas del Excel
 // ═══════════════════════════════════════════════════════════════
 router.post('/analizar-v2', upload.single('archivo'), async (req, res) => {
@@ -1143,7 +1343,19 @@ router.post('/analizar-v2', upload.single('archivo'), async (req, res) => {
 router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next(); }, upload.single('archivo'), async (req, res) => {
   const client = await pool.connect();
   try {
-    if (!req.file) return res.status(400).json({ mensaje: 'Se requiere un archivo Excel' });
+    // Aceptar archivo subido O temp_id del análisis previo
+    let fileBuffer;
+    if (req.file) {
+      fileBuffer = req.file.buffer;
+    } else {
+      const tmpId = req.body.temp_id;
+      if (!tmpId) return res.status(400).json({ mensaje: 'Se requiere un archivo Excel o temp_id' });
+      const tmp = tempFiles.get(tmpId);
+      if (!tmp) return res.status(400).json({ mensaje: 'Archivo temporal no encontrado o expirado. Volvé al mapeo y analizá de nuevo.' });
+      fileBuffer = tmp.buffer;
+      tempFiles.delete(tmpId);
+    }
+
     const { cliente_id, proveedor } = req.body;
     const cfg = typeof req.body.configuracion === 'string'
       ? JSON.parse(req.body.configuracion) : (req.body.configuracion || {});
@@ -1155,10 +1367,11 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
       if (pe.rows[0]) { proveedor_id = pe.rows[0].id; }
       else { const ins = await pool.query('INSERT INTO proveedores (cliente_id, nombre, activo) VALUES ($1,$2,true) RETURNING id', [cliente_id, proveedor.trim()]); proveedor_id = ins.rows[0].id; }
     }
+    const prefix = calcPrefix(proveedor);
 
-    const wb = XLSX.read(req.file.buffer, { type: 'buffer', cellDates: true });
-    const existRes = await pool.query('SELECT id, codigo FROM productos_propios WHERE cliente_id=$1', [cliente_id]);
-    const existMap = new Map(existRes.rows.map(r => [String(r.codigo || '').trim().toUpperCase(), r.id]));
+    const wb = XLSX.read(fileBuffer, { type: 'buffer', cellDates: true });
+    const existRes = await pool.query('SELECT id, codigo, proveedor_id FROM productos_propios WHERE cliente_id=$1', [cliente_id]);
+    const existMap = new Map(existRes.rows.map(r => [String(r.codigo || '').trim().toUpperCase(), { id: r.id, proveedor_id: r.proveedor_id }]));
 
     let totalNuevos = 0, totalActualizados = 0, totalErrores = 0;
     const porHoja = [];
@@ -1199,24 +1412,50 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
               stock_minimo:   numVal(fila, mapeo.stock_minimo, enc),
             };
             if (key && existMap.has(key)) {
-              const id = existMap.get(key);
-              await client.query(
-                `UPDATE productos_propios SET descripcion=$1,proveedor_id=$2,
-                 precio_costo=COALESCE($3,precio_costo),precio_venta_1=COALESCE($4,precio_venta_1),
-                 precio_venta_2=COALESCE($5,precio_venta_2),precio_venta_3=COALESCE($6,precio_venta_3),
-                 marca=COALESCE($7,marca),rubro=COALESCE($8,rubro),
-                 unidad_medida=COALESCE($9,unidad_medida),ean=COALESCE($10,ean),
-                 dto_1=COALESCE($11,dto_1),dto_2=COALESCE($12,dto_2),dto_3=COALESCE($13,dto_3),
-                 alicuota_iva=COALESCE($14,alicuota_iva),
-                 stock_actual=COALESCE($15,stock_actual),stock_minimo=COALESCE($16,stock_minimo),
-                 modificado_en=now() WHERE id=$17 AND cliente_id=$18`,
-                [descripcion,proveedor_id,campos.precio_costo,campos.precio_venta_1,campos.precio_venta_2,
-                 campos.precio_venta_3,campos.marca,campos.rubro,campos.unidad_medida,campos.ean,
-                 campos.dto_1,campos.dto_2,campos.dto_3,campos.alicuota_iva,
-                 campos.stock_actual,campos.stock_minimo,id,cliente_id]
-              );
-              actualizados++;
+              const existing = existMap.get(key);
+              const mismoProv = proveedor_id === null ||
+                existing.proveedor_id === null ||
+                Number(existing.proveedor_id) === Number(proveedor_id);
+
+              if (mismoProv) {
+                // CASO 1 — mismo proveedor: actualizar
+                await client.query(
+                  `UPDATE productos_propios SET descripcion=$1,proveedor_id=$2,
+                   precio_costo=COALESCE($3,precio_costo),precio_venta_1=COALESCE($4,precio_venta_1),
+                   precio_venta_2=COALESCE($5,precio_venta_2),precio_venta_3=COALESCE($6,precio_venta_3),
+                   marca=COALESCE($7,marca),rubro=COALESCE($8,rubro),
+                   unidad_medida=COALESCE($9,unidad_medida),ean=COALESCE($10,ean),
+                   dto_1=COALESCE($11,dto_1),dto_2=COALESCE($12,dto_2),dto_3=COALESCE($13,dto_3),
+                   alicuota_iva=COALESCE($14,alicuota_iva),
+                   stock_actual=COALESCE($15,stock_actual),stock_minimo=COALESCE($16,stock_minimo),
+                   modificado_en=now() WHERE id=$17 AND cliente_id=$18`,
+                  [descripcion,proveedor_id,campos.precio_costo,campos.precio_venta_1,campos.precio_venta_2,
+                   campos.precio_venta_3,campos.marca,campos.rubro,campos.unidad_medida,campos.ean,
+                   campos.dto_1,campos.dto_2,campos.dto_3,campos.alicuota_iva,
+                   campos.stock_actual,campos.stock_minimo,existing.id,cliente_id]
+                );
+                actualizados++;
+              } else {
+                // CASO 2 — distinto proveedor: insertar con prefijo
+                const codigoPrefijado = prefix ? `${prefix}-${codigo}` : codigo;
+                const ins = await client.query(
+                  `INSERT INTO productos_propios
+                   (cliente_id,proveedor_id,codigo,descripcion,precio_costo,precio_venta_1,precio_venta_2,
+                    precio_venta_3,marca,rubro,unidad_medida,ean,dto_1,dto_2,dto_3,alicuota_iva,
+                    stock_actual,stock_minimo,activo)
+                   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,true) RETURNING id`,
+                  [cliente_id,proveedor_id,codigoPrefijado,descripcion,
+                   campos.precio_costo||0,campos.precio_venta_1||0,campos.precio_venta_2||0,campos.precio_venta_3||0,
+                   campos.marca,campos.rubro,campos.unidad_medida,campos.ean,
+                   campos.dto_1||0,campos.dto_2||0,campos.dto_3||0,campos.alicuota_iva||0,
+                   campos.stock_actual||0,campos.stock_minimo||0]
+                );
+                const newKey = codigoPrefijado ? codigoPrefijado.trim().toUpperCase() : null;
+                if (newKey) existMap.set(newKey, { id: ins.rows[0].id, proveedor_id });
+                nuevos++;
+              }
             } else {
+              // CASO 3 — código nuevo: insertar normal
               const ins = await client.query(
                 `INSERT INTO productos_propios
                  (cliente_id,proveedor_id,codigo,descripcion,precio_costo,precio_venta_1,precio_venta_2,
@@ -1229,7 +1468,7 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
                  campos.dto_1||0,campos.dto_2||0,campos.dto_3||0,campos.alicuota_iva||0,
                  campos.stock_actual||0,campos.stock_minimo||0]
               );
-              if (key) existMap.set(key, ins.rows[0].id);
+              if (key) existMap.set(key, { id: ins.rows[0].id, proveedor_id });
               nuevos++;
             }
           } catch { errores++; }
@@ -1340,6 +1579,128 @@ router.put('/actualizar-masivo', async (req, res) => {
   } catch (err) {
     console.error('PUT /actualizar-masivo error:', err.message);
     res.status(500).json({ mensaje: 'Error', detalle: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// PUT /ajuste-porcentaje
+// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// PUT /ajuste-porcentaje
+// confirmar=false → solo calcular (sin guardar)
+// confirmar=true  → calcular y guardar
+// ═══════════════════════════════════════════════════════════════
+router.put('/ajuste-porcentaje', async (req, res) => {
+  try {
+    const { cliente_id, ids, tipo, porcentaje, utilidad_anterior, utilidad_nueva, confirmar } = req.body;
+
+    const TIPOS = ['aumento_costo', 'descuento_costo', 'cambio_utilidad'];
+    if (!TIPOS.includes(tipo)) return res.status(400).json({ mensaje: 'Tipo inválido' });
+    if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ mensaje: 'IDs requeridos' });
+    if (!cliente_id) return res.status(400).json({ mensaje: 'cliente_id requerido' });
+
+    const productosRes = await pool.query(
+      `SELECT id, codigo, descripcion,
+              precio_costo, dto_1, dto_2, dto_3,
+              imp_1, imp_2, alicuota_iva,
+              utilidad_1, utilidad_2, utilidad_3
+       FROM productos_propios
+       WHERE id=ANY($1) AND cliente_id=$2`,
+      [ids, cliente_id]
+    );
+
+    const productos = productosRes.rows;
+    if (!productos.length) return res.status(404).json({ mensaje: 'No se encontraron productos' });
+
+    const calcPcFinal = (pc, d1, d2, d3) =>
+      pc * (1 - (d1||0)/100) * (1 - (d2||0)/100) * (1 - (d3||0)/100);
+    const calcPv = (pcFinal, i1, i2, iva, ut) =>
+      pcFinal * (1 + (i1||0)/100) * (1 + (i2||0)/100) * (1 + (iva||0)/100) * (1 + (ut||0)/100);
+
+    const resultados = [];
+
+    for (const p of productos) {
+      const pcAnterior = parseFloat(p.precio_costo) || 0;
+      const pcFinalAnterior = calcPcFinal(pcAnterior, p.dto_1, p.dto_2, p.dto_3);
+      const pv1Anterior = calcPv(pcFinalAnterior, p.imp_1, p.imp_2, p.alicuota_iva, p.utilidad_1);
+      const pv2Anterior = calcPv(pcFinalAnterior, p.imp_1, p.imp_2, p.alicuota_iva, p.utilidad_2);
+      const pv3Anterior = calcPv(pcFinalAnterior, p.imp_1, p.imp_2, p.alicuota_iva, p.utilidad_3);
+
+      let pcNuevo = pcAnterior;
+      let u1 = parseFloat(p.utilidad_1) || 0;
+      let u2 = parseFloat(p.utilidad_2) || 0;
+      let u3 = parseFloat(p.utilidad_3) || 0;
+
+      if (tipo === 'aumento_costo') {
+        pcNuevo = pcAnterior * (1 + (parseFloat(porcentaje) || 0) / 100);
+      } else if (tipo === 'descuento_costo') {
+        pcNuevo = pcAnterior * (1 - (parseFloat(porcentaje) || 0) / 100);
+      } else if (tipo === 'cambio_utilidad') {
+        const uAnt = parseFloat(utilidad_anterior) || 0;
+        const uNueva = parseFloat(utilidad_nueva) || 0;
+        if (Math.abs(u1 - uAnt) < 0.001) u1 = uNueva;
+        if (Math.abs(u2 - uAnt) < 0.001) u2 = uNueva;
+        if (Math.abs(u3 - uAnt) < 0.001) u3 = uNueva;
+      }
+
+      const pcFinalNuevo = calcPcFinal(pcNuevo, p.dto_1, p.dto_2, p.dto_3);
+      const pv1Nuevo = calcPv(pcFinalNuevo, p.imp_1, p.imp_2, p.alicuota_iva, u1);
+      const pv2Nuevo = calcPv(pcFinalNuevo, p.imp_1, p.imp_2, p.alicuota_iva, u2);
+      const pv3Nuevo = calcPv(pcFinalNuevo, p.imp_1, p.imp_2, p.alicuota_iva, u3);
+
+      resultados.push({
+        id: p.id,
+        codigo: p.codigo,
+        descripcion: p.descripcion,
+        precio_costo_anterior: +pcAnterior.toFixed(2),
+        precio_costo_nuevo:    +pcNuevo.toFixed(2),
+        pv1_anterior: +pv1Anterior.toFixed(2),
+        pv1_nuevo:    +pv1Nuevo.toFixed(2),
+        pv2_anterior: +pv2Anterior.toFixed(2),
+        pv2_nuevo:    +pv2Nuevo.toFixed(2),
+        pv3_anterior: +pv3Anterior.toFixed(2),
+        pv3_nuevo:    +pv3Nuevo.toFixed(2),
+        _pcFinalNuevo: +pcFinalNuevo.toFixed(4),
+        _u1: u1, _u2: u2, _u3: u3,
+        _pv1: +pv1Nuevo.toFixed(4),
+        _pv2: +pv2Nuevo.toFixed(4),
+        _pv3: +pv3Nuevo.toFixed(4),
+        _pcNuevo: +pcNuevo.toFixed(4),
+      });
+    }
+
+    // Si confirmar=true, guardar en DB
+    if (confirmar) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        for (const r of resultados) {
+          await client.query(
+            `UPDATE productos_propios
+             SET precio_costo=$1, utilidad_1=$2, utilidad_2=$3, utilidad_3=$4,
+                 precio_venta_final=$5, precio_venta_2=$6, precio_venta_3=$7,
+                 modificado_en=now()
+             WHERE id=$8 AND cliente_id=$9`,
+            [r._pcNuevo, r._u1, r._u2, r._u3,
+             r._pv1, r._pv2, r._pv3,
+             r.id, cliente_id]
+          );
+        }
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw err;
+      } finally {
+        client.release();
+      }
+    }
+
+    // Limpiar campos internos antes de responder
+    const publicos = resultados.map(({ _pcFinalNuevo, _u1, _u2, _u3, _pv1, _pv2, _pv3, _pcNuevo, ...pub }) => pub);
+    res.json({ ok: true, actualizados: publicos.length, productos: publicos });
+  } catch (err) {
+    console.error('PUT /ajuste-porcentaje error:', err.message);
+    res.status(500).json({ mensaje: 'Error al aplicar ajuste', detalle: err.message });
   }
 });
 
