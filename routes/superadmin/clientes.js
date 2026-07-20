@@ -19,10 +19,12 @@ router.use(verificarTokenSuperAdmin);
 router.get('/', async (req, res) => {
   try {
     const resultado = await pool.query(
-      `SELECT id, nombre_comercial, cuit, rubro, plan, estado,
-              codigo_acceso, fecha_alta, mayorista_id, email, whatsapp
-       FROM clientes_roberto
-       ORDER BY creado_en DESC NULLS LAST`
+      `SELECT c.id, c.nombre_comercial, c.cuit, c.rubro, c.plan, c.estado,
+              c.codigo_acceso, c.fecha_alta, c.mayorista_id, c.email, c.whatsapp,
+              m.tipo_fuente
+       FROM clientes_roberto c
+       LEFT JOIN mayoristas m ON m.id = c.mayorista_id
+       ORDER BY c.creado_en DESC NULLS LAST`
     );
     res.json(resultado.rows);
   } catch (error) {
@@ -247,6 +249,48 @@ router.post('/', async (req, res) => {
     client.release();
     console.error('SuperAdmin crear cliente error:', error.message);
     res.status(500).json({ mensaje: 'Error del servidor', detalle: error.message });
+  }
+});
+
+router.delete('/:id', async (req, res) => {
+  const { id } = req.params;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const clienteRes = await client.query(
+      `SELECT c.mayorista_id, m.tipo_fuente
+       FROM clientes_roberto c
+       LEFT JOIN mayoristas m ON m.id = c.mayorista_id
+       WHERE c.id = $1`,
+      [id]
+    );
+    if (!clienteRes.rows[0]) {
+      await client.query('ROLLBACK');
+      client.release();
+      return res.status(404).json({ mensaje: 'Cliente no encontrado' });
+    }
+
+    const { mayorista_id, tipo_fuente } = clienteRes.rows[0];
+    if (tipo_fuente !== 'roberto') {
+      await client.query('ROLLBACK');
+      client.release();
+      return res.status(403).json({ mensaje: 'Este cliente pertenece al sistema Ivan y no puede eliminarse desde aquí' });
+    }
+
+    await client.query('DELETE FROM clientes_roberto WHERE id=$1', [id]);
+    if (mayorista_id) {
+      await client.query('DELETE FROM mayoristas WHERE id=$1', [mayorista_id]);
+    }
+
+    await client.query('COMMIT');
+    client.release();
+    res.json({ ok: true });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    client.release();
+    console.error('SuperAdmin DELETE cliente error:', error.message);
+    res.status(500).json({ mensaje: 'Error del servidor' });
   }
 });
 
