@@ -42,7 +42,7 @@ router.get('/:id', async (req, res) => {
               m.habilitar_analiticas, m.habilitar_ctas_ctes, m.habilitar_cotizaciones,
               m.habilitar_ventas, m.habilitar_remitos, m.habilitar_stock,
               m.habilitar_cheques, m.habilitar_caja, m.habilitar_compras,
-              m.habilitar_autos,
+              m.habilitar_autos, m.habilitar_cc_proveedores,
               m.activo AS mayorista_activo
        FROM clientes_roberto c
        LEFT JOIN mayoristas m ON m.id = c.mayorista_id
@@ -125,13 +125,14 @@ router.put('/:id/modulos', async (req, res) => {
           habilitar_cheques=$7, habilitar_caja=$8,
           habilitar_ventas=$9, habilitar_remitos=$10, habilitar_stock=$11,
           habilitar_compras=$12,
-          habilitar_autos=$13
-         WHERE id=$14`,
+          habilitar_autos=$13,
+          habilitar_cc_proveedores=$14
+         WHERE id=$15`,
         [!!modulos.chat, !!modulos.notificaciones, !!modulos.banners,
          !!modulos.analytics, !!modulos.cta_cte_clientes, !!modulos.presupuestos,
          !!modulos.cheques, !!modulos.caja,
          !!modulos.ventas, !!modulos.remitos, !!modulos.stock,
-         !!modulos.compras, !!modulos.autos,
+         !!modulos.compras, !!modulos.autos, !!modulos.cc_proveedores,
          mayorista_id]
       );
     }
