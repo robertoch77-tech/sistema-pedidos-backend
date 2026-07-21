@@ -117,6 +117,7 @@ app.use('/api/superadmin/arca',    require('./routes/superadmin/arca'));
 app.use('/api/superadmin/reportes', require('./routes/superadmin/reportes'));
 app.use('/api/superadmin/gastos',  require('./routes/superadmin/gastos'));
 app.use('/api/superadmin/autos',   require('./routes/superadmin/autos'));
+app.use('/api/superadmin/config',  require('./routes/superadmin/config'));
 app.use('/api/pi/auth',    require('./routes/pi/auth'));
 app.use('/api/pi/importar', require('./routes/pi/importar'));
 app.use('/api/pi/procesar', require('./routes/pi/procesar'));
