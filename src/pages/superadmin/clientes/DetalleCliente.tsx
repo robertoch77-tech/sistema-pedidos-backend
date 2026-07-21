@@ -338,7 +338,7 @@ function DetalleCliente() {
   };
 
   const copiarLink = () => {
-    const link = `${BASE_URL}/?m=${cliente?.codigo_acceso}`;
+    const link = `${BASE_URL}/roberto/login?m=${cliente?.codigo_acceso}`;
     navigator.clipboard.writeText(link).then(() => {
       setCopiado(true);
       setTimeout(() => setCopiado(false), 2000);
@@ -346,7 +346,7 @@ function DetalleCliente() {
   };
 
   const abrirWhatsApp = () => {
-    const link = `${BASE_URL}/?m=${cliente?.codigo_acceso}`;
+    const link = `${BASE_URL}/roberto/login?m=${cliente?.codigo_acceso}`;
     const msg = encodeURIComponent(`¡Hola! Te comparto tu acceso al sistema.\nLink: ${link}`);
     window.open(`https://api.whatsapp.com/send?text=${msg}`, '_blank');
   };
@@ -376,7 +376,7 @@ function DetalleCliente() {
     </div>
   );
 
-  const link = `${BASE_URL}/?m=${cliente.codigo_acceso}`;
+  const link = `${BASE_URL}/roberto/login?m=${cliente.codigo_acceso}`;
 
   return (
     <div style={{ minHeight: '100vh', backgroundColor: BG, padding: '28px' }}>
