@@ -185,10 +185,14 @@ function DetalleCliente() {
   });
   const [guardando, setGuardando] = useState(false);
   const [guardandoEstado, setGuardandoEstado] = useState(false);
-  const [modulos, setModulos]     = useState<ModulosState>({});
-  const [copiado, setCopiado]     = useState(false);
-  const [exitoMsg, setExitoMsg]   = useState('');
-  const [errorMsg, setErrorMsg]   = useState('');
+  const [modulos, setModulos]           = useState<ModulosState>({});
+  const [modulosOriginales, setModulosOriginales] = useState<ModulosState>({});
+  const [modulosCambiados, setModulosCambiados]   = useState(false);
+  const [guardandoModulos, setGuardandoModulos]   = useState(false);
+  const [msgModulos, setMsgModulos]               = useState('');
+  const [copiado, setCopiado]           = useState(false);
+  const [exitoMsg, setExitoMsg]         = useState('');
+  const [errorMsg, setErrorMsg]         = useState('');
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -221,6 +225,7 @@ function DetalleCliente() {
         condicion_iva:    data.condicion_iva     || '',
       });
       setModulos(modulosDesdeCliente(data));
+      setModulosOriginales(modulosDesdeCliente(data));
     } catch {
       setError('Error al cargar el cliente');
     } finally {
@@ -271,27 +276,57 @@ function DetalleCliente() {
     }
   };
 
-  const toggleModulo = async (moduloId: string, obligatorio?: boolean) => {
+  const toggleModulo = (moduloId: string, obligatorio?: boolean) => {
     if (obligatorio) return;
     const nuevos = { ...modulos, [moduloId]: !modulos[moduloId] };
     setModulos(nuevos);
+    setModulosCambiados(true);
+    setMsgModulos('');
+  };
+
+  const guardarModulos = async () => {
+    setGuardandoModulos(true);
+    setMsgModulos('');
     try {
-      await fetch(`${API_BASE}/api/superadmin/clientes/${id}/modulos`, {
+      const r = await fetch(`${API_BASE}/api/superadmin/clientes/${id}/modulos`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', 'x-superadmin-token': getToken() },
         body: JSON.stringify({ modulos: {
-          presupuestos:   nuevos.presupuestos,
-          chat:           nuevos.chat,
-          notificaciones: nuevos.notificaciones,
-          banners:        nuevos.banners,
-          analytics:      nuevos.analytics,
-          cta_cte_clientes: nuevos.cc_clientes,
-          sucursales:     nuevos.sucursales,
-          empleados:      nuevos.empleados,
-          arca:           nuevos.arca,
+          presupuestos:     modulos.presupuestos,
+          chat:             modulos.chat,
+          notificaciones:   modulos.notificaciones,
+          banners:          modulos.banners,
+          analytics:        modulos.analytics,
+          cta_cte_clientes: modulos.cc_clientes,
+          sucursales:       modulos.sucursales,
+          empleados:        modulos.empleados,
+          arca:             modulos.arca,
+          cheques:          modulos.cheques,
+          caja:             modulos.caja,
+          ventas:           modulos.ventas,
+          remitos:          modulos.remitos,
+          stock:            modulos.stock,
         }}),
       });
-    } catch { /* silencioso */ }
+      if (r.ok) {
+        setModulosOriginales({ ...modulos });
+        setModulosCambiados(false);
+        setMsgModulos('✅ Módulos guardados');
+        setTimeout(() => setMsgModulos(''), 3000);
+      } else {
+        setMsgModulos('❌ Error al guardar. Intentá de nuevo.');
+      }
+    } catch {
+      setMsgModulos('❌ Error de conexión.');
+    } finally {
+      setGuardandoModulos(false);
+    }
+  };
+
+  const cancelarModulos = () => {
+    setModulos({ ...modulosOriginales });
+    setModulosCambiados(false);
+    setMsgModulos('');
   };
 
   const copiarLink = () => {
@@ -487,6 +522,30 @@ function DetalleCliente() {
                 Módulos habilitados
               </h3>
             </div>
+            {modulosCambiados && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: '0 0 12px', padding: '10px 14px', background: '#FFF3CD', borderRadius: '8px', border: '1px solid #F6C23E', flexWrap: 'wrap' }}>
+                <span style={{ color: '#856404', fontSize: '13px' }}>⚠️ Cambios sin guardar</span>
+                <button
+                  onClick={guardarModulos}
+                  disabled={guardandoModulos}
+                  style={{ background: '#2B6CB0', color: '#fff', border: 'none', borderRadius: '6px', padding: '6px 14px', cursor: guardandoModulos ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: 600 }}
+                >
+                  {guardandoModulos ? '⏳ Guardando...' : '💾 Guardar módulos'}
+                </button>
+                <button
+                  onClick={cancelarModulos}
+                  disabled={guardandoModulos}
+                  style={{ background: 'transparent', color: '#856404', border: '1px solid #856404', borderRadius: '6px', padding: '6px 14px', cursor: 'pointer', fontSize: '13px', fontWeight: 600 }}
+                >
+                  ✕ Cancelar
+                </button>
+                {msgModulos && (
+                  <span style={{ fontSize: '13px', fontWeight: 600, color: msgModulos.startsWith('✅') ? '#38A169' : '#E53E3E' }}>
+                    {msgModulos}
+                  </span>
+                )}
+              </div>
+            )}
             {gruposModulos.map((grupo, gi) => (
               <div key={grupo.titulo}>
                 <div style={{ padding: '10px 24px 4px' }}>
