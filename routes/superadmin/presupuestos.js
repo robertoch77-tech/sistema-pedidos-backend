@@ -447,12 +447,13 @@ router.put('/:cliente_id/:id/convertir', async (req, res) => {
           subtotal, iva_monto, total, saldo,
           estado, cobrada, anulada,
           va_a_cuenta_corriente, observaciones, fecha, creado_en, modificado_en)
-       VALUES ($1,$2,$3,'V','VENTA',$4,$5,$6,$7,$8,$8,'pendiente',false,false,false,$9,now(),now(),now())
+       VALUES ($1,$2,$3,'V','VENTA',$4,$5,$6,$7,$8,$8,'pendiente',false,false,$9,$10,now(),now(),now())
        RETURNING id`,
       [
         cliente_id, numero_v, numero_completo_v,
         pres.comprador_nombre, pres.comprador_cuit,
         pres.subtotal, pres.iva_monto, pres.total,
+        pres.va_a_cuenta_corriente || false,
         pres.observaciones || '',
       ]
     );
@@ -489,7 +490,65 @@ router.put('/:cliente_id/:id/convertir', async (req, res) => {
       }
     }
 
-    // 5. Marcar presupuesto como convertido
+    // 5. Movimiento cuenta corriente (si corresponde)
+    if (pres.va_a_cuenta_corriente) {
+      let ccRes = await client.query(
+        `SELECT id, saldo
+         FROM cuentas_corrientes_clientes
+         WHERE cliente_id = $1
+         AND (
+           (comprador_cuit != '' AND comprador_cuit = $2)
+           OR (comprador_nombre = $3)
+         )
+         AND activo = true
+         LIMIT 1`,
+        [cliente_id, pres.comprador_cuit || '', pres.comprador_nombre]
+      );
+
+      let cc_id, saldo_anterior;
+      if (ccRes.rows.length === 0) {
+        const nuevaCC = await client.query(
+          `INSERT INTO cuentas_corrientes_clientes
+             (cliente_id, comprador_nombre, comprador_cuit, saldo, activo)
+           VALUES ($1,$2,$3,0,true)
+           RETURNING id, saldo`,
+          [cliente_id, pres.comprador_nombre, pres.comprador_cuit || '']
+        );
+        cc_id = nuevaCC.rows[0].id;
+        saldo_anterior = 0;
+      } else {
+        cc_id = ccRes.rows[0].id;
+        saldo_anterior = parseFloat(ccRes.rows[0].saldo) || 0;
+      }
+
+      const saldo_nuevo = saldo_anterior + parseFloat(pres.total);
+
+      await client.query(
+        `INSERT INTO movimientos_cuentas_corrientes
+           (cuenta_corriente_id, cliente_id, tipo,
+            debe, haber, saldo_acumulado,
+            descripcion, numero_comprobante,
+            venta_id, estado)
+         VALUES ($1,$2,'venta',$3,0,$4,$5,$6,$7,'pendiente')`,
+        [
+          cc_id, cliente_id,
+          parseFloat(pres.total).toFixed(4),
+          saldo_nuevo.toFixed(4),
+          `Presupuesto convertido ${numero_completo_v}`,
+          numero_completo_v,
+          venta_id,
+        ]
+      );
+
+      await client.query(
+        `UPDATE cuentas_corrientes_clientes
+         SET saldo = $1, ultima_compra = now()
+         WHERE id = $2`,
+        [saldo_nuevo.toFixed(4), cc_id]
+      );
+    }
+
+    // 6. Marcar presupuesto como convertido
     await client.query(
       `UPDATE presupuestos
        SET estado='convertido', convertido_a_venta=true, venta_id=$1, modificado_en=now()
@@ -498,6 +557,47 @@ router.put('/:cliente_id/:id/convertir', async (req, res) => {
     );
 
     await client.query('COMMIT');
+
+    // 7. Movimiento de caja (si hay caja abierta) — fuera de la transacción
+    try {
+      const cajaRes = await pool.query(
+        `SELECT id FROM cajas
+         WHERE cliente_id = $1
+         AND estado = 'abierta'
+         LIMIT 1`,
+        [cliente_id]
+      );
+      if (cajaRes.rows.length > 0) {
+        const caja_id = cajaRes.rows[0].id;
+        await pool.query(
+          `INSERT INTO caja_movimientos
+             (caja_id, cliente_id, tipo,
+              tipo_operacion, monto, medio_pago,
+              descripcion, numero_comprobante,
+              venta_id)
+           VALUES ($1,$2,'venta','ingreso',
+                   $3,'efectivo',$4,$5,$6)`,
+          [
+            caja_id,
+            cliente_id,
+            pres.total,
+            `Presupuesto convertido ${numero_completo_v}`,
+            numero_completo_v,
+            venta_id,
+          ]
+        );
+        await pool.query(
+          `UPDATE cajas
+           SET total_ingresos = total_ingresos + $1,
+               saldo_actual = saldo_actual + $1
+           WHERE id = $2`,
+          [pres.total, caja_id]
+        );
+      }
+    } catch (err) {
+      console.error('Error caja al convertir presupuesto:', err.message);
+    }
+
     res.json({ ok: true, venta_id, numero_completo: numero_completo_v });
 
   } catch (err) {
