@@ -1116,6 +1116,18 @@ function RobertoProductos() {
   const [guardando,  setGuardando]  = useState(false);
   const [msgGuardar, setMsgGuardar] = useState('');
 
+  // Columnas visibles
+  const COLS_DEFAULT = COLS.map(c => c.key);
+  const [colsVisibles, setColsVisibles] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem(`columnas_productos_${clienteId}`);
+      return saved ? JSON.parse(saved) : COLS_DEFAULT;
+    } catch { return COLS_DEFAULT; }
+  });
+  const [colsMenuOpen, setColsMenuOpen] = useState(false);
+  const colsMenuRef = useRef<HTMLDivElement>(null);
+  const colVisible = (key: string) => colsVisibles.includes(key);
+
   // Acciones masivas
   const [campoMasivo, setCampoMasivo] = useState('');
   const [valorMasivo, setValorMasivo] = useState('');
@@ -1206,6 +1218,18 @@ function RobertoProductos() {
 
   useEffect(() => { cargarFiltros(); }, [cargarFiltros]);
   useEffect(() => { setPagina(1); cargarProductos(1); }, [cargarProductos]);
+
+  useEffect(() => {
+    if (clienteId) localStorage.setItem(`columnas_productos_${clienteId}`, JSON.stringify(colsVisibles));
+  }, [colsVisibles, clienteId]);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (colsMenuRef.current && !colsMenuRef.current.contains(e.target as Node)) setColsMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
 
   // ── Orden ────────────────────────────────────────────────────
   const handleOrden = (key: string) => {
@@ -1559,7 +1583,7 @@ function RobertoProductos() {
                       <thead>
                         <tr style={{ backgroundColor: '#EBF4FF', position: 'sticky', top: 0 }}>
                           {['Código','Descripción','Costo actual','Costo nuevo','PV1 actual','PV1 nuevo','Variación %'].map(h => (
-                            <th key={h} style={{ padding: '7px 10px', textAlign: h === 'Descripción' ? 'left' : 'right', color: NAVY, fontWeight: 700, borderBottom: `2px solid ${SEP}`, whiteSpace: 'nowrap', fontSize: 11, textAlign: 'left' }}>{h}</th>
+                            <th key={h} style={{ padding: '7px 10px', textAlign: h === 'Descripción' ? 'left' : 'right', color: NAVY, fontWeight: 700, borderBottom: `2px solid ${SEP}`, whiteSpace: 'nowrap', fontSize: 11 }}>{h}</th>
                           ))}
                         </tr>
                       </thead>
@@ -1654,6 +1678,40 @@ function RobertoProductos() {
               ✕ Limpiar filtros
             </button>
           )}
+          <div style={{ position: 'relative', alignSelf: 'flex-end' }} ref={colsMenuRef}>
+            <button style={btnStyle('#EDF2F7', NAVY)} onClick={() => setColsMenuOpen(v => !v)}>
+              ⚙ Columnas {colsVisibles.length < COLS.length ? `(${colsVisibles.length}/${COLS.length})` : ''}
+            </button>
+            {colsMenuOpen && (
+              <div style={{
+                position: 'absolute', right: 0, top: '100%', marginTop: 4,
+                backgroundColor: '#fff', border: '1.5px solid #CBD5E0', borderRadius: 10,
+                boxShadow: '0 8px 24px rgba(0,0,0,0.12)', zIndex: 100,
+                minWidth: 220, padding: '10px 0',
+              }}>
+                <div style={{ display: 'flex', gap: 6, padding: '0 12px 8px', borderBottom: '1px solid #EDF2F7', marginBottom: 6 }}>
+                  <button onClick={() => setColsVisibles(COLS_DEFAULT)} style={{ flex: 1, padding: '4px', fontSize: 12, fontWeight: 600, border: '1px solid #CBD5E0', borderRadius: 6, cursor: 'pointer', backgroundColor: '#fff', color: NAVY }}>Todas</button>
+                  <button onClick={() => setColsVisibles(['codigo', 'descripcion'])} style={{ flex: 1, padding: '4px', fontSize: 12, fontWeight: 600, border: '1px solid #CBD5E0', borderRadius: 6, cursor: 'pointer', backgroundColor: '#fff', color: GRAY }}>Ninguna</button>
+                </div>
+                <div style={{ maxHeight: 340, overflowY: 'auto' }}>
+                  {COLS.map(c => {
+                    const fijo = c.key === 'codigo' || c.key === 'descripcion';
+                    return (
+                      <label key={c.key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 12px', cursor: fijo ? 'not-allowed' : 'pointer', opacity: fijo ? 0.5 : 1 }}>
+                        <input type="checkbox" checked={colVisible(c.key)} disabled={fijo}
+                          onChange={() => {
+                            if (fijo) return;
+                            setColsVisibles(prev => prev.includes(c.key) ? prev.filter(k => k !== c.key) : [...prev, c.key]);
+                          }}
+                          style={{ accentColor: BLUE }} />
+                        <span style={{ fontSize: 13 }}>{c.label}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -1667,7 +1725,7 @@ function RobertoProductos() {
                   <input type="checkbox" checked={seleccionados.size === productos.length && productos.length > 0} onChange={toggleTodos} style={{ accentColor: BLUE }} />
                 </th>
                 <th style={{ ...thSt(), width: 60 }}>Img</th>
-                {COLS.map(c => (
+                {COLS.filter(c => colVisible(c.key)).map(c => (
                   <th key={c.key} style={{ ...thSt(ordenCol === c.key), width: c.width, cursor: c.key.startsWith('_') ? 'default' : 'pointer' }}
                     onClick={() => handleOrden(c.key)}>
                     {c.label} {ordenCol === c.key ? (ordenDir === 'asc' ? '↑' : '↓') : ''}
@@ -1683,9 +1741,9 @@ function RobertoProductos() {
             </thead>
             <tbody>
               {cargando ? (
-                <tr><td colSpan={COLS.length + 3} style={{ textAlign: 'center', padding: 32, color: GRAY, fontSize: 14 }}>Cargando...</td></tr>
+                <tr><td colSpan={colsVisibles.length + 3} style={{ textAlign: 'center', padding: 32, color: GRAY, fontSize: 14 }}>Cargando...</td></tr>
               ) : productosSorted.length === 0 ? (
-                <tr><td colSpan={COLS.length + 3} style={{ textAlign: 'center', padding: 32, color: GRAY, fontSize: 14 }}>Sin productos</td></tr>
+                <tr><td colSpan={colsVisibles.length + 3} style={{ textAlign: 'center', padding: 32, color: GRAY, fontSize: 14 }}>Sin productos</td></tr>
               ) : productosSorted.map(p => {
                 const { pcF, pv1, pv2, pv3 } = calcRow(p);
                 const isSel = seleccionados.has(p.id);
@@ -1705,85 +1763,85 @@ function RobertoProductos() {
                         : <span style={{ fontSize: 20 }}>📦</span>}
                     </td>
                     {/* Código */}
-                    <td style={{ ...td, width: 90, fontWeight: 600, color: NAVY }}>{p.codigo || '—'}</td>
+                    {colVisible('codigo') && <td style={{ ...td, width: 90, fontWeight: 600, color: NAVY }}>{p.codigo || '—'}</td>}
                     {/* Descripción */}
-                    <td style={{ ...td, width: 200, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }} title={p.descripcion}>{p.descripcion}</td>
+                    {colVisible('descripcion') && <td style={{ ...td, width: 200, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }} title={p.descripcion}>{p.descripcion}</td>}
                     {/* Marca */}
-                    <td style={{ ...td, width: 90 }}>
+                    {colVisible('marca') && <td style={{ ...td, width: 90 }}>
                       {modoEdit ? eText(p, 'marca', 85) : (p.marca || '—')}
-                    </td>
+                    </td>}
                     {/* Rubro */}
-                    <td style={{ ...td, width: 90 }}>
+                    {colVisible('rubro') && <td style={{ ...td, width: 90 }}>
                       {modoEdit ? eText(p, 'rubro', 85) : (p.rubro || '—')}
-                    </td>
+                    </td>}
                     {/* Proveedor */}
-                    <td style={{ ...td, width: 100 }}>{provNombre(p.proveedor_id)}</td>
+                    {colVisible('proveedor') && <td style={{ ...td, width: 100 }}>{provNombre(p.proveedor_id)}</td>}
                     {/* EAN */}
-                    <td style={{ ...td, width: 110 }}>
+                    {colVisible('ean') && <td style={{ ...td, width: 110 }}>
                       {modoEdit ? eText(p, 'ean', 105) : (p.ean || '—')}
-                    </td>
+                    </td>}
                     {/* PC Base */}
-                    <td style={{ ...td, width: 80, textAlign: 'right' }}>
+                    {colVisible('precio_costo') && <td style={{ ...td, width: 80, textAlign: 'right' }}>
                       {modoEdit ? eInput(p, 'precio_costo', 74) : `$${numFmt(p.precio_costo)}`}
-                    </td>
+                    </td>}
                     {/* Dt1 */}
-                    <td style={{ ...td, width: 60, textAlign: 'right' }}>
+                    {colVisible('dto_1') && <td style={{ ...td, width: 60, textAlign: 'right' }}>
                       {modoEdit ? eInput(p, 'dto_1', 54) : pctFmt(p.dto_1)}
-                    </td>
+                    </td>}
                     {/* Dt2 */}
-                    <td style={{ ...td, width: 60, textAlign: 'right' }}>
+                    {colVisible('dto_2') && <td style={{ ...td, width: 60, textAlign: 'right' }}>
                       {modoEdit ? eInput(p, 'dto_2', 54) : pctFmt(p.dto_2)}
-                    </td>
+                    </td>}
                     {/* Dt3 */}
-                    <td style={{ ...td, width: 60, textAlign: 'right' }}>
+                    {colVisible('dto_3') && <td style={{ ...td, width: 60, textAlign: 'right' }}>
                       {modoEdit ? eInput(p, 'dto_3', 54) : pctFmt(p.dto_3)}
-                    </td>
+                    </td>}
                     {/* PC Final */}
-                    <td style={{ ...calcTdR, width: 80, textAlign: 'right' }}>${numFmt(pcF)}</td>
+                    {colVisible('_pcf') && <td style={{ ...calcTdR, width: 80, textAlign: 'right' }}>${numFmt(pcF)}</td>}
                     {/* Imp1 */}
-                    <td style={{ ...td, width: 60, textAlign: 'right' }}>
+                    {colVisible('imp_1') && <td style={{ ...td, width: 60, textAlign: 'right' }}>
                       {modoEdit ? eInput(p, 'imp_1', 54) : pctFmt(p.imp_1)}
-                    </td>
+                    </td>}
                     {/* Imp2 */}
-                    <td style={{ ...td, width: 60, textAlign: 'right' }}>
+                    {colVisible('imp_2') && <td style={{ ...td, width: 60, textAlign: 'right' }}>
                       {modoEdit ? eInput(p, 'imp_2', 54) : pctFmt(p.imp_2)}
-                    </td>
+                    </td>}
                     {/* IVA */}
-                    <td style={{ ...td, width: 60, textAlign: 'right' }}>
+                    {colVisible('alicuota_iva') && <td style={{ ...td, width: 60, textAlign: 'right' }}>
                       {modoEdit ? eInput(p, 'alicuota_iva', 54) : pctFmt(p.alicuota_iva)}
-                    </td>
+                    </td>}
                     {/* Ut1 */}
-                    <td style={{ ...td, width: 60, textAlign: 'right' }}>
+                    {colVisible('utilidad_1') && <td style={{ ...td, width: 60, textAlign: 'right' }}>
                       {modoEdit ? eInput(p, 'utilidad_1', 54) : pctFmt(p.utilidad_1)}
-                    </td>
+                    </td>}
                     {/* Ut2 */}
-                    <td style={{ ...td, width: 60, textAlign: 'right' }}>
+                    {colVisible('utilidad_2') && <td style={{ ...td, width: 60, textAlign: 'right' }}>
                       {modoEdit ? eInput(p, 'utilidad_2', 54) : pctFmt(p.utilidad_2)}
-                    </td>
+                    </td>}
                     {/* Ut3 */}
-                    <td style={{ ...td, width: 60, textAlign: 'right' }}>
+                    {colVisible('utilidad_3') && <td style={{ ...td, width: 60, textAlign: 'right' }}>
                       {modoEdit ? eInput(p, 'utilidad_3', 54) : pctFmt(p.utilidad_3)}
-                    </td>
+                    </td>}
                     {/* PV1 */}
-                    <td style={{ ...calcTd2R, width: 80, textAlign: 'right', fontWeight: pvActivo === 1 ? 700 : 400 }}>${numFmt(pv1)}</td>
+                    {colVisible('_pv1') && <td style={{ ...calcTd2R, width: 80, textAlign: 'right', fontWeight: pvActivo === 1 ? 700 : 400 }}>${numFmt(pv1)}</td>}
                     {/* PV2 */}
-                    <td style={{ ...calcTd2R, width: 80, textAlign: 'right', fontWeight: pvActivo === 2 ? 700 : 400 }}>${numFmt(pv2)}</td>
+                    {colVisible('_pv2') && <td style={{ ...calcTd2R, width: 80, textAlign: 'right', fontWeight: pvActivo === 2 ? 700 : 400 }}>${numFmt(pv2)}</td>}
                     {/* PV3 */}
-                    <td style={{ ...calcTd2R, width: 80, textAlign: 'right', fontWeight: pvActivo === 3 ? 700 : 400 }}>${numFmt(pv3)}</td>
+                    {colVisible('_pv3') && <td style={{ ...calcTd2R, width: 80, textAlign: 'right', fontWeight: pvActivo === 3 ? 700 : 400 }}>${numFmt(pv3)}</td>}
                     {/* Stock */}
-                    <td style={{ ...td, width: 60, textAlign: 'right' }}>{numFmt(p.stock_actual, 0)}</td>
+                    {colVisible('stock_actual') && <td style={{ ...td, width: 60, textAlign: 'right' }}>{numFmt(p.stock_actual, 0)}</td>}
                     {/* Stock Min */}
-                    <td style={{ ...td, width: 70, textAlign: 'right' }}>
+                    {colVisible('stock_minimo') && <td style={{ ...td, width: 70, textAlign: 'right' }}>
                       {modoEdit ? eInput(p, 'stock_minimo', 64) : numFmt(p.stock_minimo, 0)}
-                    </td>
+                    </td>}
                     {/* Unidad */}
-                    <td style={{ ...td, width: 70 }}>
+                    {colVisible('unidad_medida') && <td style={{ ...td, width: 70 }}>
                       {modoEdit ? eText(p, 'unidad_medida', 64) : (p.unidad_medida || '—')}
-                    </td>
+                    </td>}
                     {/* F.Import */}
-                    <td style={{ ...td, width: 90 }}>{fmtFecha(p.creado_en)}</td>
+                    {colVisible('creado_en') && <td style={{ ...td, width: 90 }}>{fmtFecha(p.creado_en)}</td>}
                     {/* Estado */}
-                    <td style={{ ...td, width: 75 }}><BadgeEstado activo={p.activo} /></td>
+                    {colVisible('activo') && <td style={{ ...td, width: 75 }}><BadgeEstado activo={p.activo} /></td>}
                     {/* Acciones */}
                     <td style={{ ...td, width: 90 }}>
                       <button style={{ ...btnStyle(BLUE, '#fff'), padding: '4px 10px', fontSize: 11 }} onClick={() => setModalEditar(p)}>✏️ Editar</button>
