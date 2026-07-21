@@ -41,8 +41,13 @@ interface ClienteDetalle {
   habilitar_analiticas: boolean;
   habilitar_ctas_ctes: boolean;
   habilitar_cotizaciones: boolean;
-  habilitar_compras: boolean;
-  habilitar_autos:   boolean;
+  habilitar_ventas:   boolean;
+  habilitar_remitos:  boolean;
+  habilitar_stock:    boolean;
+  habilitar_cheques:  boolean;
+  habilitar_caja:     boolean;
+  habilitar_compras:  boolean;
+  habilitar_autos:    boolean;
 }
 
 interface EditForm {
@@ -114,14 +119,14 @@ function modulosDesdeCliente(c: ClienteDetalle): ModulosState {
   return {
     catalogo:       true,
     presupuestos:   !!c.habilitar_cotizaciones,
-    ventas:         false,
-    remitos:        false,
-    stock:          false,
+    ventas:         !!c.habilitar_ventas,
+    remitos:        !!c.habilitar_remitos,
+    stock:          !!c.habilitar_stock,
     transferencias: false,
     cc_clientes:    !!c.habilitar_ctas_ctes,
     cc_proveedores: false,
-    caja:           false,
-    cheques:        false,
+    caja:           !!c.habilitar_caja,
+    cheques:        !!c.habilitar_cheques,
     arca:           !!c.arca_habilitado,
     chat:           !!c.habilitar_mensajes,
     notificaciones: !!c.habilitar_notificaciones,
