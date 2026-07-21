@@ -16,6 +16,25 @@ const pool = require('../../db');
   }
 })();
 
+// Middleware: verifica que el token rp_{id}_{ts} corresponde al cliente_id del request
+function verificarTokenPortal(req, res, next) {
+  const token = req.headers['x-roberto-token'];
+  if (!token) {
+    return res.status(401).json({ error: 'Token requerido' });
+  }
+  // Formato esperado: rp_{cliente_id}_{timestamp}
+  const partes = token.split('_');
+  if (partes.length < 3 || partes[0] !== 'rp') {
+    return res.status(401).json({ error: 'Token inválido' });
+  }
+  const tokenClienteId = partes[1];
+  const clienteId = req.params.cliente_id || req.params.cid;
+  if (tokenClienteId !== String(clienteId)) {
+    return res.status(403).json({ error: 'Token no corresponde al cliente' });
+  }
+  next();
+}
+
 // GET /:codigo — público, sin auth. Verifica tipo_fuente='roberto'
 router.get('/:codigo', async (req, res) => {
   try {
@@ -68,7 +87,7 @@ router.get('/:codigo', async (req, res) => {
 });
 
 // GET /dashboard/:cliente_id — métricas del dashboard
-router.get('/dashboard/:cliente_id', async (req, res) => {
+router.get('/dashboard/:cliente_id', verificarTokenPortal, async (req, res) => {
   const { cliente_id } = req.params;
 
   const safeQuery = async (sql, params) => {

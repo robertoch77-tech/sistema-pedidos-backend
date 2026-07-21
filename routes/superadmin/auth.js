@@ -9,7 +9,12 @@ async function asegurarUsuarioPorDefecto() {
       "SELECT id FROM superadmin_usuarios WHERE cuit = '000000' LIMIT 1"
     );
 
-    const hash = bcrypt.hashSync('roberto2024', 10);
+    // IMPORTANTE: Setear SUPERADMIN_PASSWORD=roberto9221
+    // en variables de entorno de Render
+    // No usar el fallback 'roberto2024' en producción
+    const hash = bcrypt.hashSync(
+      process.env.SUPERADMIN_PASSWORD || 'roberto2024', 10
+    );
 
     if (resultado.rows.length === 0) {
       await pool.query(

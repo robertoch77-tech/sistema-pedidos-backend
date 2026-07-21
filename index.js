@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const rateLimit = require('express-rate-limit');
 const dotenv = require('dotenv');
 const https = require('https');
 const http = require('http');
@@ -7,8 +8,20 @@ const http = require('http');
 dotenv.config();
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: [
+    'https://sistemagestionpedidos.netlify.app',
+    'http://localhost:3000'
+  ],
+  credentials: true,
+}));
 app.use(express.json());
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: 'Demasiados intentos. Esperá 15 minutos.' },
+});
 
 // Proxy de imágenes — resuelve Mixed Content (HTTP vs HTTPS)
 app.get('/api/imagen', (req, res) => {
@@ -82,6 +95,8 @@ const historialRouter = require('./routes/historial');
 app.use('/api/historial', historialRouter);
 const novedadesRouter = require('./routes/novedades');
 app.use('/api/novedades', novedadesRouter);
+app.use('/api/superadmin/auth/login', loginLimiter);
+app.use('/api/superadmin/portal-auth/login', loginLimiter);
 app.use('/api/superadmin', require('./routes/superadmin/auth'));
 app.use('/api/superadmin/clientes', require('./routes/superadmin/clientes'));
 app.use('/api/superadmin/portal', require('./routes/superadmin/portal'));
