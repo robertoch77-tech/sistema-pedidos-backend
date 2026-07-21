@@ -70,6 +70,7 @@ const MENU_ITEMS = [
   { id: 'notas',         icon: '📄', label: 'NC/ND',             flag: null },
   { id: 'facturacion',   icon: '🧾', label: 'Facturación',       flag: 'arca' },
   { id: 'gastos',        icon: '💸', label: 'Gastos',             flag: null },
+  { id: 'autos',         icon: '🚗', label: 'Autos',              flag: 'autos' },
   { id: 'reportes',      icon: '📈', label: 'Reportes',          flag: null },
   { id: 'configuracion', icon: '⚙️', label: 'Configuración',     flag: null },
 ];
@@ -186,6 +187,7 @@ function RobertoDashboard() {
     notas:            '/roberto/notas',
     facturacion:      '/roberto/arca',
     reportes:         '/roberto/reportes',
+    autos:            '/roberto/autos',
   };
 
   const irA = (id: string) => {

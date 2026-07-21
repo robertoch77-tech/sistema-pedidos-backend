@@ -39,6 +39,7 @@ import RobertoCheques from './pages/roberto/cheques/RobertoCheques';
 import RobertoNotas from './pages/roberto/notas/RobertoNotas';
 import RobertoArca from './pages/roberto/arca/RobertoArca';
 import RobertoReportes from './pages/roberto/reportes/RobertoReportes';
+import RobertoAutos from './pages/roberto/autos/RobertoAutos';
 import PiLogin from './pages/pedidos-inteligentes/PiLogin';
 import PiDashboard from './pages/pedidos-inteligentes/PiDashboard';
 import PiProductos from './pages/pedidos-inteligentes/productos/PiProductos';
@@ -143,6 +144,7 @@ function App() {
         <Route path="/roberto/notas" element={<RobertoNotas />} />
         <Route path="/roberto/arca" element={<RobertoArca />} />
         <Route path="/roberto/reportes" element={<RobertoReportes />} />
+        <Route path="/roberto/autos" element={<RobertoAutos />} />
         <Route path="/pedidos-inteligentes/login"     element={<PiLogin />} />
         <Route path="/pedidos-inteligentes/dashboard"  element={<PiDashboard />} />
         <Route path="/pedidos-inteligentes/productos"  element={<PiProductos />} />
