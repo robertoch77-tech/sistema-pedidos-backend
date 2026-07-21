@@ -402,12 +402,20 @@ router.put('/:cliente_id/:id/confirmar-entrega', async (req, res) => {
         [entregada, ce.motivo_diferencia || null, item.id]
       );
 
-      // Descontar stock si corresponde y es tipo salida
+      // Actualizar stock según tipo de remito
       if (!remito.stock_actualizado && remito.tipo === 'salida' && !item.es_libre && item.producto_id) {
         await client.query(
           `UPDATE productos_propios
            SET stock_actual = COALESCE(stock_actual, 0) - $1, modificado_en=now()
            WHERE id=$2 AND cliente_id=$3`,
+          [entregada, item.producto_id, cliente_id]
+        ).catch(() => {});
+      } else if (!remito.stock_actualizado && remito.tipo === 'entrada' && !item.es_libre && item.producto_id) {
+        await client.query(
+          `UPDATE productos_propios
+           SET stock_actual = COALESCE(stock_actual, 0) + $1,
+               modificado_en = now()
+           WHERE id = $2 AND cliente_id = $3`,
           [entregada, item.producto_id, cliente_id]
         ).catch(() => {});
       }
