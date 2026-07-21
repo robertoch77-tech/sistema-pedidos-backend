@@ -46,8 +46,9 @@ interface ClienteDetalle {
   habilitar_stock:    boolean;
   habilitar_cheques:  boolean;
   habilitar_caja:     boolean;
-  habilitar_compras:  boolean;
-  habilitar_autos:    boolean;
+  habilitar_compras:          boolean;
+  habilitar_autos:            boolean;
+  habilitar_cc_proveedores:   boolean;
 }
 
 interface EditForm {
@@ -86,8 +87,8 @@ const gruposModulos = [
     { id: 'transferencias',nombre: 'Transferencias entre sucursales' },
   ]},
   { titulo: 'Finanzas', modulos: [
-    { id: 'cc_clientes',   nombre: 'Cuenta corriente clientes' },
-    { id: 'cc_proveedores',nombre: 'Cuenta corriente proveedores' },
+    { id: 'cc_clientes',    nombre: 'Cuenta corriente clientes' },
+    { id: 'cc_proveedores', nombre: 'Cuenta corriente proveedores' },
     { id: 'caja',          nombre: 'Caja' },
     { id: 'cheques',       nombre: 'Cheques' },
   ]},
@@ -124,7 +125,7 @@ function modulosDesdeCliente(c: ClienteDetalle): ModulosState {
     stock:          !!c.habilitar_stock,
     transferencias: false,
     cc_clientes:    !!c.habilitar_ctas_ctes,
-    cc_proveedores: false,
+    cc_proveedores: !!c.habilitar_cc_proveedores,
     caja:           !!c.habilitar_caja,
     cheques:        !!c.habilitar_cheques,
     arca:           !!c.arca_habilitado,
@@ -308,7 +309,8 @@ function DetalleCliente() {
           notificaciones:   modulos.notificaciones,
           banners:          modulos.banners,
           analytics:        modulos.analytics,
-          cta_cte_clientes: modulos.cc_clientes,
+          cta_cte_clientes:  modulos.cc_clientes,
+          cc_proveedores:    modulos.cc_proveedores,
           sucursales:       modulos.sucursales,
           empleados:        modulos.empleados,
           arca:             modulos.arca,
