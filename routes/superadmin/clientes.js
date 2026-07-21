@@ -121,13 +121,14 @@ router.put('/:id/modulos', async (req, res) => {
           habilitar_analiticas=$4, habilitar_ctas_ctes=$5, habilitar_cotizaciones=$6,
           habilitar_cheques=$7, habilitar_caja=$8,
           habilitar_ventas=$9, habilitar_remitos=$10, habilitar_stock=$11,
-          habilitar_compras=$12
-         WHERE id=$13`,
+          habilitar_compras=$12,
+          habilitar_autos=$13
+         WHERE id=$14`,
         [!!modulos.chat, !!modulos.notificaciones, !!modulos.banners,
          !!modulos.analytics, !!modulos.cta_cte_clientes, !!modulos.presupuestos,
          !!modulos.cheques, !!modulos.caja,
          !!modulos.ventas, !!modulos.remitos, !!modulos.stock,
-         !!modulos.compras,
+         !!modulos.compras, !!modulos.autos,
          mayorista_id]
       );
     }
