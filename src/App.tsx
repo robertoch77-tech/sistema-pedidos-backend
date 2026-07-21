@@ -26,6 +26,7 @@ import RobertoDashboard from './pages/roberto/RobertoDashboard';
 import RobertoConfig from './pages/roberto/RobertoConfig';
 import RobertoProductos from './pages/roberto/productos/RobertoProductos';
 import RobertoVentas from './pages/roberto/ventas/RobertoVentas';
+import RobertoCompras from './pages/roberto/compras/RobertoCompras';
 import RobertoStock from './pages/roberto/stock/RobertoStock';
 import RobertoClientes from './pages/roberto/clientes/RobertoClientes';
 import RobertoPresupuestos from './pages/roberto/presupuestos/RobertoPresupuestos';
@@ -129,6 +130,7 @@ function App() {
         <Route path="/roberto/config" element={<RobertoConfig />} />
         <Route path="/roberto/productos" element={<RobertoProductos />} />
         <Route path="/roberto/ventas" element={<RobertoVentas />} />
+        <Route path="/roberto/compras" element={<RobertoCompras />} />
         <Route path="/roberto/stock" element={<RobertoStock />} />
         <Route path="/roberto/clientes" element={<RobertoClientes />} />
         <Route path="/roberto/presupuestos" element={<RobertoPresupuestos />} />
