@@ -2,6 +2,20 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../../db');
 
+// Agregar columnas de módulos si no existen en la tabla mayoristas
+;(async () => {
+  const cols = [
+    ['habilitar_cheques', 'BOOLEAN DEFAULT false'],
+    ['habilitar_caja',    'BOOLEAN DEFAULT false'],
+    ['habilitar_ventas',  'BOOLEAN DEFAULT false'],
+    ['habilitar_remitos', 'BOOLEAN DEFAULT false'],
+    ['habilitar_stock',   'BOOLEAN DEFAULT false'],
+  ];
+  for (const [col, def] of cols) {
+    await pool.query(`ALTER TABLE mayoristas ADD COLUMN IF NOT EXISTS ${col} ${def}`).catch(() => {});
+  }
+})();
+
 // GET /:codigo — público, sin auth. Verifica tipo_fuente='roberto'
 router.get('/:codigo', async (req, res) => {
   try {
@@ -10,6 +24,8 @@ router.get('/:codigo', async (req, res) => {
       `SELECT m.id AS mayorista_id, m.nombre, m.activo, m.tipo_fuente,
               m.habilitar_mensajes, m.habilitar_notificaciones, m.habilitar_banners,
               m.habilitar_analiticas, m.habilitar_ctas_ctes, m.habilitar_cotizaciones,
+              m.habilitar_cheques, m.habilitar_caja,
+              m.habilitar_ventas, m.habilitar_remitos, m.habilitar_stock,
               c.id AS cliente_id, c.nombre_comercial, c.plan, c.estado,
               c.habilitar_sucursales, c.habilitar_empleados, c.arca_habilitado
        FROM mayoristas m
@@ -36,6 +52,11 @@ router.get('/:codigo', async (req, res) => {
       habilitar_analiticas:     !!row.habilitar_analiticas,
       habilitar_ctas_ctes:      !!row.habilitar_ctas_ctes,
       habilitar_cotizaciones:   !!row.habilitar_cotizaciones,
+      habilitar_cheques:        !!row.habilitar_cheques,
+      habilitar_caja:           !!row.habilitar_caja,
+      habilitar_ventas:         !!row.habilitar_ventas,
+      habilitar_remitos:        !!row.habilitar_remitos,
+      habilitar_stock:          !!row.habilitar_stock,
       habilitar_sucursales:     !!row.habilitar_sucursales,
       habilitar_empleados:      !!row.habilitar_empleados,
       arca_habilitado:          !!row.arca_habilitado,
@@ -57,10 +78,17 @@ router.get('/dashboard/:cliente_id', async (req, res) => {
     } catch { return {}; }
   };
 
-  const [ventas, productos, stock, cobros] = await Promise.all([
+  const safeRows = async (sql, params) => {
+    try {
+      const r = await pool.query(sql, params);
+      return r.rows;
+    } catch { return []; }
+  };
+
+  const [ventas, productos, stock, cobros, ultimasVentas, chequesPendientes] = await Promise.all([
     safeQuery(
       `SELECT COUNT(*)::int AS cantidad, COALESCE(SUM(total), 0)::numeric AS monto
-       FROM ventas_roberto
+       FROM ventas
        WHERE cliente_id = $1 AND fecha::date = CURRENT_DATE`,
       [cliente_id]
     ),
@@ -78,8 +106,24 @@ router.get('/dashboard/:cliente_id', async (req, res) => {
     ),
     safeQuery(
       `SELECT COALESCE(SUM(total), 0)::numeric AS monto
-       FROM ventas_roberto
+       FROM ventas
        WHERE cliente_id = $1 AND cobrada = false`,
+      [cliente_id]
+    ),
+    safeRows(
+      `SELECT id, numero, numero_completo, comprador_nombre, total, estado, fecha
+       FROM ventas
+       WHERE cliente_id = $1 AND fecha::date = CURRENT_DATE
+       ORDER BY fecha DESC
+       LIMIT 5`,
+      [cliente_id]
+    ),
+    safeRows(
+      `SELECT id, numero, banco, titular_nombre, monto, fecha_cobro, tipo
+       FROM cheques
+       WHERE cliente_id = $1 AND estado = 'en_cartera' AND activo = true
+       ORDER BY fecha_cobro ASC
+       LIMIT 20`,
       [cliente_id]
     ),
   ]);
@@ -90,6 +134,8 @@ router.get('/dashboard/:cliente_id', async (req, res) => {
     productos_activos:    productos.cantidad  ?? 0,
     stock_bajo_minimo:    stock.cantidad      ?? 0,
     cobros_pendientes:    Number(cobros.monto ?? 0),
+    ultimas_ventas:       ultimasVentas,
+    cheques_pendientes:   chequesPendientes,
   });
 });
 
