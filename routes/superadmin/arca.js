@@ -4,7 +4,7 @@ const pool    = require('../../db');
 const { verificarTokenSuperAdmin } = require('./auth');
 const axios   = require('axios');
 const xml2js  = require('xml2js');
-const crypto  = require('crypto');
+const forge   = require('node-forge');
 
 // ─── TABLAS ───────────────────────────────────────────────────
 async function asegurarTablas() {
@@ -105,6 +105,18 @@ async function asegurarTablas() {
     for (const [col, tipo] of cols) {
       await pool.query(`ALTER TABLE arca_configuracion ADD COLUMN IF NOT EXISTS ${col} ${tipo}`).catch(() => {});
     }
+
+    // Columnas ARCA en tabla ventas
+    const colsVentas = [
+      ['cae',             "TEXT DEFAULT ''"],
+      ['cae_vencimiento', 'DATE'],
+      ['tipo_factura',    "TEXT DEFAULT ''"],
+      ['numero_arca',     "TEXT DEFAULT ''"],
+      ['facturado',       'BOOLEAN DEFAULT false'],
+    ];
+    for (const [col, tipo] of colsVentas) {
+      await pool.query(`ALTER TABLE ventas ADD COLUMN IF NOT EXISTS ${col} ${tipo}`).catch(() => {});
+    }
   } catch (err) {
     console.error('arca: error asegurando tablas:', err.message);
   }
@@ -160,20 +172,22 @@ async function obtenerToken(config) {
   const tra   = generarTRA(config.modo);
   const wsaaUrl = config.modo === 'produccion' ? WSAA_PROD : WSAA_HOMO;
 
-  // Firmar TRA con clave privada + certificado
+  // Firmar TRA con clave privada + certificado — CMS/PKCS7 real
   let cms;
   try {
-    // Crear mensaje CMS/PKCS7 firmado
-    const sign = crypto.createSign('RSA-SHA256');
-    sign.update(tra);
-    const firma = sign.sign(config.clave_privada, 'base64');
-    // Para ARCA necesitamos CMS real; usamos estructura simplificada para homologación mock
-    cms = Buffer.from(tra).toString('base64');
-    // En implementación real usaría node-forge o pkijs para CMS
-    // Para homologación ARCA acepta TRA base64 directamente en algunos contextos
-    cms = firma; // firma RSA base64
+    const p7 = forge.pkcs7.createSignedData();
+    p7.content = forge.util.createBuffer(tra, 'utf8');
+    p7.addCertificate(config.certificado);
+    p7.addSigner({
+      key:             forge.pki.privateKeyFromPem(config.clave_privada),
+      certificate:     forge.pki.certificateFromPem(config.certificado),
+      digestAlgorithm: forge.pki.oids.sha256,
+    });
+    p7.sign({ detached: false });
+    const der = forge.asn1.toDer(p7.toAsn1()).getBytes();
+    cms = forge.util.encode64(der);
   } catch (e) {
-    throw new Error('Error firmando TRA: ' + e.message);
+    throw new Error('Error firmando TRA (CMS): ' + e.message);
   }
 
   const soapBody = `<?xml version="1.0" encoding="UTF-8"?>
@@ -435,10 +449,7 @@ router.post('/facturar/:cliente_id', async (req, res) => {
     } catch (e) {
       errorCAE = e.message;
       await logARCA(cliente_id, 'fecaesolicitar', false, soapCAE.slice(0, 500), '', e.message);
-      // En homologación sin conectividad: simular CAE para que el flujo siga
-      cae = '75816000000000';
-      cae_vencimiento = new Date(Date.now() + 10 * 86400000).toISOString().slice(0,10);
-      resultadoOk = true;
+      throw new Error('Error obteniendo CAE de AFIP: ' + (e.message || 'Sin respuesta del servidor'));
     }
 
     const prefijos = { 1:'FA', 2:'NDA', 3:'NCA', 6:'FB', 7:'NDB', 8:'NCB', 11:'FC', 12:'NDC', 13:'NCC' };
@@ -466,7 +477,7 @@ router.post('/facturar/:cliente_id', async (req, res) => {
         `UPDATE ventas SET cae=$1, cae_vencimiento=$2, tipo_factura=$3, numero_arca=$4, facturado=true
          WHERE id=$5`,
         [cae, cae_vencimiento, String(cbteTipo), numero_completo, venta_id]
-      ).catch(() => {});
+      );
     }
 
     // INSERT libros_iva_ventas
@@ -488,6 +499,27 @@ router.post('/facturar/:cliente_id', async (req, res) => {
     res.status(500).json({ error: err.message });
   } finally {
     client.release();
+  }
+});
+
+// ─── GET /pendientes/:cliente_id — ventas sin facturar ───────
+router.get('/pendientes/:cliente_id', async (req, res) => {
+  try {
+    const { cliente_id } = req.params;
+    const result = await pool.query(
+      `SELECT id, numero_completo, comprador_nombre, comprador_cuit,
+              total, fecha, creado_en
+       FROM ventas
+       WHERE cliente_id = $1
+         AND (facturado = false OR facturado IS NULL)
+       ORDER BY creado_en DESC
+       LIMIT 50`,
+      [cliente_id]
+    );
+    res.json({ ventas: result.rows, total: result.rows.length });
+  } catch (err) {
+    console.error('arca pendientes:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
