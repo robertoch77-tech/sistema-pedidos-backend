@@ -377,7 +377,7 @@ router.post('/clientes/:cliente_id/cobro', async (req, res) => {
       if ((item.tipo === 'cheque_propio' || item.tipo === 'cheque_tercero' || item.tipo === 'echeq') && item.cheque_datos) {
         const ch = item.cheque_datos;
         await client.query(
-          `INSERT INTO cheques (cliente_id, numero, banco, titular, cuit_titular, monto, fecha_cobro,
+          `INSERT INTO cheques (cliente_id, numero, banco, titular_nombre, titular_cuit, monto, fecha_cobro,
             tipo, estado, origen, origen_id, cliente_proveedor)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'en_cartera','cobranza',$9,$10)`,
           [cliente_id, ch.numero || '', ch.banco || '', ch.titular || '', ch.cuit_titular || '',
@@ -478,7 +478,7 @@ router.post('/proveedores/:cliente_id/pago', async (req, res) => {
       if ((item.tipo === 'cheque_propio' || item.tipo === 'cheque_tercero' || item.tipo === 'echeq') && item.cheque_datos) {
         const ch = item.cheque_datos;
         await client.query(
-          `INSERT INTO cheques (cliente_id, numero, banco, titular, cuit_titular, monto, fecha_cobro,
+          `INSERT INTO cheques (cliente_id, numero, banco, titular_nombre, titular_cuit, monto, fecha_cobro,
             tipo, estado, origen, origen_id, cliente_proveedor)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'entregado','carta_pago',$9,$10)`,
           [cliente_id, ch.numero || '', ch.banco || '', ch.titular || '', ch.cuit_titular || '',

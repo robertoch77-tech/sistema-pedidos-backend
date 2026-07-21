@@ -56,8 +56,10 @@ async function asegurarTablas() {
       ['endosado_a',      "TEXT DEFAULT ''"],
       ['endosado_a_cuit', "TEXT DEFAULT ''"],
       ['fecha_endoso',    'DATE'],
-      ['venta_pago_id',   'BIGINT'],
-      ['activo',          'BOOLEAN DEFAULT true'],
+      ['venta_pago_id',       'BIGINT'],
+      ['activo',              'BOOLEAN DEFAULT true'],
+      ['origen_id',           'BIGINT'],
+      ['cliente_proveedor',   "TEXT DEFAULT ''"],
     ];
     for (const [col, tipo] of cols) {
       await pool.query(`ALTER TABLE cheques ADD COLUMN IF NOT EXISTS ${col} ${tipo}`).catch(() => {});
