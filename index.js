@@ -108,6 +108,7 @@ app.use('/api/superadmin/presupuestos', require('./routes/superadmin/presupuesto
 app.use('/api/superadmin/remitos', require('./routes/superadmin/remitos'));
 app.use('/api/superadmin/stock',       require('./routes/superadmin/stock'));
 app.use('/api/superadmin/proveedores', require('./routes/superadmin/proveedores'));
+app.use('/api/superadmin/compras',    require('./routes/superadmin/compras'));
 app.use('/api/superadmin/cuenta-corriente', require('./routes/superadmin/cuenta-corriente'));
 app.use('/api/superadmin/caja', require('./routes/superadmin/caja'));
 app.use('/api/superadmin/cheques', require('./routes/superadmin/cheques'));
