@@ -40,6 +40,9 @@ router.get('/:id', async (req, res) => {
       `SELECT c.*,
               m.habilitar_mensajes, m.habilitar_notificaciones, m.habilitar_banners,
               m.habilitar_analiticas, m.habilitar_ctas_ctes, m.habilitar_cotizaciones,
+              m.habilitar_ventas, m.habilitar_remitos, m.habilitar_stock,
+              m.habilitar_cheques, m.habilitar_caja, m.habilitar_compras,
+              m.habilitar_autos,
               m.activo AS mayorista_activo
        FROM clientes_roberto c
        LEFT JOIN mayoristas m ON m.id = c.mayorista_id
