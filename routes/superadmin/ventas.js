@@ -15,6 +15,9 @@ async function asegurarTablas() {
     await pool.query(`ALTER TABLE ventas ADD COLUMN IF NOT EXISTS descuento_global NUMERIC DEFAULT 0`).catch(() => {});
     await pool.query(`ALTER TABLE ventas ADD COLUMN IF NOT EXISTS recargo_global   NUMERIC DEFAULT 0`).catch(() => {});
     await pool.query(`ALTER TABLE ventas ADD COLUMN IF NOT EXISTS precio_con_iva   BOOLEAN DEFAULT true`).catch(() => {});
+    await pool.query(`ALTER TABLE ventas ADD COLUMN IF NOT EXISTS forma_pago       TEXT DEFAULT 'efectivo'`).catch(() => {});
+    await pool.query(`ALTER TABLE ventas ADD COLUMN IF NOT EXISTS monto_recibido   NUMERIC DEFAULT 0`).catch(() => {});
+    await pool.query(`ALTER TABLE ventas ADD COLUMN IF NOT EXISTS vuelto           NUMERIC DEFAULT 0`).catch(() => {});
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS cuenta_corriente (
@@ -119,6 +122,9 @@ router.post('/:cliente_id', async (req, res) => {
     descuento_global = 0,
     recargo_global   = 0,
     precio_con_iva   = true,
+    forma_pago       = 'efectivo',
+    monto_recibido   = 0,
+    vuelto           = 0,
   } = req.body;
 
   if (!items.length) {
@@ -182,8 +188,9 @@ router.post('/:cliente_id', async (req, res) => {
           estado, cobrada, anulada,
           va_a_cuenta_corriente, observaciones,
           descuento_global, recargo_global, precio_con_iva,
+          forma_pago, monto_recibido, vuelto,
           fecha, creado_en, modificado_en)
-       VALUES ($1,$2,$3,'V','VENTA',$4,$5,$6,$7,$8,$8,'pendiente',false,false,$9,$10,$11,$12,$13,now(),now(),now())
+       VALUES ($1,$2,$3,'V','VENTA',$4,$5,$6,$7,$8,$8,'pendiente',false,false,$9,$10,$11,$12,$13,$14,$15,$16,now(),now(),now())
        RETURNING id`,
       [
         cliente_id, numero, numero_completo,
@@ -191,6 +198,9 @@ router.post('/:cliente_id', async (req, res) => {
         sumaSubtotales.toFixed(4), iva_total.toFixed(4), total_venta.toFixed(4),
         va_a_cuenta_corriente, observaciones,
         descPct, recargoPct, conIva,
+        forma_pago,
+        parseFloat(monto_recibido) || 0,
+        parseFloat(vuelto) || 0,
       ]
     );
     const venta_id = ventaRes.rows[0].id;
@@ -322,11 +332,12 @@ router.post('/:cliente_id', async (req, res) => {
               monto, medio_pago, descripcion,
               numero_comprobante, venta_id)
            VALUES ($1,$2,'venta','ingreso',$3,
-                   'efectivo',$4,$5,$6)`,
+                   $4,$5,$6,$7)`,
           [
             caja_id,
             cliente_id,
             total_venta,
+            forma_pago,
             `Venta ${numero_completo}`,
             numero_completo,
             venta_id

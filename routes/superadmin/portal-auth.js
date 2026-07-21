@@ -11,7 +11,9 @@ router.post('/login', async (req, res) => {
     }
 
     const result = await pool.query(
-      `SELECT id, nombre_comercial, plan, estado, codigo_acceso, mayorista_id, password_hash,
+      `SELECT id, nombre_comercial, razon_social, cuit, condicion_iva,
+              direccion_fiscal, ciudad_fiscal, provincia_fiscal, telefono, whatsapp,
+              plan, estado, codigo_acceso, mayorista_id, password_hash,
               habilitar_sucursales, habilitar_empleados, arca_habilitado
        FROM clientes_roberto
        WHERE codigo_acceso = $1`,
@@ -45,6 +47,14 @@ router.post('/login', async (req, res) => {
       cliente: {
         id:                   cliente.id,
         nombre_comercial:     cliente.nombre_comercial,
+        razon_social:         cliente.razon_social || cliente.nombre_comercial,
+        cuit:                 cliente.cuit         || '',
+        condicion_iva:        cliente.condicion_iva || '',
+        direccion:            cliente.direccion_fiscal || '',
+        ciudad:               cliente.ciudad_fiscal    || '',
+        provincia:            cliente.provincia_fiscal || '',
+        telefono:             cliente.telefono  || '',
+        whatsapp:             cliente.whatsapp  || '',
         plan:                 cliente.plan,
         codigo_acceso:        cliente.codigo_acceso,
         mayorista_id:         cliente.mayorista_id,
