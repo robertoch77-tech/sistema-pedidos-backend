@@ -89,7 +89,12 @@ interface ComprobanteData {
   numero_completo: string;
   comprador_nombre: string;
   total: number;
-  subtotalNeto: number;
+  sumaSubtotales: number;
+  descuentoMonto: number;
+  recargoMonto: number;
+  descGlobal: number;
+  recargo: number;
+  precioConIva: boolean;
   ivaByAlic: Record<number, number>;
   ivaTotal: number;
   items: ItemVenta[];
@@ -117,21 +122,32 @@ const labelStyle: React.CSSProperties = {
 };
 
 // ── Calcular totales ──────────────────────────────────────────────────────────
-function calcTotales(items: ItemVenta[], descGlobal: number) {
+function calcTotales(items: ItemVenta[], descGlobal: number, recargo: number, precioConIva: boolean) {
   const ivaByAlic: Record<number, number> = {};
-  let subtotalNeto = 0;
+  let sumaSubtotales = 0;
+  const itemsNeto: { alic: number; subtotal: number }[] = [];
 
   for (const it of items) {
-    const bruto    = it.cantidad * it.precio;
-    const descItem = bruto * (it.dto / 100);
-    const neto     = (bruto - descItem) * (1 - descGlobal / 100);
-    subtotalNeto  += neto;
-    const alic     = it.alicuota || 21;
-    ivaByAlic[alic] = (ivaByAlic[alic] || 0) + neto * (alic / 100);
+    const alic = it.alicuota ?? 21;
+    const precioNeto = precioConIva ? it.precio / (1 + alic / 100) : it.precio;
+    const subtotalItem = precioNeto * it.cantidad * (1 - it.dto / 100);
+    sumaSubtotales += subtotalItem;
+    itemsNeto.push({ alic, subtotal: subtotalItem });
+  }
+
+  const base = sumaSubtotales * (1 - descGlobal / 100);
+  const baseConRecargo = base * (1 + recargo / 100);
+  const factor = sumaSubtotales > 0 ? baseConRecargo / sumaSubtotales : 1;
+
+  for (const { alic, subtotal } of itemsNeto) {
+    const ivaMult = precioConIva ? alic / (100 + alic) : alic / 100;
+    ivaByAlic[alic] = (ivaByAlic[alic] || 0) + subtotal * factor * ivaMult;
   }
 
   const ivaTotal = Object.values(ivaByAlic).reduce((a, b) => a + b, 0);
-  return { subtotalNeto, ivaByAlic, ivaTotal, total: subtotalNeto + ivaTotal };
+  const descuentoMonto = sumaSubtotales * (descGlobal / 100);
+  const recargoMonto   = base * (recargo / 100);
+  return { sumaSubtotales, descuentoMonto, recargoMonto, ivaByAlic, ivaTotal, total: precioConIva ? baseConRecargo : baseConRecargo + ivaTotal };
 }
 
 // ── Badge estado ─────────────────────────────────────────────────────────────
@@ -220,12 +236,22 @@ function PantallaComprobante({ comp, onNuevaVenta, onCerrar }: {
   onCerrar: () => void;
 }) {
   const generarHTML = (size: 'A4' | 'A5' | 'ticket') => {
+    const cfg = JSON.parse(localStorage.getItem(`roberto_config_${getClienteId()}`) || '{}');
+    const nombreNegocio = cfg.nombre_comercial || 'Mi Negocio';
+    const membreteLinas = [cfg.direccion, cfg.cuit, cfg.membrete].filter(Boolean)
+      .map(l => `<div>${l}</div>`).join('');
     const isTicket = size === 'ticket';
     const fs = isTicket ? '11px' : '13px';
     const itemsHTML = comp.items.map(it => {
-      const sub = it.cantidad * it.precio * (1 - it.dto / 100) * (1 - 0 / 100);
+      const alic = it.alicuota ?? 21;
+      const pNeto = comp.precioConIva ? it.precio / (1 + alic / 100) : it.precio;
+      const sub = pNeto * it.cantidad * (1 - it.dto / 100);
       return `<tr><td>${it.cantidad}</td><td>${it.descripcion}${it.dto ? ` (-${it.dto}%)` : ''}</td><td style="text-align:right">$${sub.toLocaleString('es-AR', { minimumFractionDigits: 2 })}</td></tr>`;
     }).join('');
+    const descRow = comp.descuentoMonto > 0
+      ? `<div class="row"><span>Descuento (${comp.descGlobal}%):</span><span>-$${comp.descuentoMonto.toLocaleString('es-AR',{minimumFractionDigits:2})}</span></div>` : '';
+    const recRow  = comp.recargoMonto > 0
+      ? `<div class="row"><span>Recargo (${comp.recargo}%):</span><span>+$${comp.recargoMonto.toLocaleString('es-AR',{minimumFractionDigits:2})}</span></div>` : '';
     const ivaRows = Object.entries(comp.ivaByAlic).sort(([a],[b])=>Number(a)-Number(b))
       .map(([a, m]) => `<div class="row"><span>IVA ${a}%:</span><span>$${m.toLocaleString('es-AR',{minimumFractionDigits:2})}</span></div>`).join('');
 
@@ -248,8 +274,9 @@ function PantallaComprobante({ comp, onNuevaVenta, onCerrar }: {
   .footer { text-align: center; margin-top: 12px; font-size: ${isTicket ? '10px' : '12px'}; }
 </style></head><body>
 <div class="header">
-  <div class="negocio">MI NEGOCIO</div>
+  <div class="negocio">${nombreNegocio}</div>
   <div>Comprobante de Venta</div>
+  ${membreteLinas}
 </div>
 <div class="row"><span class="bold">${comp.numero_completo}</span><span>${new Date().toLocaleDateString('es-AR')} ${new Date().toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'})}</span></div>
 <div class="row"><span>Cliente:</span><span>${comp.comprador_nombre || 'Mostrador'}</span></div>
@@ -259,8 +286,8 @@ function PantallaComprobante({ comp, onNuevaVenta, onCerrar }: {
   <tbody>${itemsHTML}</tbody>
 </table>
 <div class="sep"></div>
-<div class="row"><span>Subtotal neto:</span><span>$${comp.subtotalNeto.toLocaleString('es-AR',{minimumFractionDigits:2})}</span></div>
-${ivaRows}
+<div class="row"><span>Subtotal:</span><span>$${comp.sumaSubtotales.toLocaleString('es-AR',{minimumFractionDigits:2})}</span></div>
+${descRow}${recRow}${ivaRows}
 <div class="sep"></div>
 <div class="row total"><span>TOTAL:</span><span>$${comp.total.toLocaleString('es-AR',{minimumFractionDigits:2})}</span></div>
 <div class="sep"></div>
@@ -352,6 +379,8 @@ function RobertoVentas() {
 
   // Totales / opciones
   const [descGlobal,   setDescGlobal]   = useState(0);
+  const [recargo,      setRecargo]      = useState(0);
+  const [precioConIva, setPrecioConIva] = useState(true);
   const [enCC,         setEnCC]         = useState(false);
   const [observ,       setObserv]       = useState('');
 
@@ -504,7 +533,7 @@ function RobertoVentas() {
     setItems([]); setTipoCliente('mostrador'); setNomMostrador('');
     setBusqCliente(''); setClienteSel(null); setClientesDrop([]);
     setBusqProd(''); setProdsDrop([]); setShowDrop(false);
-    setDescGlobal(0); setEnCC(false); setObserv('');
+    setDescGlobal(0); setRecargo(0); setPrecioConIva(true); setEnCC(false); setObserv('');
     setErrVenta(''); setComprobante(null);
   };
 
@@ -526,13 +555,16 @@ function RobertoVentas() {
       : (nomMostrador.trim() || 'Mostrador');
     const compradorCuit = tipoCliente === 'cuenta' ? (clienteSel?.comprador_cuit || '') : '';
 
-    const { subtotalNeto, ivaByAlic, ivaTotal, total } = calcTotales(items, descGlobal);
+    const { sumaSubtotales, descuentoMonto, recargoMonto, ivaByAlic, ivaTotal, total } = calcTotales(items, descGlobal, recargo, precioConIva);
 
     const body = {
-      comprador_nombre: compradorNombre,
-      comprador_cuit:   compradorCuit,
+      comprador_nombre:      compradorNombre,
+      comprador_cuit:        compradorCuit,
       va_a_cuenta_corriente: enCC,
-      observaciones:    observ,
+      observaciones:         observ,
+      descuento_global:      descGlobal,
+      recargo_global:        recargo,
+      precio_con_iva:        precioConIva,
       items: items.map(it => ({
         producto_id:           it.producto_id,
         es_libre:              it.es_libre,
@@ -554,10 +586,12 @@ function RobertoVentas() {
       if (!r.ok) { setErrVenta(data.mensaje || 'Error al guardar la venta'); return; }
 
       setComprobante({
-        venta_id:       data.venta_id,
-        numero_completo: data.numero_completo,
+        venta_id:         data.venta_id,
+        numero_completo:  data.numero_completo,
         comprador_nombre: compradorNombre,
-        total, subtotalNeto, ivaByAlic, ivaTotal, items: [...items],
+        total, sumaSubtotales, descuentoMonto, recargoMonto,
+        descGlobal, recargo, precioConIva, ivaByAlic, ivaTotal,
+        items: [...items],
       });
     } catch {
       setErrVenta('Error de red. Intentá de nuevo.');
@@ -567,7 +601,7 @@ function RobertoVentas() {
   };
 
   // ── Totales en tiempo real ────────────────────────────────────
-  const { subtotalNeto, ivaByAlic, ivaTotal, total } = calcTotales(items, descGlobal);
+  const { sumaSubtotales, descuentoMonto, recargoMonto, ivaByAlic, ivaTotal, total } = calcTotales(items, descGlobal, recargo, precioConIva);
 
   // ─────────────────────────────────────────────────────────────
   // RENDER
@@ -723,6 +757,17 @@ function RobertoVentas() {
             ) : (
               <div style={{ padding: '24px 28px' }}>
 
+                {/* ── MODO IVA ─────────────────────────────── */}
+                <div style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', backgroundColor: precioConIva ? '#EBF8FF' : '#F0FFF4', borderRadius: '8px', border: `1px solid ${precioConIva ? '#BEE3F8' : '#9AE6B4'}`, flexWrap: 'wrap' }}>
+                  <button onClick={() => setPrecioConIva(v => !v)}
+                    style={{ ...btnStyle(precioConIva ? BLUE : GREEN), fontSize: '12px', padding: '6px 14px' }}>
+                    🏷️ {precioConIva ? 'Precios CON IVA incluido' : 'Precios SIN IVA'}
+                  </button>
+                  <span style={{ fontSize: '12px', color: GRAY }}>
+                    {precioConIva ? 'El IVA se extrae del precio ingresado (precio ÷ 1.alicuota)' : 'El IVA se suma sobre el precio neto ingresado'}
+                  </span>
+                </div>
+
                 {/* ── SECCIÓN CLIENTE ──────────────────────── */}
                 <div style={{ marginBottom: '20px' }}>
                   <div style={{ fontSize: '12px', fontWeight: 700, color: NAVY, textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `2px solid ${SEP}`, paddingBottom: '6px', marginBottom: '12px' }}>
@@ -825,14 +870,16 @@ function RobertoVentas() {
                       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
                         <thead>
                           <tr style={{ backgroundColor: '#F7FAFC' }}>
-                            {['#', 'Descripción', 'Cant', 'Precio', 'Dto%', 'Subtotal', '×'].map((h, i) => (
-                              <th key={h} style={{ padding: '8px 10px', textAlign: i >= 2 && i <= 5 ? 'right' : 'left', fontWeight: 600, color: GRAY, fontSize: '11px', borderBottom: '1px solid #EDF2F7' }}>{h}</th>
+                            {['#', 'Descripción', 'Cant', 'Precio', 'Dto%', 'IVA%', 'Subtotal', '×'].map((h, i) => (
+                              <th key={h} style={{ padding: '8px 10px', textAlign: i >= 2 && i <= 6 ? 'right' : 'left', fontWeight: 600, color: GRAY, fontSize: '11px', borderBottom: '1px solid #EDF2F7' }}>{h}</th>
                             ))}
                           </tr>
                         </thead>
                         <tbody>
                           {items.map((it, idx) => {
-                            const sub = it.cantidad * it.precio * (1 - it.dto / 100);
+                            const alic = it.alicuota ?? 21;
+                            const pNeto = precioConIva ? it.precio / (1 + alic / 100) : it.precio;
+                            const sub = pNeto * it.cantidad * (1 - it.dto / 100);
                             return (
                               <tr key={it.tempId} style={{ backgroundColor: idx % 2 === 0 ? '#fff' : '#F7FAFC' }}>
                                 <td style={{ padding: '6px 10px', color: GRAY, fontSize: '11px' }}>{idx + 1}</td>
@@ -854,6 +901,15 @@ function RobertoVentas() {
                                   <input type="number" value={it.dto} min="0" max="100" step="0.5"
                                     onChange={e => actualizarItem(it.tempId, 'dto', parseFloat(e.target.value) || 0)}
                                     style={{ ...inputStyle, width: '56px', padding: '4px 6px', textAlign: 'right' }} />
+                                </td>
+                                <td style={{ padding: '4px 6px', textAlign: 'right' }}>
+                                  <select value={it.alicuota}
+                                    onChange={e => actualizarItem(it.tempId, 'alicuota', parseFloat(e.target.value))}
+                                    style={{ ...inputStyle, width: '72px', padding: '4px 6px', cursor: 'pointer' }}>
+                                    <option value={0}>0%</option>
+                                    <option value={10.5}>10.5%</option>
+                                    <option value={21}>21%</option>
+                                  </select>
                                 </td>
                                 <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700, color: GREEN, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
                                   {fmt(sub)}
@@ -882,10 +938,20 @@ function RobertoVentas() {
 
                       {/* Columna totales */}
                       <div style={{ flex: '1 1 220px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px', fontSize: '13px' }}>
-                          <span style={{ color: GRAY }}>Subtotal neto:</span>
-                          <span style={{ fontWeight: 600, color: TEXT }}>{fmt(subtotalNeto)}</span>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', fontSize: '13px' }}>
+                          <span style={{ color: GRAY }}>Subtotal:</span>
+                          <span style={{ fontWeight: 600, color: TEXT }}>{fmt(sumaSubtotales)}</span>
                         </div>
+                        {descGlobal > 0 && (
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', fontSize: '12px', color: RED }}>
+                            <span>Descuento ({descGlobal}%):</span><span>-{fmt(descuentoMonto)}</span>
+                          </div>
+                        )}
+                        {recargo > 0 && (
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', fontSize: '12px', color: ORANGE }}>
+                            <span>Recargo ({recargo}%):</span><span>+{fmt(recargoMonto)}</span>
+                          </div>
+                        )}
                         {Object.entries(ivaByAlic).sort(([a],[b]) => Number(a) - Number(b)).map(([alic, monto]) => (
                           <div key={alic} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', fontSize: '12px', color: GRAY }}>
                             <span>IVA {alic}%:</span><span>{fmt(monto)}</span>
@@ -899,11 +965,19 @@ function RobertoVentas() {
 
                       {/* Columna opciones */}
                       <div style={{ flex: '1 1 220px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                        <div>
-                          <label style={labelStyle}>Descuento global %</label>
-                          <input type="number" value={descGlobal} min="0" max="100" step="0.5"
-                            onChange={e => setDescGlobal(parseFloat(e.target.value) || 0)}
-                            style={{ ...inputStyle, maxWidth: '120px' }} />
+                        <div style={{ display: 'flex', gap: '12px' }}>
+                          <div>
+                            <label style={labelStyle}>Descuento %</label>
+                            <input type="number" value={descGlobal} min="0" max="100" step="0.5"
+                              onChange={e => setDescGlobal(parseFloat(e.target.value) || 0)}
+                              style={{ ...inputStyle, width: '90px' }} />
+                          </div>
+                          <div>
+                            <label style={labelStyle}>Recargo %</label>
+                            <input type="number" value={recargo} min="0" max="100" step="0.5"
+                              onChange={e => setRecargo(parseFloat(e.target.value) || 0)}
+                              style={{ ...inputStyle, width: '90px' }} />
+                          </div>
                         </div>
                         <button onClick={() => setEnCC(v => !v)}
                           style={{ ...btnStyle(enCC ? BLUE : '#EDF2F7', enCC ? '#fff' : GRAY), fontSize: '12px', padding: '7px 14px', width: 'fit-content' }}>
