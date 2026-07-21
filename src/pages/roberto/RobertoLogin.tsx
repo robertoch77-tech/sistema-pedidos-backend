@@ -36,6 +36,11 @@ interface PortalData {
   habilitar_sucursales: boolean;
   habilitar_empleados: boolean;
   arca_habilitado: boolean;
+  habilitar_cheques: boolean;
+  habilitar_caja:    boolean;
+  habilitar_ventas:  boolean;
+  habilitar_remitos: boolean;
+  habilitar_stock:   boolean;
 }
 
 function RobertoLogin() {
