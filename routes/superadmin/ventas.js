@@ -304,6 +304,47 @@ router.post('/:cliente_id', async (req, res) => {
     }
 
     await client.query('COMMIT');
+
+    // 6. Movimiento de caja (si hay caja abierta)
+    try {
+      const cajaRes = await client.query(
+        `SELECT id FROM cajas
+         WHERE cliente_id = $1
+         AND estado = 'abierta'
+         LIMIT 1`,
+        [cliente_id]
+      );
+      if (cajaRes.rows.length > 0) {
+        const caja_id = cajaRes.rows[0].id;
+        await client.query(
+          `INSERT INTO caja_movimientos
+             (caja_id, cliente_id, tipo, tipo_operacion,
+              monto, medio_pago, descripcion,
+              numero_comprobante, venta_id)
+           VALUES ($1,$2,'venta','ingreso',$3,
+                   'efectivo',$4,$5,$6)`,
+          [
+            caja_id,
+            cliente_id,
+            total_venta,
+            `Venta ${numero_completo}`,
+            numero_completo,
+            venta_id
+          ]
+        );
+        await client.query(
+          `UPDATE cajas
+           SET total_ingresos = total_ingresos + $1,
+               saldo_actual = saldo_actual + $1
+           WHERE id = $2`,
+          [total_venta, caja_id]
+        );
+      }
+    } catch (err) {
+      console.error('Error registrando en caja:', err.message);
+      // No hacer rollback por esto — la venta se registra igual
+    }
+
     res.json({ ok: true, venta_id, numero_completo });
 
   } catch (err) {

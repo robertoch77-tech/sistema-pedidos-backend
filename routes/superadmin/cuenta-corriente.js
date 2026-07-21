@@ -431,6 +431,41 @@ router.post('/clientes/:cliente_id/cobro', async (req, res) => {
     ).catch(() => {});
 
     await client.query('COMMIT');
+
+    // Movimiento de caja (si hay caja abierta)
+    try {
+      const cajaRes = await pool.query(
+        `SELECT id FROM cajas WHERE cliente_id=$1 AND estado='abierta' LIMIT 1`,
+        [cliente_id]
+      );
+      if (cajaRes.rows.length > 0) {
+        const caja_id = cajaRes.rows[0].id;
+        const medio_pago_principal = medios_pago[0]?.tipo || 'efectivo';
+        const compradorRes = await pool.query(
+          `SELECT comprador_nombre FROM cuentas_corrientes_clientes WHERE id=$1`, [cuenta_corriente_id]
+        );
+        const comprador_nombre = compradorRes.rows[0]?.comprador_nombre || '';
+        await pool.query(
+          `INSERT INTO caja_movimientos
+             (caja_id, cliente_id, tipo, tipo_operacion,
+              monto, medio_pago, descripcion, numero_comprobante)
+           VALUES ($1,$2,'cobro','ingreso',$3,$4,$5,$6)`,
+          [caja_id, cliente_id, n(monto_total), medio_pago_principal,
+           `Cobro cliente ${comprador_nombre}`, numero]
+        );
+        await pool.query(
+          `UPDATE cajas
+           SET total_ingresos = total_ingresos + $1,
+               saldo_actual   = saldo_actual   + $1
+           WHERE id=$2`,
+          [n(monto_total), caja_id]
+        );
+      }
+    } catch (err) {
+      console.error('Error registrando cobro en caja:', err.message);
+      // No hace rollback — el cobro se registra igual
+    }
+
     res.json({ ok: true, cobranza_id, numero_completo: numero, saldo_nuevo: saldoNuevo });
   } catch (err) {
     await client.query('ROLLBACK');
