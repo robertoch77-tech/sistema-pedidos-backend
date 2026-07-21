@@ -54,6 +54,10 @@ async function asegurarTablas() {
       )
     `);
 
+    // Nuevas columnas IVA / recargo
+    await pool.query(`ALTER TABLE presupuestos ADD COLUMN IF NOT EXISTS recargo_global NUMERIC DEFAULT 0`).catch(() => {});
+    await pool.query(`ALTER TABLE presupuestos ADD COLUMN IF NOT EXISTS precio_con_iva BOOLEAN DEFAULT true`).catch(() => {});
+
     // analytics_eventos puede no existir — ignorar silenciosamente
     await pool.query(`
       CREATE TABLE IF NOT EXISTS analytics_eventos (
@@ -202,11 +206,17 @@ router.post('/:cliente_id', async (req, res) => {
     condiciones = '',
     estado = 'borrador',
     descuento_global = 0,
+    recargo_global   = 0,
+    precio_con_iva   = true,
   } = req.body;
 
   if (!items.length) {
     return res.status(400).json({ mensaje: 'El presupuesto debe tener al menos un ítem' });
   }
+
+  const descPct    = parseFloat(descuento_global) || 0;
+  const recargoPct = parseFloat(recargo_global)   || 0;
+  const conIva     = precio_con_iva !== false;
 
   const client = await pool.connect();
   try {
@@ -221,28 +231,33 @@ router.post('/:cliente_id', async (req, res) => {
     const numero          = parseInt(numRes.rows[0].siguiente, 10);
     const numero_completo = `P-${String(numero).padStart(5, '0')}`;
 
-    // 2. Calcular totales
-    let subtotal_total = 0;
-    let iva_total      = 0;
+    // 2. Calcular totales con nueva fórmula (IVA-aware)
+    let sumaSubtotales = 0;
+    const itemsNeto = [];
     const itemsCalc = items.map((it, idx) => {
-      const cantidad   = parseFloat(it.cantidad)            || 0;
-      const precio     = parseFloat(it.precio_unitario)     || 0;
-      const dto_pct    = parseFloat(it.descuento_porcentaje)|| 0;
-      const iva_pct    = parseFloat(it.alicuota_iva)        || 21;
-      const desc_glob  = parseFloat(descuento_global)       || 0;
+      const cantidad = parseFloat(it.cantidad)             || 0;
+      const precio   = parseFloat(it.precio_unitario)      || 0;
+      const dto_pct  = parseFloat(it.descuento_porcentaje) || 0;
+      const iva_pct  = parseFloat(it.alicuota_iva)         || 21;
 
-      const bruto      = cantidad * precio;
-      const dto_monto  = bruto * (dto_pct / 100);
-      const neto       = (bruto - dto_monto) * (1 - desc_glob / 100);
-      const iva_monto  = neto * (iva_pct / 100);
-      const total_item = neto + iva_monto;
+      const precioNeto   = conIva ? precio / (1 + iva_pct / 100) : precio;
+      const subtotalItem = precioNeto * cantidad * (1 - dto_pct / 100);
+      sumaSubtotales += subtotalItem;
+      itemsNeto.push({ iva_pct, subtotalItem, dto_pct, cantidad, precioNeto });
 
-      subtotal_total += neto;
-      iva_total      += iva_monto;
-
-      return { ...it, cantidad, precio, dto_pct, dto_monto, neto, iva_pct, iva_monto, total_item, orden: idx + 1 };
+      return { ...it, cantidad, precio, dto_pct, iva_pct, orden: idx + 1 };
     });
-    const total_pres = subtotal_total + iva_total;
+
+    const base          = sumaSubtotales * (1 - descPct / 100);
+    const baseConRecargo = base * (1 + recargoPct / 100);
+    const factor        = sumaSubtotales > 0 ? baseConRecargo / sumaSubtotales : 1;
+
+    let iva_total = 0;
+    for (const { iva_pct, subtotalItem } of itemsNeto) {
+      const ivaMult = conIva ? iva_pct / (100 + iva_pct) : iva_pct / 100;
+      iva_total += subtotalItem * factor * ivaMult;
+    }
+    const total_pres = conIva ? baseConRecargo : baseConRecargo + iva_total;
 
     // 3. Fecha vencimiento
     const diasInt = parseInt(dias_validez, 10) || 15;
@@ -257,23 +272,30 @@ router.post('/:cliente_id', async (req, res) => {
           comprador_nombre, comprador_cuit, lista_precio_id,
           dias_validez, fecha_vencimiento,
           condiciones, observaciones,
-          subtotal, iva_monto, total, descuento_global, estado,
+          subtotal, iva_monto, total, descuento_global, recargo_global, precio_con_iva, estado,
           fecha, creado_en, modificado_en)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,now(),now(),now())
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,now(),now(),now())
        RETURNING id`,
       [
         cliente_id, numero, numero_completo,
         comprador_nombre, comprador_cuit, lista_precio_id,
         diasInt, fechaVencStr,
         condiciones, observaciones,
-        subtotal_total.toFixed(4), iva_total.toFixed(4), total_pres.toFixed(4),
-        parseFloat(descuento_global).toFixed(4), estado,
+        sumaSubtotales.toFixed(4), iva_total.toFixed(4), total_pres.toFixed(4),
+        descPct.toFixed(4), recargoPct.toFixed(4), conIva, estado,
       ]
     );
     const presupuesto_id = presRes.rows[0].id;
 
     // 5. INSERT items
-    for (const it of itemsCalc) {
+    for (let i = 0; i < itemsCalc.length; i++) {
+      const it   = itemsCalc[i];
+      const neto = itemsNeto[i];
+      const dto_monto  = neto.precioNeto * neto.cantidad * (neto.dto_pct / 100);
+      const neto_item  = neto.subtotalItem * factor;
+      const iva_item   = neto.subtotalItem * factor * (neto.iva_pct / 100);
+      const total_item = neto_item + iva_item;
+
       await client.query(
         `INSERT INTO presupuestos_items
            (presupuesto_id, cliente_id, producto_id, es_libre,
@@ -288,9 +310,9 @@ router.post('/:cliente_id', async (req, res) => {
           it.descripcion_libre || null,
           it.descripcion || '',
           it.cantidad, it.precio,
-          it.dto_pct, it.dto_monto.toFixed(4),
-          it.iva_pct, it.iva_monto.toFixed(4),
-          it.neto.toFixed(4), it.total_item.toFixed(4),
+          it.dto_pct, dto_monto.toFixed(4),
+          it.iva_pct, iva_item.toFixed(4),
+          neto_item.toFixed(4), total_item.toFixed(4),
           it.orden,
         ]
       );
