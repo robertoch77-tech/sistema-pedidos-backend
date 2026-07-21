@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { API_BASE } from '../../config/api';
 
 const NAVY  = '#1B2A4A';
 const BLUE  = '#2B6CB0';
@@ -79,52 +80,109 @@ function RobertoConfig() {
     direccion: '',
     logo_url: '',
   });
-  const [logoError, setLogoError] = useState(false);
-  const [guardando, setGuardando] = useState(false);
-  const [exito, setExito] = useState('');
-  const [error, setError] = useState('');
+  const [logoError,  setLogoError]  = useState(false);
+  const [guardando,  setGuardando]  = useState(false);
+  const [cargando,   setCargando]   = useState(true);
+  const [exito,      setExito]      = useState('');
+  const [error,      setError]      = useState('');
+  const [sesion,     setSesion]     = useState<{ token: string; cliente: { id: number; nombre_comercial: string }; modulos: Record<string, boolean> } | null>(null);
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem('roberto_portal_session');
-      if (!raw) { window.location.href = '/roberto/login'; return; }
-      const s = JSON.parse(raw);
-      if (!s.token) { window.location.href = '/roberto/login'; return; }
-      // Pre-populate con datos del cliente
-      setConfig(prev => ({
-        ...prev,
-        nombre_comercial: s.cliente?.nombre_comercial || '',
-        campana: !!s.modulos?.notificaciones,
-      }));
-      // Cargar config guardada si existe
-      const savedCfg = localStorage.getItem(`roberto_config_${s.cliente?.id}`);
-      if (savedCfg) setConfig(JSON.parse(savedCfg));
-    } catch {
-      window.location.href = '/roberto/login';
-    }
+    const cargar = async () => {
+      try {
+        const raw = localStorage.getItem('roberto_portal_session');
+        if (!raw) { window.location.href = '/roberto/login'; return; }
+        const s = JSON.parse(raw);
+        if (!s.token) { window.location.href = '/roberto/login'; return; }
+        setSesion(s);
+
+        // 1. Intentar cargar desde el backend
+        try {
+          const r = await fetch(`${API_BASE}/api/superadmin/config/${s.cliente.id}`, {
+            headers: { 'x-roberto-token': s.token },
+          });
+          if (r.ok) {
+            const data = await r.json();
+            setConfig({
+              tamano_defecto:  (data.tamano_defecto  || 'A4') as 'A4' | 'A5',
+              tamano_tickets:  (data.tamano_tickets  || 'A4') as 'A4' | 'A5',
+              membrete:        data.membrete         || '',
+              campana:         data.campana          ?? true,
+              whatsapp_notif:  data.whatsapp_notif   ?? false,
+              whatsapp_numero: data.whatsapp_numero  || '',
+              nombre_comercial: data.nombre_comercial || s.cliente?.nombre_comercial || '',
+              cuit:            data.cuit             || '',
+              direccion:       data.direccion        || '',
+              logo_url:        data.logo_url         || '',
+            });
+            // Sincronizar caché local
+            localStorage.setItem(`roberto_config_${s.cliente.id}`, JSON.stringify(data));
+            setCargando(false);
+            return;
+          }
+        } catch { /* fallback a localStorage */ }
+
+        // 2. Fallback: localStorage
+        const savedCfg = localStorage.getItem(`roberto_config_${s.cliente?.id}`);
+        if (savedCfg) {
+          setConfig(JSON.parse(savedCfg));
+        } else {
+          setConfig(prev => ({
+            ...prev,
+            nombre_comercial: s.cliente?.nombre_comercial || '',
+            campana: !!s.modulos?.notificaciones,
+          }));
+        }
+      } catch {
+        window.location.href = '/roberto/login';
+      } finally {
+        setCargando(false);
+      }
+    };
+
+    cargar();
   }, []);
 
   const setF = <K extends keyof Config>(field: K) => (val: Config[K]) =>
     setConfig(prev => ({ ...prev, [field]: val }));
 
   const guardar = async () => {
+    if (!sesion) return;
     setGuardando(true);
     setError('');
     try {
-      await new Promise(r => setTimeout(r, 600));
-      const raw = localStorage.getItem('roberto_portal_session');
-      if (raw) {
-        const s = JSON.parse(raw);
-        localStorage.setItem(`roberto_config_${s.cliente?.id}`, JSON.stringify(config));
+      const r = await fetch(`${API_BASE}/api/superadmin/config/${sesion.cliente.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'x-roberto-token': sesion.token },
+        body: JSON.stringify(config),
+      });
+      // Guardar en localStorage siempre (caché + fallback offline)
+      localStorage.setItem(`roberto_config_${sesion.cliente.id}`, JSON.stringify(config));
+      if (r.ok) {
+        setExito('Configuración guardada correctamente');
+      } else {
+        setExito('Guardado localmente (sin conexión al servidor)');
       }
-      setExito('Configuración guardada correctamente');
       setTimeout(() => setExito(''), 3000);
     } catch {
-      setError('Error al guardar. Intentá de nuevo.');
+      // Sin conexión: al menos guardar local
+      localStorage.setItem(`roberto_config_${sesion.cliente.id}`, JSON.stringify(config));
+      setError('Sin conexión. Configuración guardada localmente.');
+      setTimeout(() => setError(''), 4000);
     } finally {
       setGuardando(false);
     }
   };
+
+  if (cargando) return (
+    <div style={{ minHeight: '100vh', backgroundColor: BG, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      <div style={{ textAlign: 'center' }}>
+        <div style={{ width: '32px', height: '32px', border: `3px solid #CBD5E0`, borderTopColor: BLUE, borderRadius: '50%', animation: 'spin .7s linear infinite', margin: '0 auto 12px' }} />
+        <p style={{ color: GRAY, fontSize: '14px', margin: 0 }}>Cargando configuración...</p>
+      </div>
+    </div>
+  );
 
   return (
     <div style={{ minHeight: '100vh', backgroundColor: BG, padding: '28px', maxWidth: '860px', margin: '0 auto' }}>
