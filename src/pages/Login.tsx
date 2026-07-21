@@ -13,7 +13,7 @@ const Logo = ({ size = 32 }: { size?: number }) => (
   </svg>
 );
 
-const API_ROBERTO = process.env.REACT_APP_API_URL || 'http://localhost:4000';
+const API_ROBERTO = process.env.REACT_APP_API_URL || 'https://sistema-pedidos-backend-2hec.onrender.com';
 
 function Login() {
   const [email, setEmail] = useState('');
