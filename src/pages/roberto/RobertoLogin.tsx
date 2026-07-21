@@ -94,6 +94,19 @@ function RobertoLogin() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.mensaje || 'Error al ingresar');
 
+      // Guardar datos del negocio para comprobantes
+      localStorage.setItem(`roberto_config_${data.cliente.id}`, JSON.stringify({
+        nombre_comercial: data.cliente.nombre_comercial || '',
+        razon_social:     data.cliente.razon_social     || '',
+        cuit:             data.cliente.cuit             || '',
+        condicion_iva:    data.cliente.condicion_iva    || '',
+        direccion:        data.cliente.direccion        || '',
+        ciudad:           data.cliente.ciudad           || '',
+        provincia:        data.cliente.provincia        || '',
+        telefono:         data.cliente.telefono         || '',
+        whatsapp:         data.cliente.whatsapp         || '',
+      }));
+
       localStorage.setItem('roberto_portal_session', JSON.stringify({
         token:   data.token,
         cliente: data.cliente,

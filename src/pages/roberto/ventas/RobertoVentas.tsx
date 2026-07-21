@@ -98,6 +98,9 @@ interface ComprobanteData {
   ivaByAlic: Record<number, number>;
   ivaTotal: number;
   items: ItemVenta[];
+  formaPago: string;
+  montoRecibido: number;
+  vuelto: number;
 }
 
 // ── Estilos comunes ──────────────────────────────────────────────────────────
@@ -254,6 +257,17 @@ function PantallaComprobante({ comp, onNuevaVenta, onCerrar }: {
       ? `<div class="row"><span>Recargo (${comp.recargo}%):</span><span>+$${comp.recargoMonto.toLocaleString('es-AR',{minimumFractionDigits:2})}</span></div>` : '';
     const ivaRows = Object.entries(comp.ivaByAlic).sort(([a],[b])=>Number(a)-Number(b))
       .map(([a, m]) => `<div class="row"><span>IVA ${a}%:</span><span>$${m.toLocaleString('es-AR',{minimumFractionDigits:2})}</span></div>`).join('');
+    const pagoLabels: Record<string, string> = {
+      efectivo: 'Efectivo', transferencia: 'Transferencia',
+      tarjeta_debito: 'Débito', tarjeta_credito: 'Crédito',
+      cheque: 'Cheque', cuenta_corriente: 'Cuenta Corriente', otro: 'Otro',
+    };
+    const pagoLabel = pagoLabels[comp.formaPago] || comp.formaPago;
+    const pagoRows = `<div class="row"><span>Forma de pago:</span><span class="bold">${pagoLabel}</span></div>`
+      + (comp.formaPago === 'efectivo'
+        ? `<div class="row"><span>Recibido:</span><span>$${comp.montoRecibido.toLocaleString('es-AR',{minimumFractionDigits:2})}</span></div>`
+        + `<div class="row bold"><span>Vuelto:</span><span>$${comp.vuelto.toLocaleString('es-AR',{minimumFractionDigits:2})}</span></div>`
+        : '');
 
     return `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <title>${comp.numero_completo}</title>
@@ -290,6 +304,8 @@ function PantallaComprobante({ comp, onNuevaVenta, onCerrar }: {
 ${descRow}${recRow}${ivaRows}
 <div class="sep"></div>
 <div class="row total"><span>TOTAL:</span><span>$${comp.total.toLocaleString('es-AR',{minimumFractionDigits:2})}</span></div>
+<div class="sep"></div>
+${pagoRows}
 <div class="sep"></div>
 <div class="footer">Gracias por su compra</div>
 </body></html>`;
@@ -378,16 +394,43 @@ function RobertoVentas() {
   const itemInputRef = useRef<HTMLInputElement>(null);
 
   // Totales / opciones
-  const [descGlobal,   setDescGlobal]   = useState(0);
-  const [recargo,      setRecargo]      = useState(0);
-  const [precioConIva, setPrecioConIva] = useState(true);
-  const [enCC,         setEnCC]         = useState(false);
-  const [observ,       setObserv]       = useState('');
+  const [descGlobal,     setDescGlobal]     = useState(0);
+  const [recargo,        setRecargo]        = useState(0);
+  const [precioConIva,   setPrecioConIva]   = useState(true);
+  const [enCC,           setEnCC]           = useState(false);
+  const [observ,         setObserv]         = useState('');
+  const [formaPago,      setFormaPago]      = useState('efectivo');
+  const [montoRecibido,  setMontoRecibido]  = useState<number>(0);
 
   // Submit
   const [procesando,   setProcesando]   = useState(false);
   const [errVenta,     setErrVenta]     = useState('');
   const [comprobante,  setComprobante]  = useState<ComprobanteData | null>(null);
+
+  // ── Poblar config del negocio desde sesión (fallback) ────────
+  useEffect(() => {
+    if (!cid) return;
+    const key = `roberto_config_${cid}`;
+    if (localStorage.getItem(key)) return; // ya existe, no pisar
+    try {
+      const s = localStorage.getItem('roberto_portal_session');
+      if (!s) return;
+      const sesion = JSON.parse(s);
+      const c = sesion?.cliente;
+      if (!c) return;
+      localStorage.setItem(key, JSON.stringify({
+        nombre_comercial: c.nombre_comercial || '',
+        razon_social:     c.razon_social     || '',
+        cuit:             c.cuit             || '',
+        condicion_iva:    c.condicion_iva    || '',
+        direccion:        c.direccion        || '',
+        ciudad:           c.ciudad           || '',
+        provincia:        c.provincia        || '',
+        telefono:         c.telefono         || '',
+        whatsapp:         c.whatsapp         || '',
+      }));
+    } catch { /* silencioso */ }
+  }, [cid]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Load dashboard ────────────────────────────────────────────
   const cargarDash = useCallback(() => {
@@ -534,6 +577,7 @@ function RobertoVentas() {
     setBusqCliente(''); setClienteSel(null); setClientesDrop([]);
     setBusqProd(''); setProdsDrop([]); setShowDrop(false);
     setDescGlobal(0); setRecargo(0); setPrecioConIva(true); setEnCC(false); setObserv('');
+    setFormaPago('efectivo'); setMontoRecibido(0);
     setErrVenta(''); setComprobante(null);
   };
 
@@ -556,6 +600,7 @@ function RobertoVentas() {
     const compradorCuit = tipoCliente === 'cuenta' ? (clienteSel?.comprador_cuit || '') : '';
 
     const { sumaSubtotales, descuentoMonto, recargoMonto, ivaByAlic, ivaTotal, total } = calcTotales(items, descGlobal, recargo, precioConIva);
+    const vueltoCalc = formaPago === 'efectivo' ? Math.max(0, montoRecibido - total) : 0;
 
     const body = {
       comprador_nombre:      compradorNombre,
@@ -565,6 +610,9 @@ function RobertoVentas() {
       descuento_global:      descGlobal,
       recargo_global:        recargo,
       precio_con_iva:        precioConIva,
+      forma_pago:            formaPago,
+      monto_recibido:        formaPago === 'efectivo' ? montoRecibido : total,
+      vuelto:                vueltoCalc,
       items: items.map(it => ({
         producto_id:           it.producto_id,
         es_libre:              it.es_libre,
@@ -592,6 +640,9 @@ function RobertoVentas() {
         total, sumaSubtotales, descuentoMonto, recargoMonto,
         descGlobal, recargo, precioConIva, ivaByAlic, ivaTotal,
         items: [...items],
+        formaPago,
+        montoRecibido: formaPago === 'efectivo' ? montoRecibido : total,
+        vuelto: vueltoCalc,
       });
     } catch {
       setErrVenta('Error de red. Intentá de nuevo.');
@@ -602,6 +653,8 @@ function RobertoVentas() {
 
   // ── Totales en tiempo real ────────────────────────────────────
   const { sumaSubtotales, descuentoMonto, recargoMonto, ivaByAlic, ivaTotal, total } = calcTotales(items, descGlobal, recargo, precioConIva);
+  const vueltoRT = formaPago === 'efectivo' ? montoRecibido - total : 0;
+  const confirmDisabled = procesando || items.length === 0 || (formaPago === 'efectivo' && montoRecibido > 0 && montoRecibido < total);
 
   // ─────────────────────────────────────────────────────────────
   // RENDER
@@ -994,6 +1047,59 @@ function RobertoVentas() {
                   </div>
                 )}
 
+                {/* ── FORMA DE PAGO + VUELTO ───────────────── */}
+                <div style={{ backgroundColor: '#F7FAFC', borderRadius: '10px', padding: '16px 20px', marginBottom: '20px', border: '1px solid #EDF2F7' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 700, color: NAVY, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>
+                    💳 Cobro
+                  </div>
+                  <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                    <div style={{ flex: '1 1 180px' }}>
+                      <label style={labelStyle}>Forma de pago</label>
+                      <select value={formaPago} onChange={e => { setFormaPago(e.target.value); setMontoRecibido(0); }}
+                        style={{ ...inputStyle, cursor: 'pointer' }}>
+                        <option value="efectivo">💵 Efectivo</option>
+                        <option value="transferencia">🏦 Transferencia</option>
+                        <option value="tarjeta_debito">💳 Débito</option>
+                        <option value="tarjeta_credito">💳 Crédito</option>
+                        <option value="cheque">📝 Cheque</option>
+                        <option value="cuenta_corriente">📒 Cuenta Corriente</option>
+                        <option value="otro">📌 Otro</option>
+                      </select>
+                    </div>
+
+                    {formaPago === 'efectivo' && (
+                      <>
+                        <div style={{ flex: '0 0 140px' }}>
+                          <label style={labelStyle}>Monto recibido $</label>
+                          <input
+                            type="number"
+                            value={montoRecibido || ''}
+                            onChange={e => setMontoRecibido(parseFloat(e.target.value) || 0)}
+                            placeholder="0.00"
+                            min="0"
+                            step="0.01"
+                            style={inputStyle}
+                          />
+                        </div>
+                        {montoRecibido > 0 && (
+                          <div style={{ flex: '0 0 140px', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
+                            <label style={labelStyle}>{vueltoRT >= 0 ? 'Vuelto' : 'Falta'}</label>
+                            <div style={{
+                              ...inputStyle,
+                              backgroundColor: vueltoRT >= 0 ? '#F0FFF4' : '#FFF5F5',
+                              color: vueltoRT >= 0 ? GREEN : RED,
+                              fontWeight: 700, fontSize: '16px',
+                              border: `1.5px solid ${vueltoRT >= 0 ? '#9AE6B4' : '#FEB2B2'}`,
+                            }}>
+                              {vueltoRT >= 0 ? fmt(vueltoRT) : fmt(Math.abs(vueltoRT))}
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+
                 {/* Error */}
                 {errVenta && (
                   <div style={{ backgroundColor: '#FFF5F5', border: '1px solid #FEB2B2', borderRadius: '8px', padding: '10px 14px', fontSize: '13px', color: RED, marginBottom: '16px' }}>
@@ -1005,8 +1111,8 @@ function RobertoVentas() {
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
                   <button onClick={cerrarModal} style={btnStyle('#EDF2F7', GRAY)}>Cancelar</button>
                   <button onClick={confirmarVenta}
-                    disabled={procesando || items.length === 0}
-                    style={btnStyle(GREEN, '#fff', procesando || items.length === 0)}>
+                    disabled={confirmDisabled}
+                    style={btnStyle(GREEN, '#fff', confirmDisabled)}>
                     {procesando ? '⏳ Procesando...' : '✅ Confirmar venta'}
                   </button>
                 </div>
