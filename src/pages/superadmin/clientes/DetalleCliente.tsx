@@ -84,7 +84,6 @@ const gruposModulos = [
   ]},
   { titulo: 'Stock', modulos: [
     { id: 'stock',         nombre: 'Gestión de stock' },
-    { id: 'transferencias',nombre: 'Transferencias entre sucursales' },
   ]},
   { titulo: 'Finanzas', modulos: [
     { id: 'cc_clientes',    nombre: 'Cuenta corriente clientes' },
@@ -123,7 +122,6 @@ function modulosDesdeCliente(c: ClienteDetalle): ModulosState {
     ventas:         !!c.habilitar_ventas,
     remitos:        !!c.habilitar_remitos,
     stock:          !!c.habilitar_stock,
-    transferencias: false,
     cc_clientes:    !!c.habilitar_ctas_ctes,
     cc_proveedores: !!c.habilitar_cc_proveedores,
     caja:           !!c.habilitar_caja,
