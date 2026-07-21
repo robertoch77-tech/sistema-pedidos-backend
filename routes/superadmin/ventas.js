@@ -234,33 +234,72 @@ router.post('/:cliente_id', async (req, res) => {
       }
     }
 
-    // 5. Movimiento cuenta corriente
+    // 5. Movimiento cuenta corriente (tabla nueva)
     if (va_a_cuenta_corriente) {
-      const saldoRes = await client.query(
-        `SELECT COALESCE(SUM(
-           CASE WHEN tipo IN ('venta','nd') THEN monto ELSE -monto END
-         ), 0) AS saldo
-         FROM cuenta_corriente
-         WHERE cliente_id = $1 AND comprador_cuit = $2`,
-        [cliente_id, comprador_cuit || '']
-      );
-      const saldo_anterior  = parseFloat(saldoRes.rows[0].saldo) || 0;
-      const saldo_posterior = saldo_anterior + total_venta;
 
+      // 1. Buscar registro en tabla nueva
+      let ccRes = await client.query(
+        `SELECT id, saldo, plazo_pago_dias
+         FROM cuentas_corrientes_clientes
+         WHERE cliente_id = $1
+         AND (
+           (comprador_cuit != '' AND comprador_cuit = $2)
+           OR
+           (comprador_nombre = $3)
+         )
+         AND activo = true
+         LIMIT 1`,
+        [cliente_id, comprador_cuit || '', comprador_nombre]
+      );
+
+      let cc_id;
+      let saldo_anterior;
+
+      // 2. Si no existe, crear registro nuevo
+      if (ccRes.rows.length === 0) {
+        const nuevaCC = await client.query(
+          `INSERT INTO cuentas_corrientes_clientes
+             (cliente_id, comprador_nombre, comprador_cuit,
+              saldo, activo)
+           VALUES ($1, $2, $3, 0, true)
+           RETURNING id, saldo, plazo_pago_dias`,
+          [cliente_id, comprador_nombre, comprador_cuit || '']
+        );
+        cc_id = nuevaCC.rows[0].id;
+        saldo_anterior = 0;
+      } else {
+        cc_id = ccRes.rows[0].id;
+        saldo_anterior = parseFloat(ccRes.rows[0].saldo) || 0;
+      }
+
+      const saldo_nuevo = saldo_anterior + total_venta;
+
+      // 3. Insertar movimiento en tabla nueva
       await client.query(
-        `INSERT INTO cuenta_corriente
-           (cliente_id, comprador_cuit, comprador_nombre, tipo,
-            referencia_id, referencia_tipo, descripcion,
-            monto, saldo_anterior, saldo_posterior, fecha)
-         VALUES ($1,$2,$3,'venta',$4,'venta',$5,$6,$7,$8,now())`,
+        `INSERT INTO movimientos_cuentas_corrientes
+           (cuenta_corriente_id, cliente_id, tipo,
+            debe, haber, saldo_acumulado,
+            descripcion, numero_comprobante,
+            venta_id, estado)
+         VALUES ($1,$2,'venta',$3,0,$4,$5,$6,$7,'pendiente')`,
         [
-          cliente_id, comprador_cuit, comprador_nombre,
-          venta_id,
-          `Venta ${numero_completo}`,
+          cc_id,
+          cliente_id,
           total_venta.toFixed(4),
-          saldo_anterior.toFixed(4),
-          saldo_posterior.toFixed(4),
+          saldo_nuevo.toFixed(4),
+          `Venta ${numero_completo}`,
+          numero_completo,
+          venta_id
         ]
+      );
+
+      // 4. Actualizar saldo en cabecera
+      await client.query(
+        `UPDATE cuentas_corrientes_clientes
+         SET saldo = $1,
+             ultima_compra = now()
+         WHERE id = $2`,
+        [saldo_nuevo.toFixed(4), cc_id]
       );
     }
 
