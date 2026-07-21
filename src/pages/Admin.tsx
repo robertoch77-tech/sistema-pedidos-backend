@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 
 const API = 'https://sistema-pedidos-backend-2hec.onrender.com';
-const LINK_BASE = 'sistemagestiopedidos.netlify.app';
+const LINK_BASE = 'sistemagestionpedidos.netlify.app';
 
 const Logo = ({ size = 32 }: { size?: number }) => (
   <svg viewBox="0 0 80 80" width={size} height={size} style={{ display: 'block' }}>
