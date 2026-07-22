@@ -207,6 +207,7 @@ function ModalImportadorV2({ onCerrar, onExito }: { onCerrar: () => void; onExit
   const [descCols, setDescCols]   = useState<string[]>([]);
   const [marcaDef, setMarcaDef]   = useState('');
   const [rubroDef, setRubroDef]   = useState('');
+  const [subId, setSubId]               = useState('');
   const [guardarMapeo, setGuardarMapeo] = useState(true);
   const [mapeoMsg, setMapeoMsg]         = useState('');
   const [analisisDiff, setAnalisisDiff] = useState<DiffAnalisis | null>(null);
@@ -215,11 +216,16 @@ function ModalImportadorV2({ onCerrar, onExito }: { onCerrar: () => void; onExit
   const token    = getToken();
   const clienteId = getClienteId();
   const proveedorDb = useDebounce(proveedor, 700);
+  const subIdDb     = useDebounce(subId, 700);
+
+  const claveMapeo = (prov: string, sub: string) =>
+    sub.trim() ? `${prov.trim()}_${sub.trim()}` : prov.trim();
 
   useEffect(() => {
     const nombre = proveedorDb.trim();
     if (!nombre || nombre.length < 2 || !clienteId) { setMapeoMsg(''); return; }
-    fetch(`${API}/api/superadmin/importador/mapeo-proveedor/${clienteId}/${encodeURIComponent(nombre)}`, {
+    const clave = claveMapeo(nombre, subIdDb);
+    fetch(`${API}/api/superadmin/importador/mapeo-proveedor/${clienteId}/${encodeURIComponent(clave)}`, {
       headers: { 'x-superadmin-token': token },
     })
       .then(r => r.ok ? r.json() : null)
@@ -231,10 +237,10 @@ function ModalImportadorV2({ onCerrar, onExito }: { onCerrar: () => void; onExit
         if (d.marca_defecto !== undefined) setMarcaDef(d.marca_defecto || '');
         if (d.rubro_defecto !== undefined) setRubroDef(d.rubro_defecto || '');
         setGuardarMapeo(true);
-        setMapeoMsg(`✅ Mapeo anterior cargado para ${nombre}`);
+        setMapeoMsg(`✅ Mapeo anterior cargado para ${clave}`);
       })
       .catch(() => { setMapeoMsg(''); });
-  }, [proveedorDb, clienteId, token]);
+  }, [proveedorDb, subIdDb, clienteId, token]);
 
   const allColumnas = Array.from(new Set(
     hojas.filter(h => hojasOk.includes(h.nombre)).flatMap(h => h.columnas)
@@ -276,7 +282,7 @@ function ModalImportadorV2({ onCerrar, onExito }: { onCerrar: () => void; onExit
           await fetch(`${API}/api/superadmin/importador/mapeo-proveedor/${clienteId}`, {
             method: 'POST',
             headers: { 'x-superadmin-token': token, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ proveedor: proveedor.trim(), mapeo: { ...mapeo, descripcion: descCols } }),
+            body: JSON.stringify({ proveedor: claveMapeo(proveedor, subId), mapeo: { ...mapeo, descripcion: descCols } }),
           });
         } catch {}
       }
@@ -404,7 +410,26 @@ function ModalImportadorV2({ onCerrar, onExito }: { onCerrar: () => void; onExit
               {/* ── COLUMNA IZQUIERDA: controles de mapeo ── */}
               <div style={{ flex: '0 0 420px', display: 'flex', flexDirection: 'column', gap: 14 }}>
 
-                {/* Hojas detectadas */}
+                {/* Hoja / Rubro — solo si hay más de una hoja */}
+                {hojas.length > 1 && (
+                  <div style={{ marginBottom: 12 }}>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: '#4A5568', display: 'block', marginBottom: 4 }}>
+                      Hoja / Rubro (opcional)
+                    </label>
+                    <input
+                      type="text"
+                      value={subId}
+                      onChange={e => setSubId(e.target.value)}
+                      placeholder="Ej: Tubos, Accesorios, Lista1"
+                      style={{ width: '100%', padding: '6px 10px', border: '1px solid #CBD5E0', borderRadius: 6, fontSize: 13 }}
+                    />
+                    <div style={{ fontSize: 11, color: '#718096', marginTop: 3 }}>
+                      Diferencia mapeos del mismo proveedor por hoja o categoría
+                    </div>
+                  </div>
+                )}
+
+                {/* 1. Hojas detectadas */}
                 <div style={{ backgroundColor: '#F7FAFC', borderRadius: 10, padding: '12px 16px' }}>
                   <div style={{ fontSize: 12, fontWeight: 700, color: NAVY, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
                     Hojas detectadas — seleccioná las que importar:
@@ -420,70 +445,101 @@ function ModalImportadorV2({ onCerrar, onExito }: { onCerrar: () => void; onExit
                   </div>
                 </div>
 
-                {/* Descripción multi-columna */}
-                <div style={{ backgroundColor: '#FFFBF0', borderRadius: 10, padding: '12px 16px', border: `1px solid ${YELLOW}` }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: NAVY, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
-                    Descripción del producto <span style={{ color: RED }}>*</span> — columnas que la forman (en orden):
+                {/* 2. CAMPOS REQUERIDOS */}
+                <div style={{ backgroundColor: '#FFFBEB', borderRadius: 10, padding: '12px 16px', border: `1.5px solid #F6C23E` }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#744210', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                    ⚠️ Campos requeridos
                   </div>
-                  <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-                    {descCols.map((c, i) => (
-                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, backgroundColor: '#fff', border: `1px solid ${YELLOW}`, borderRadius: 8, padding: '3px 8px', fontSize: 13 }}>
-                        <span style={{ fontWeight: 600 }}>{i + 1}.</span> {c}
-                        <button onClick={() => moveDescCol(i, -1)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: GRAY, fontSize: 14, padding: '0 2px' }} title="Subir">↑</button>
-                        <button onClick={() => moveDescCol(i, 1)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: GRAY, fontSize: 14, padding: '0 2px' }} title="Bajar">↓</button>
-                        <button onClick={() => removeDescCol(i)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: RED, fontWeight: 700, fontSize: 14, padding: '0 2px' }}>✕</button>
-                      </div>
-                    ))}
-                  </div>
-                  <select style={{ ...selectSt, width: 'auto', minWidth: 180 }} onChange={e => { if (e.target.value) addDescCol(e.target.value); e.target.value = ''; }} defaultValue="">
-                    <option value="">＋ Agregar columna...</option>
-                    {allColumnas.filter(c => !descCols.includes(c)).map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                </div>
 
-                {/* Tabla de mapeo */}
-                <div>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: NAVY, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Mapeo de columnas:</div>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                    <thead>
-                      <tr style={{ backgroundColor: '#EBF4FF' }}>
-                        <th style={{ padding: '7px 10px', textAlign: 'left', color: NAVY, fontWeight: 700, borderBottom: `2px solid ${SEP}`, width: '45%' }}>Campo sistema</th>
-                        <th style={{ padding: '7px 10px', textAlign: 'left', color: NAVY, fontWeight: 700, borderBottom: `2px solid ${SEP}` }}>Columna del Excel</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {CAMPOS_MAPEO.map(({ campo, label, obligatorio }) => (
-                        <tr key={campo} style={{ backgroundColor: obligatorio ? '#FFFFF0' : '#fff' }}>
-                          <td style={{ padding: '6px 10px', borderBottom: '1px solid #EDF2F7', fontWeight: obligatorio ? 600 : 400, fontSize: 12 }}>
-                            {label} {obligatorio && <span style={{ color: RED }}>*</span>}
-                          </td>
-                          <td style={{ padding: '4px 10px', borderBottom: '1px solid #EDF2F7' }}>
-                            <select style={{ ...selectSt, width: '100%', fontSize: 12 }} value={mapeo[campo] || ''} onChange={e => setMapeo(prev => ({ ...prev, [campo]: e.target.value }))}>
-                              <option value="">— No usar —</option>
-                              {allColumnas.map(c => <option key={c} value={c}>{c}</option>)}
-                            </select>
-                          </td>
-                        </tr>
+                  {/* Descripción multi-columna */}
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: NAVY, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.3px' }}>
+                      Descripción <span style={{ color: RED }}>*</span> — columnas que la forman (en orden):
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
+                      {descCols.map((c, i) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 3, backgroundColor: '#fff', border: `1px solid #F6C23E`, borderRadius: 8, padding: '3px 8px', fontSize: 12 }}>
+                          <span style={{ fontWeight: 600 }}>{i + 1}.</span> {c}
+                          <button onClick={() => moveDescCol(i, -1)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: GRAY, fontSize: 13, padding: '0 2px' }} title="Subir">↑</button>
+                          <button onClick={() => moveDescCol(i, 1)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: GRAY, fontSize: 13, padding: '0 2px' }} title="Bajar">↓</button>
+                          <button onClick={() => removeDescCol(i)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: RED, fontWeight: 700, fontSize: 13, padding: '0 2px' }}>✕</button>
+                        </div>
                       ))}
+                    </div>
+                    <select style={{ ...selectSt, width: 'auto', minWidth: 180, fontSize: 12 }} onChange={e => { if (e.target.value) addDescCol(e.target.value); e.target.value = ''; }} defaultValue="">
+                      <option value="">＋ Agregar columna...</option>
+                      {allColumnas.filter(c => !descCols.includes(c)).map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+
+                  {/* Código y Precio costo */}
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                    <tbody>
+                      {(['codigo', 'precio_costo'] as const).map(campo => {
+                        const meta = CAMPOS_MAPEO.find(c => c.campo === campo)!;
+                        return (
+                          <tr key={campo}>
+                            <td style={{ padding: '5px 8px 5px 0', fontWeight: 700, color: NAVY, width: '45%', fontSize: 12 }}>
+                              {meta.label} <span style={{ color: RED }}>*</span>
+                            </td>
+                            <td style={{ padding: '4px 0' }}>
+                              <select style={{ ...selectSt, width: '100%', fontSize: 12 }} value={mapeo[campo] || ''} onChange={e => setMapeo(prev => ({ ...prev, [campo]: e.target.value }))}>
+                                <option value="">— No usar —</option>
+                                {allColumnas.map(c => <option key={c} value={c}>{c}</option>)}
+                              </select>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
 
-                {/* Campos masivos */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                  <div>
-                    <label style={labelSt}>Marca por defecto</label>
-                    <input style={{ ...inputSt, fontSize: 13, padding: '7px 10px' }} value={marcaDef} onChange={e => setMarcaDef(e.target.value)} placeholder="Ej: BERGER" />
+                {/* 3. CAMPOS OPCIONALES — colapsable */}
+                <details open={Object.keys(mapeo).filter(k => k !== 'codigo' && k !== 'precio_costo' && mapeo[k]).length === 0 && descCols.length === 0}
+                  style={{ backgroundColor: '#F7FAFC', borderRadius: 10, border: '1px solid #E2E8F0' }}>
+                  <summary style={{ padding: '10px 14px', cursor: 'pointer', fontSize: 12, fontWeight: 700, color: NAVY, textTransform: 'uppercase', letterSpacing: '0.4px', userSelect: 'none', listStyle: 'none', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    📦 Campos opcionales
+                  </summary>
+                  <div style={{ padding: '0 14px 12px' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ backgroundColor: '#EBF4FF' }}>
+                          <th style={{ padding: '6px 8px', textAlign: 'left', color: NAVY, fontWeight: 700, borderBottom: `2px solid ${SEP}`, width: '45%' }}>Campo sistema</th>
+                          <th style={{ padding: '6px 8px', textAlign: 'left', color: NAVY, fontWeight: 700, borderBottom: `2px solid ${SEP}` }}>Columna del Excel</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {CAMPOS_MAPEO.filter(c => c.campo !== 'codigo' && c.campo !== 'precio_costo').map(({ campo, label }) => (
+                          <tr key={campo} style={{ backgroundColor: '#fff' }}>
+                            <td style={{ padding: '5px 8px', borderBottom: '1px solid #EDF2F7', fontSize: 12 }}>{label}</td>
+                            <td style={{ padding: '4px 8px', borderBottom: '1px solid #EDF2F7' }}>
+                              <select style={{ ...selectSt, width: '100%', fontSize: 12 }} value={mapeo[campo] || ''} onChange={e => setMapeo(prev => ({ ...prev, [campo]: e.target.value }))}>
+                                <option value="">— No usar —</option>
+                                {allColumnas.map(c => <option key={c} value={c}>{c}</option>)}
+                              </select>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10 }}>
+                      <div>
+                        <label style={labelSt}>Marca por defecto</label>
+                        <input style={{ ...inputSt, fontSize: 12, padding: '6px 10px' }} value={marcaDef} onChange={e => setMarcaDef(e.target.value)} placeholder="Ej: BERGER" />
+                      </div>
+                      <div>
+                        <label style={labelSt}>Rubro por defecto</label>
+                        <input style={{ ...inputSt, fontSize: 12, padding: '6px 10px' }} value={rubroDef} onChange={e => setRubroDef(e.target.value)} placeholder="Ej: CAÑOS" />
+                      </div>
+                    </div>
                   </div>
-                  <div>
-                    <label style={labelSt}>Rubro por defecto</label>
-                    <input style={{ ...inputSt, fontSize: 13, padding: '7px 10px' }} value={rubroDef} onChange={e => setRubroDef(e.target.value)} placeholder="Ej: CAÑOS" />
-                  </div>
-                </div>
+                </details>
 
+                {/* 4. Checkbox guardar mapeo */}
                 <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: TEXT, cursor: 'pointer' }}>
                   <input type="checkbox" checked={guardarMapeo} onChange={e => setGuardarMapeo(e.target.checked)} style={{ accentColor: BLUE }} />
-                  Guardar este mapeo para <strong>{proveedor}</strong>
+                  Guardar este mapeo para <strong>{claveMapeo(proveedor, subId) || proveedor}</strong>
                 </label>
               </div>
 
