@@ -49,6 +49,7 @@ interface ClienteDetalle {
   habilitar_compras:          boolean;
   habilitar_autos:            boolean;
   habilitar_cc_proveedores:   boolean;
+  habilitar_catalogo:         boolean;
 }
 
 interface EditForm {
@@ -81,6 +82,7 @@ const gruposModulos = [
     { id: 'remitos',       nombre: 'Remitos' },
     { id: 'compras',       nombre: 'Compras' },
     { id: 'autos',         nombre: 'Autos / Vehículos' },
+    { id: 'catalogo_pub',  nombre: 'Catálogo público' },
   ]},
   { titulo: 'Stock', modulos: [
     { id: 'stock',         nombre: 'Gestión de stock' },
@@ -135,6 +137,7 @@ function modulosDesdeCliente(c: ClienteDetalle): ModulosState {
     empleados:      !!c.habilitar_empleados,
     compras:        !!c.habilitar_compras,
     autos:          !!c.habilitar_autos,
+    catalogo_pub:   !!c.habilitar_catalogo,
   };
 }
 
@@ -319,6 +322,7 @@ function DetalleCliente() {
           stock:            modulos.stock,
           compras:          modulos.compras,
           autos:            modulos.autos,
+          catalogo:         modulos.catalogo_pub,
         }}),
       });
       if (r.ok) {
