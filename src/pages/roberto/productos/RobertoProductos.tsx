@@ -1034,7 +1034,7 @@ function useDebounce<T>(value: T, delay: number): T {
 
 const COLS: { key: string; label: string; width?: number }[] = [
   { key: 'codigo',          label: 'Código',       width: 90 },
-  { key: 'descripcion',     label: 'Descripción',  width: 200 },
+  { key: 'descripcion',     label: 'Descripción',  width: 250 },
   { key: 'marca',           label: 'Marca',        width: 90 },
   { key: 'rubro',           label: 'Rubro',        width: 90 },
   { key: 'proveedor',       label: 'Proveedor',    width: 100 },
@@ -1079,8 +1079,6 @@ function RobertoProductos() {
   const navigate = useNavigate();
   const token     = getToken();
   const clienteId = getClienteId();
-  const todosLosProductos = useRef<Map<string, ProductoReal>>(new Map());
-
   // Filtros
   const [busqueda,        setBusqueda]        = useState('');
   const [filtroProveedor, setFiltroProveedor] = useState('');
@@ -1108,10 +1106,12 @@ function RobertoProductos() {
 
   // Selección
   const [seleccionados, setSeleccionados] = useState<Set<number>>(new Set());
+  const [hoveredId, setHoveredId] = useState<number | null>(null);
+  const [modoAplicar, setModoAplicar] = useState<'seleccionados' | 'filtrados'>('seleccionados');
 
   // Edición inline
   const [modoEdit,   setModoEdit]   = useState(false);
-  const [edits,      setEdits]      = useState<Record<number, EditState>>({});
+  const [edits,      setEdits]      = useState<Record<string, EditState>>({});
   const [pvActivo,   setPvActivo]   = useState<1 | 2 | 3>(1);
   const [guardando,  setGuardando]  = useState(false);
   const [msgGuardar, setMsgGuardar] = useState('');
@@ -1205,7 +1205,7 @@ function RobertoProductos() {
     try {
       const params = buildParams({ page: String(pg), limit: String(porPagina) });
       const r = await fetch(`${API}/api/superadmin/importador/productos/${clienteId}?${params}`, { headers: { 'x-superadmin-token': token } });
-      if (r.ok) { const d = await r.json(); const prods: ProductoReal[] = d.productos || []; prods.forEach(p => todosLosProductos.current.set(String(p.id), p)); setProductos(prods); setTotal(d.total || 0); setTotalPags(d.paginas || 1); }
+      if (r.ok) { const d = await r.json(); setProductos(d.productos || []); setTotal(d.total || 0); setTotalPags(d.paginas || 1); }
     } catch {} finally { setCargando(false); }
   }, [clienteId, token, buildParams, porPagina]);
 
@@ -1264,32 +1264,35 @@ function RobertoProductos() {
       const body = {
         cliente_id: clienteId,
         productos: modificados.map(id => {
-          const p = todosLosProductos.current.get(id);
-          if (!p) return null as any;
-          const { pv1, pv2, pv3 } = calcRow(p);
+          const e = edits[id];
+          const pc = n(e.precio_costo);
+          const d1 = n(e.dto_1), d2 = n(e.dto_2), d3 = n(e.dto_3);
+          const i1 = n(e.imp_1), i2 = n(e.imp_2), iva = n(e.alicuota_iva);
+          const u1 = n(e.utilidad_1), u2 = n(e.utilidad_2), u3 = n(e.utilidad_3);
+          const pcF = calcPcFinal(pc, d1, d2, d3);
+          const pv1 = calcPv(pcF, i1, i2, iva, u1);
+          const pv2 = calcPv(pcF, i1, i2, iva, u2);
+          const pv3 = calcPv(pcF, i1, i2, iva, u3);
           const pvFinal = pvActivo === 1 ? pv1 : pvActivo === 2 ? pv2 : pv3;
           return {
-            id: Number(id),
-            precio_costo:    n(getE(p, 'precio_costo')),
-            descuento_1:     n(getE(p, 'dto_1')),  descuento_2: n(getE(p, 'dto_2')), descuento_3: n(getE(p, 'dto_3')),
-            impuesto_1:      n(getE(p, 'imp_1')),  impuesto_2: n(getE(p, 'imp_2')),
-            iva:             n(getE(p, 'alicuota_iva')),
-            utilidad_1:      n(getE(p, 'utilidad_1')), utilidad_2: n(getE(p, 'utilidad_2')), utilidad_3: n(getE(p, 'utilidad_3')),
+            id:                 Number(id),
+            precio_costo:       pc,
+            descuento_1:        d1, descuento_2: d2, descuento_3: d3,
+            impuesto_1:         i1, impuesto_2:  i2,
+            iva,
+            utilidad_1:         u1, utilidad_2: u2, utilidad_3: u3,
             precio_venta_final: pvFinal, precio_venta_2: pv2, precio_venta_3: pv3,
-            marca:           getE(p, 'marca') || null,  rubro: getE(p, 'rubro') || null,
-            unidad_medida:   getE(p, 'unidad_medida') || null,
-            stock_minimo:    n(getE(p, 'stock_minimo')),
+            marca:              e.marca || null,
+            rubro:              e.rubro || null,
+            unidad_medida:      e.unidad_medida || null,
+            stock_minimo:       n(e.stock_minimo),
           };
-        }).filter(Boolean),
+        }),
       };
-      console.log('TOKEN:', token);
-      console.log('CLIENTE:', clienteId);
-      console.log('BODY:', JSON.stringify(body));
       const r = await fetch(`${API}/api/superadmin/importador/actualizar-precios-v2`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json', 'x-superadmin-token': token }, body: JSON.stringify(body),
       });
       const d = await r.json();
-      console.log('RESPONSE:', JSON.stringify(d));
       if (r.ok && d.ok) { setMsgGuardar(`✅ ${d.actualizados} actualizados`); setModoEdit(false); setEdits({}); cargarProductos(pagina); }
       else setMsgGuardar(`❌ ${d.mensaje || 'Error'}`);
     } catch { setMsgGuardar('❌ Error de conexión'); }
@@ -1298,15 +1301,36 @@ function RobertoProductos() {
 
   // ── Acciones masivas ──────────────────────────────────────────
   const handleMasivo = async () => {
-    if (!campoMasivo || seleccionados.size === 0) return;
+    if (!campoMasivo) return;
+    if (modoAplicar === 'seleccionados' && seleccionados.size === 0) return;
     const meta = CAMPOS_MASIVOS.find(c => c.campo === campoMasivo);
     const valorParsed = meta?.tipo === 'number' ? parseFloat(valorMasivo) || 0
       : meta?.tipo === 'bool' ? (valorMasivo === 'true') : valorMasivo;
     setAplicandoMasivo(true);
     try {
+      let ids: number[];
+      if (modoAplicar === 'filtrados') {
+        const params = new URLSearchParams({ cliente_id: String(clienteId), por_pagina: String(total || 9999) });
+        if (busquedaDb.trim()) params.set('buscar', busquedaDb.trim());
+        if (filtroProveedor) params.set('proveedor_id', filtroProveedor);
+        if (filtroMarca) params.set('marca', filtroMarca);
+        if (filtroRubro) params.set('rubro', filtroRubro);
+        if (filtroEstado) params.set('activo', filtroEstado === 'activo' ? 'true' : 'false');
+        if (fechaDesde) params.set('fecha_desde', fechaDesde);
+        if (fechaHasta) params.set('fecha_hasta', fechaHasta);
+        if (fechaDesde || fechaHasta) params.set('fecha_tipo', fechaTipo);
+        const rIds = await fetch(`${API}/api/superadmin/importador/productos?${params}`, {
+          headers: { 'x-superadmin-token': token },
+        });
+        const dIds = await rIds.json();
+        ids = (dIds.productos || []).map((p: any) => p.id);
+        if (!ids.length) { alert('No hay productos con esos filtros'); setAplicandoMasivo(false); return; }
+      } else {
+        ids = Array.from(seleccionados);
+      }
       const r = await fetch(`${API}/api/superadmin/importador/actualizar-masivo`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json', 'x-superadmin-token': token },
-        body: JSON.stringify({ cliente_id: clienteId, ids: Array.from(seleccionados), campo: campoMasivo, valor: valorParsed }),
+        body: JSON.stringify({ cliente_id: clienteId, ids, campo: campoMasivo, valor: valorParsed }),
       });
       const d = await r.json();
       if (r.ok && d.ok) { setSeleccionados(new Set()); cargarProductos(pagina); cargarFiltros(); }
@@ -1517,12 +1541,24 @@ function RobertoProductos() {
       </div>
 
       {/* BARRA ACCIONES MASIVAS */}
-      {cantSel > 0 && (
+      {(cantSel > 0 || !!hayFiltros) && (
         <div style={{ backgroundColor: '#FFFBEB', borderBottom: `2px solid ${YELLOW}`, padding: '10px 24px', display: 'flex', flexDirection: 'column', gap: 10 }}>
 
           {/* Fila principal */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: NAVY }}>{cantSel} seleccionado{cantSel !== 1 ? 's' : ''}</span>
+            {/* Selector Aplicar a */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, border: `1.5px solid ${ORANGE}`, borderRadius: 7, padding: '3px 8px', backgroundColor: '#fff' }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: NAVY, whiteSpace: 'nowrap' }}>Aplicar a:</span>
+              <label style={{ fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 3 }}>
+                <input type="radio" name="modoAplicar" value="seleccionados" checked={modoAplicar === 'seleccionados'} onChange={() => setModoAplicar('seleccionados')} style={{ accentColor: ORANGE }} />
+                <span style={{ color: modoAplicar === 'seleccionados' ? ORANGE : GRAY }}>Seleccionados ({cantSel})</span>
+              </label>
+              <label style={{ fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 3 }}>
+                <input type="radio" name="modoAplicar" value="filtrados" checked={modoAplicar === 'filtrados'} onChange={() => setModoAplicar('filtrados')} style={{ accentColor: ORANGE }} />
+                <span style={{ color: modoAplicar === 'filtrados' ? ORANGE : GRAY }}>Filtrados ({total})</span>
+              </label>
+            </div>
+
             <select style={{ ...selectSt, width: 'auto', minWidth: 160, fontSize: 13 }} value={modoAjuste ? '___ajuste___' : campoMasivo} onChange={e => {
               if (e.target.value === '___ajuste___') { setModoAjuste(true); setCampoMasivo(''); setValorMasivo(''); }
               else { setModoAjuste(false); resetAjuste(); setCampoMasivo(e.target.value); setValorMasivo(''); }
@@ -1544,12 +1580,14 @@ function RobertoProductos() {
             })()}
             {!modoAjuste && campoMasivo && valorMasivo !== '' && (
               <button style={btnStyle(ORANGE, '#fff', aplicandoMasivo)} disabled={aplicandoMasivo} onClick={handleMasivo}>
-                {aplicandoMasivo ? '⏳' : `Aplicar a ${cantSel}`}
+                {aplicandoMasivo ? '⏳' : modoAplicar === 'filtrados' ? `Aplicar a ${total} filtrados` : `Aplicar a ${cantSel}`}
               </button>
             )}
-            <button style={btnStyle('#C53030', '#fff', eliminando)} disabled={eliminando} onClick={handleEliminarSeleccionados}>
-              {eliminando ? '⏳' : `🗑 Eliminar (${cantSel})`}
-            </button>
+            {cantSel > 0 && (
+              <button style={btnStyle('#C53030', '#fff', eliminando)} disabled={eliminando} onClick={handleEliminarSeleccionados}>
+                {eliminando ? '⏳' : `🗑 Eliminar (${cantSel})`}
+              </button>
+            )}
             <button style={btnStyle('#EDF2F7', GRAY)} onClick={() => { setSeleccionados(new Set()); resetAjuste(); setCampoMasivo(''); setValorMasivo(''); }}>✕ Limpiar</button>
           </div>
 
@@ -1773,26 +1811,34 @@ function RobertoProductos() {
 
       {/* TABLA */}
       <div style={{ margin: '12px 16px 16px', backgroundColor: '#fff', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.07)', overflow: 'hidden' }}>
-        <div style={{ overflowX: 'auto' }}>
+        <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 280px)' }}>
           <table style={{ minWidth: 2400, borderCollapse: 'collapse', width: '100%' }}>
             <thead>
               <tr>
-                <th style={{ ...thSt(), width: 36, textAlign: 'center' }}>
+                <th style={{ ...thSt(), width: 36, textAlign: 'center', position: 'sticky', top: 0, left: 0, zIndex: 4 }}>
                   <input type="checkbox" checked={seleccionados.size === productos.length && productos.length > 0} onChange={toggleTodos} style={{ accentColor: BLUE }} />
                 </th>
-                <th style={{ ...thSt(), width: 60 }}>Img</th>
-                {COLS.filter(c => colVisible(c.key)).map(c => (
-                  <th key={c.key} style={{ ...thSt(ordenCol === c.key), width: c.width, cursor: c.key.startsWith('_') ? 'default' : 'pointer' }}
-                    onClick={() => handleOrden(c.key)}>
-                    {c.label} {ordenCol === c.key ? (ordenDir === 'asc' ? '↑' : '↓') : ''}
-                    {(c.key === '_pv1' || c.key === '_pv2' || c.key === '_pv3') && modoEdit && (
-                      <span style={{ fontSize: 9, color: pvActivo === parseInt(c.key.slice(-1)) ? GREEN : GRAY }}>
-                        {pvActivo === parseInt(c.key.slice(-1)) ? ' ★' : ''}
-                      </span>
-                    )}
-                  </th>
-                ))}
-                <th style={{ ...thSt(), width: 90 }}>Acciones</th>
+                <th style={{ ...thSt(), width: 60, position: 'sticky', top: 0, left: 36, zIndex: 4 }}>Img</th>
+                {COLS.filter(c => colVisible(c.key)).map(c => {
+                  const stickyTh: React.CSSProperties =
+                    c.key === 'codigo'
+                      ? { position: 'sticky', top: 0, left: 96, zIndex: 4 }
+                      : c.key === 'descripcion'
+                      ? { position: 'sticky', top: 0, left: 186, zIndex: 4 }
+                      : { position: 'sticky', top: 0, zIndex: 2 };
+                  return (
+                    <th key={c.key} style={{ ...thSt(ordenCol === c.key), width: c.width, cursor: c.key.startsWith('_') ? 'default' : 'pointer', ...stickyTh }}
+                      onClick={() => handleOrden(c.key)}>
+                      {c.label} {ordenCol === c.key ? (ordenDir === 'asc' ? '↑' : '↓') : ''}
+                      {(c.key === '_pv1' || c.key === '_pv2' || c.key === '_pv3') && modoEdit && (
+                        <span style={{ fontSize: 9, color: pvActivo === parseInt(c.key.slice(-1)) ? GREEN : GRAY }}>
+                          {pvActivo === parseInt(c.key.slice(-1)) ? ' ★' : ''}
+                        </span>
+                      )}
+                    </th>
+                  );
+                })}
+                <th style={{ ...thSt(), width: 90, position: 'sticky', top: 0, zIndex: 2 }}>Acciones</th>
               </tr>
             </thead>
             <tbody>
@@ -1800,28 +1846,42 @@ function RobertoProductos() {
                 <tr><td colSpan={colsVisibles.length + 3} style={{ textAlign: 'center', padding: 32, color: GRAY, fontSize: 14 }}>Cargando...</td></tr>
               ) : productosSorted.length === 0 ? (
                 <tr><td colSpan={colsVisibles.length + 3} style={{ textAlign: 'center', padding: 32, color: GRAY, fontSize: 14 }}>Sin productos</td></tr>
-              ) : productosSorted.map(p => {
+              ) : productosSorted.map((p, idx) => {
                 const { pcF, pv1, pv2, pv3 } = calcRow(p);
                 const isSel = seleccionados.has(p.id);
-                const rowBg = isSel ? '#EBF8FF' : '#fff';
+                const isHov = hoveredId === p.id;
+                const isEdit = !!edits[String(p.id)];
+                const rowBg = isSel ? '#EBF8FF' : isHov ? '#EBF4FF' : idx % 2 === 0 ? '#FFFFFF' : '#F8FAFC';
                 const td = { ...tdSt, backgroundColor: rowBg };
                 const calcTdR = { ...calcTd, backgroundColor: isSel ? '#C6E6FF' : CALC_BG };
                 const calcTd2R = { ...calcTd2, backgroundColor: isSel ? '#B2F5D6' : CALC_BG2 };
 
                 return (
-                  <tr key={p.id} style={{ backgroundColor: rowBg }} onDoubleClick={() => !modoEdit && setModalEditar(p)}>
-                    <td style={{ ...td, textAlign: 'center', width: 36 }}>
+                  <tr
+                    key={p.id}
+                    style={{ backgroundColor: rowBg, borderLeft: isEdit ? '3px solid #C9A84C' : '3px solid transparent' }}
+                    onMouseEnter={() => setHoveredId(p.id)}
+                    onMouseLeave={() => setHoveredId(null)}
+                    onDoubleClick={() => !modoEdit && setModalEditar(p)}
+                  >
+                    <td style={{ ...td, textAlign: 'center', width: 36, position: 'sticky', left: 0, zIndex: 1 }}>
                       <input type="checkbox" checked={isSel} onChange={() => toggleSel(p.id)} style={{ accentColor: BLUE }} />
                     </td>
-                    <td style={{ ...td, width: 60, textAlign: 'center' }}>
+                    <td style={{ ...td, width: 60, textAlign: 'center', position: 'sticky', left: 36, zIndex: 1 }}>
                       {p.imagen_url
                         ? <img src={p.imagen_url} alt="" style={{ width: 36, height: 36, objectFit: 'contain', borderRadius: 4 }} onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
                         : <span style={{ fontSize: 20 }}>📦</span>}
                     </td>
                     {/* Código */}
-                    {colVisible('codigo') && <td style={{ ...td, width: 90, fontWeight: 600, color: NAVY }}>{p.codigo || '—'}</td>}
+                    {colVisible('codigo') && <td style={{ ...td, width: 90, fontWeight: 600, color: NAVY, position: 'sticky', left: 96, zIndex: 1 }}>{p.codigo || '—'}</td>}
                     {/* Descripción */}
-                    {colVisible('descripcion') && <td style={{ ...td, width: 200, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }} title={p.descripcion}>{p.descripcion}</td>}
+                    {colVisible('descripcion') && (
+                      <td style={{ ...td, width: 250, minWidth: 250, maxWidth: 250, whiteSpace: 'normal', position: 'sticky', left: 186, zIndex: 1 }} title={p.descripcion}>
+                        <div style={{ overflow: 'hidden', display: '-webkit-box' as any, WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as any, wordBreak: 'break-word', lineHeight: '1.35em', maxHeight: '2.7em' }}>
+                          {p.descripcion}
+                        </div>
+                      </td>
+                    )}
                     {/* Marca */}
                     {colVisible('marca') && <td style={{ ...td, width: 90 }}>
                       {modoEdit ? eText(p, 'marca', 85) : (p.marca || '—')}
