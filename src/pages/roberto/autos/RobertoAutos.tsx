@@ -64,6 +64,13 @@ interface Dashboard {
 }
 
 // ── HELPERS ──────────────────────────────────────────────────
+function getSuperadminToken(): string {
+  try {
+    const s = localStorage.getItem('superadmin_session');
+    return s ? JSON.parse(s).token : '';
+  } catch { return ''; }
+}
+
 const fmt  = (n: number) => `$${Number(n).toLocaleString('es-AR', { maximumFractionDigits: 0 })}`;
 const fmtF = (s: string) => { if (!s) return ''; const d = new Date(s + 'T00:00:00'); return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`; };
 const hoy  = () => new Date().toISOString().slice(0, 10);
@@ -197,7 +204,7 @@ function ModalNuevoVehiculo({ clienteId, token, onGuardado, onClose }: {
     try {
       const res = await fetch(`${API_BASE}/api/superadmin/autos/${clienteId}/vehiculos`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-roberto-token': token },
+        headers: { 'Content-Type': 'application/json', 'x-superadmin-token': token },
         body: JSON.stringify({ ...form, tipo, km: parseInt(form.km) || 0 }),
       });
       const data = await res.json();
@@ -323,7 +330,7 @@ function ModalEditarVehiculo({ v, clienteId, token, onGuardado, onClose }: {
     try {
       const res = await fetch(`${API_BASE}/api/superadmin/autos/${clienteId}/vehiculos/${v.id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json', 'x-roberto-token': token },
+        headers: { 'Content-Type': 'application/json', 'x-superadmin-token': token },
         body: JSON.stringify({ ...form, km: parseInt(form.km) || 0 }),
       });
       const data = await res.json();
@@ -436,7 +443,7 @@ function ModalVenta({ v, socios, clienteId, token, onVendido, onClose }: {
       const socioSeleccionado = socios.find(s => String(s.id) === form.socio_id);
       const res = await fetch(`${API_BASE}/api/superadmin/autos/${clienteId}/ventas`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-roberto-token': token },
+        headers: { 'Content-Type': 'application/json', 'x-superadmin-token': token },
         body: JSON.stringify({
           vehiculo_id: v.id,
           comprador_nombre: form.comprador_nombre,
@@ -565,7 +572,7 @@ function ModalSocio({ clienteId, token, onGuardado, onClose }: {
     try {
       const res = await fetch(`${API_BASE}/api/superadmin/autos/${clienteId}/socios`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-roberto-token': token },
+        headers: { 'Content-Type': 'application/json', 'x-superadmin-token': token },
         body: JSON.stringify(form),
       });
       const data = await res.json();
@@ -618,7 +625,7 @@ function ModalImportar({ clienteId, token, onImportado, onClose }: {
     try {
       const res = await fetch(`${API_BASE}/api/superadmin/autos/${clienteId}/vehiculos/importar`, {
         method: 'POST',
-        headers: { 'x-roberto-token': token },
+        headers: { 'x-superadmin-token': token },
         body: fd,
       });
       const data = await res.json();
@@ -716,7 +723,7 @@ function RobertoAutos() {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const token     = sesion?.token || '';
+  const token     = getSuperadminToken();
   const clienteId = sesion?.cliente.id || 0;
 
   // ── CARGA DASHBOARD ──────────────────────────────────────
@@ -724,7 +731,7 @@ function RobertoAutos() {
     if (!clienteId || !token) return;
     try {
       const r = await fetch(`${API_BASE}/api/superadmin/autos/${clienteId}/dashboard`, {
-        headers: { 'x-roberto-token': token },
+        headers: { 'x-superadmin-token': token },
       });
       if (r.ok) setDash(await r.json());
     } catch {}
@@ -740,7 +747,7 @@ function RobertoAutos() {
       if (vEstado)  params.set('estado', vEstado);
       if (vTipo)    params.set('tipo',   vTipo);
       const r = await fetch(`${API_BASE}/api/superadmin/autos/${clienteId}/vehiculos?${params}`, {
-        headers: { 'x-roberto-token': token },
+        headers: { 'x-superadmin-token': token },
       });
       if (r.ok) { const d = await r.json(); setVehiculos(d.vehiculos); setVTotal(d.total); setVPagina(pagina); }
     } catch {}
@@ -755,7 +762,7 @@ function RobertoAutos() {
     if (venHasta) params.set('fecha_hasta', venHasta);
     try {
       const r = await fetch(`${API_BASE}/api/superadmin/autos/${clienteId}/ventas?${params}`, {
-        headers: { 'x-roberto-token': token },
+        headers: { 'x-superadmin-token': token },
       });
       if (r.ok) { const d = await r.json(); setVentas(d.ventas); setVenTotal(d.total); setVenPagina(pagina); }
     } catch {}
@@ -766,7 +773,7 @@ function RobertoAutos() {
     if (!clienteId || !token) return;
     try {
       const r = await fetch(`${API_BASE}/api/superadmin/autos/${clienteId}/socios`, {
-        headers: { 'x-roberto-token': token },
+        headers: { 'x-superadmin-token': token },
       });
       if (r.ok) { const d = await r.json(); setSocios(d.socios); }
     } catch {}
@@ -777,7 +784,7 @@ function RobertoAutos() {
     if (!clienteId || !token) return;
     try {
       const r = await fetch(`${API_BASE}/api/superadmin/autos/${clienteId}/liquidaciones`, {
-        headers: { 'x-roberto-token': token },
+        headers: { 'x-superadmin-token': token },
       });
       if (r.ok) { const d = await r.json(); setLiquidaciones(d.liquidaciones); }
     } catch {}
@@ -806,7 +813,7 @@ function RobertoAutos() {
     try {
       await fetch(`${API_BASE}/api/superadmin/autos/${clienteId}/vehiculos/${id}/estado`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json', 'x-roberto-token': token },
+        headers: { 'Content-Type': 'application/json', 'x-superadmin-token': token },
         body: JSON.stringify({ estado }),
       });
       cargarVehiculos(vPagina);
@@ -820,7 +827,7 @@ function RobertoAutos() {
     try {
       const r = await fetch(`${API_BASE}/api/superadmin/autos/${clienteId}/liquidaciones/${id}/pagar`, {
         method: 'PUT',
-        headers: { 'x-roberto-token': token },
+        headers: { 'x-superadmin-token': token },
       });
       if (r.ok) { cargarLiquidaciones(); cargarDash(); }
     } catch {}

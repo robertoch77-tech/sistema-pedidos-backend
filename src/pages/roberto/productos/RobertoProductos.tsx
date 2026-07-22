@@ -1079,7 +1079,7 @@ function RobertoProductos() {
   const navigate = useNavigate();
   const token     = getToken();
   const clienteId = getClienteId();
-  const todosLosProductos = useRef<Map<number, ProductoReal>>(new Map());
+  const todosLosProductos = useRef<Map<string, ProductoReal>>(new Map());
 
   // Filtros
   const [busqueda,        setBusqueda]        = useState('');
@@ -1132,6 +1132,7 @@ function RobertoProductos() {
   const [campoMasivo, setCampoMasivo] = useState('');
   const [valorMasivo, setValorMasivo] = useState('');
   const [aplicandoMasivo, setAplicandoMasivo] = useState(false);
+  const [eliminando,      setEliminando]       = useState(false);
 
   // Ajuste % precio
   const [modoAjuste, setModoAjuste] = useState(false);
@@ -1204,7 +1205,7 @@ function RobertoProductos() {
     try {
       const params = buildParams({ page: String(pg), limit: String(porPagina) });
       const r = await fetch(`${API}/api/superadmin/importador/productos/${clienteId}?${params}`, { headers: { 'x-superadmin-token': token } });
-      if (r.ok) { const d = await r.json(); const prods: ProductoReal[] = d.productos || []; prods.forEach(p => todosLosProductos.current.set(p.id, p)); setProductos(prods); setTotal(d.total || 0); setTotalPags(d.paginas || 1); }
+      if (r.ok) { const d = await r.json(); const prods: ProductoReal[] = d.productos || []; prods.forEach(p => todosLosProductos.current.set(String(p.id), p)); setProductos(prods); setTotal(d.total || 0); setTotalPags(d.paginas || 1); }
     } catch {} finally { setCargando(false); }
   }, [clienteId, token, buildParams, porPagina]);
 
@@ -1256,7 +1257,7 @@ function RobertoProductos() {
 
   // ── Guardar edición inline ────────────────────────────────────
   const handleGuardar = async () => {
-    const modificados = Object.keys(edits).map(Number);
+    const modificados = Object.keys(edits);
     if (!modificados.length) { setModoEdit(false); return; }
     setGuardando(true); setMsgGuardar('');
     try {
@@ -1268,7 +1269,7 @@ function RobertoProductos() {
           const { pv1, pv2, pv3 } = calcRow(p);
           const pvFinal = pvActivo === 1 ? pv1 : pvActivo === 2 ? pv2 : pv3;
           return {
-            id,
+            id: Number(id),
             precio_costo:    n(getE(p, 'precio_costo')),
             descuento_1:     n(getE(p, 'dto_1')),  descuento_2: n(getE(p, 'dto_2')), descuento_3: n(getE(p, 'dto_3')),
             impuesto_1:      n(getE(p, 'imp_1')),  impuesto_2: n(getE(p, 'imp_2')),
@@ -1370,6 +1371,53 @@ function RobertoProductos() {
       resetAjuste();
     } catch (e: any) { setAjusteError(e.message); }
     finally { setAjusteCargando(false); }
+  };
+
+  // ── Eliminar ──────────────────────────────────────────────────
+  const handleEliminarSeleccionados = async () => {
+    const n = seleccionados.size;
+    if (n === 0) return;
+    if (!window.confirm(`¿Seguro que querés eliminar ${n} producto${n !== 1 ? 's' : ''}?\nEsta acción no se puede deshacer.`)) return;
+    setEliminando(true);
+    try {
+      const r = await fetch(`${API}/api/superadmin/importador/productos`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json', 'x-superadmin-token': token },
+        body: JSON.stringify({ cliente_id: clienteId, ids: Array.from(seleccionados) }),
+      });
+      const d = await r.json();
+      if (r.ok && d.ok) { setSeleccionados(new Set()); cargarProductos(1); cargarFiltros(); }
+      else alert(d.mensaje || 'Error al eliminar');
+    } catch { alert('Error de conexión'); }
+    finally { setEliminando(false); }
+  };
+
+  const handleEliminarFiltrados = async () => {
+    if (!window.confirm(`¿Seguro que querés eliminar ${total} producto${total !== 1 ? 's' : ''} que coinciden con los filtros?\nEsta acción no se puede deshacer.`)) return;
+    setEliminando(true);
+    try {
+      const body: Record<string, any> = { cliente_id: clienteId };
+      if (busquedaDb.trim())       body.buscar       = busquedaDb.trim();
+      if (filtroProveedor)         body.proveedor_id  = filtroProveedor;
+      if (filtroMarca)             body.marca         = filtroMarca;
+      if (filtroRubro)             body.rubro         = filtroRubro;
+      if (filtroEstado)            body.activo        = filtroEstado === 'activo' ? 'true' : 'false';
+      if (fechaDesde)              body.fecha_desde   = fechaDesde;
+      if (fechaHasta)              body.fecha_hasta   = fechaHasta;
+      if (fechaDesde || fechaHasta) body.fecha_tipo   = fechaTipo;
+      const r = await fetch(`${API}/api/superadmin/importador/productos`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json', 'x-superadmin-token': token },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json();
+      if (r.ok && d.ok) {
+        setBusqueda(''); setFiltroProveedor(''); setFiltroMarca(''); setFiltroRubro(''); setFiltroEstado('');
+        setFechaDesde(''); setFechaHasta('');
+        cargarProductos(1); cargarFiltros();
+      } else alert(d.mensaje || 'Error al eliminar');
+    } catch { alert('Error de conexión'); }
+    finally { setEliminando(false); }
   };
 
   // ── Export ────────────────────────────────────────────────────
@@ -1499,6 +1547,9 @@ function RobertoProductos() {
                 {aplicandoMasivo ? '⏳' : `Aplicar a ${cantSel}`}
               </button>
             )}
+            <button style={btnStyle('#C53030', '#fff', eliminando)} disabled={eliminando} onClick={handleEliminarSeleccionados}>
+              {eliminando ? '⏳' : `🗑 Eliminar (${cantSel})`}
+            </button>
             <button style={btnStyle('#EDF2F7', GRAY)} onClick={() => { setSeleccionados(new Set()); resetAjuste(); setCampoMasivo(''); setValorMasivo(''); }}>✕ Limpiar</button>
           </div>
 
@@ -1676,6 +1727,11 @@ function RobertoProductos() {
           {hayFiltros && (
             <button style={btnStyle('#EDF2F7', GRAY)} onClick={() => { setBusqueda(''); setFiltroProveedor(''); setFiltroMarca(''); setFiltroRubro(''); setFiltroEstado(''); setFechaDesde(''); setFechaHasta(''); }}>
               ✕ Limpiar filtros
+            </button>
+          )}
+          {hayFiltros && total > 0 && (
+            <button style={btnStyle('#C53030', '#fff', eliminando)} disabled={eliminando} onClick={handleEliminarFiltrados}>
+              {eliminando ? '⏳' : `🗑 Eliminar filtrados (${total})`}
             </button>
           )}
           <div style={{ position: 'relative', alignSelf: 'flex-end' }} ref={colsMenuRef}>
