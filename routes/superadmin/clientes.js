@@ -126,14 +126,15 @@ router.put('/:id/modulos', async (req, res) => {
           habilitar_ventas=$9, habilitar_remitos=$10, habilitar_stock=$11,
           habilitar_compras=$12,
           habilitar_autos=$13,
-          habilitar_cc_proveedores=$14
-         WHERE id=$15`,
+          habilitar_cc_proveedores=$14,
+          habilitar_catalogo=$15
+         WHERE id=$16`,
         [!!modulos.chat, !!modulos.notificaciones, !!modulos.banners,
          !!modulos.analytics, !!modulos.cta_cte_clientes, !!modulos.presupuestos,
          !!modulos.cheques, !!modulos.caja,
          !!modulos.ventas, !!modulos.remitos, !!modulos.stock,
          !!modulos.compras, !!modulos.autos, !!modulos.cc_proveedores,
-         mayorista_id]
+         !!modulos.catalogo, mayorista_id]
       );
     }
     res.json({ ok: true });

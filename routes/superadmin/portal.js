@@ -13,6 +13,7 @@ const pool = require('../../db');
     ['habilitar_compras',          'BOOLEAN DEFAULT false'],
     ['habilitar_autos',            'BOOLEAN DEFAULT false'],
     ['habilitar_cc_proveedores',   'BOOLEAN DEFAULT false'],
+    ['habilitar_catalogo',         'BOOLEAN DEFAULT false'],
   ];
   for (const [col, def] of cols) {
     await pool.query(`ALTER TABLE mayoristas ADD COLUMN IF NOT EXISTS ${col} ${def}`).catch(() => {});
@@ -49,6 +50,7 @@ router.get('/:codigo', async (req, res) => {
               m.habilitar_cheques, m.habilitar_caja,
               m.habilitar_ventas, m.habilitar_remitos, m.habilitar_stock, m.habilitar_compras, m.habilitar_autos,
               m.habilitar_cc_proveedores,
+              m.habilitar_catalogo,
               c.id AS cliente_id, c.nombre_comercial, c.plan, c.estado,
               c.habilitar_sucursales, c.habilitar_empleados, c.arca_habilitado
        FROM mayoristas m
@@ -83,6 +85,7 @@ router.get('/:codigo', async (req, res) => {
       habilitar_compras:        !!row.habilitar_compras,
       habilitar_autos:          !!row.habilitar_autos,
       habilitar_cc_proveedores: !!row.habilitar_cc_proveedores,
+      habilitar_catalogo:       !!row.habilitar_catalogo,
       habilitar_sucursales:     !!row.habilitar_sucursales,
       habilitar_empleados:      !!row.habilitar_empleados,
       arca_habilitado:          !!row.arca_habilitado,
