@@ -1996,7 +1996,7 @@ function RobertoProductos() {
                     </td>
                     <td style={{ ...td, width: 60, textAlign: 'center', position: 'sticky', left: 36, zIndex: 1 }}>
                       {p.imagen_url
-                        ? <img src={p.imagen_url} alt="" style={{ width: 36, height: 36, objectFit: 'cover', borderRadius: 4 }} onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                        ? <img src={p.imagen_url} alt={p.descripcion} style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 6, border: '1px solid #EEEEEE' }} onError={e => { e.currentTarget.src = ''; e.currentTarget.style.display = 'none'; }} />
                         : <span style={{ fontSize: 20 }}>📦</span>}
                     </td>
                     {/* Código */}
