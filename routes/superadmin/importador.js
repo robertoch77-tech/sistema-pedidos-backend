@@ -820,6 +820,46 @@ router.delete('/productos/:cliente_id/:id', async (req, res) => {
   }
 });
 
+// ═══════════════════════════════════════════════════════════════
+// ENDPOINT 10 — DELETE /productos  (eliminar masivo por IDs o filtros)
+// ═══════════════════════════════════════════════════════════════
+router.delete('/productos', async (req, res) => {
+  try {
+    const { cliente_id, ids, buscar, proveedor_id, marca, rubro, activo,
+            fecha_desde, fecha_hasta, fecha_tipo } = req.body;
+    if (!cliente_id) return res.status(400).json({ mensaje: 'cliente_id requerido' });
+
+    let query, vals;
+
+    if (ids && Array.isArray(ids) && ids.length > 0) {
+      query = `DELETE FROM productos_propios WHERE cliente_id=$1 AND id = ANY($2::bigint[]) RETURNING id`;
+      vals  = [cliente_id, ids];
+    } else {
+      const conds = ['cliente_id=$1'];
+      vals = [cliente_id];
+      let i = 2;
+      if (buscar)       { conds.push(`(codigo ILIKE $${i} OR descripcion ILIKE $${i})`); vals.push(`%${buscar}%`); i++; }
+      if (proveedor_id) { conds.push(`proveedor_id=$${i}`);  vals.push(proveedor_id); i++; }
+      if (marca)        { conds.push(`marca=$${i}`);         vals.push(marca); i++; }
+      if (rubro)        { conds.push(`rubro=$${i}`);         vals.push(rubro); i++; }
+      if (activo !== undefined && activo !== null && activo !== '') {
+        conds.push(`activo=$${i}`); vals.push(activo === 'true' || activo === true); i++;
+      }
+      const campoFecha = fecha_tipo === 'actualizacion' ? 'modificado_en' : 'creado_en';
+      if (fecha_desde) { conds.push(`${campoFecha} >= $${i}::date`);                        vals.push(fecha_desde); i++; }
+      if (fecha_hasta) { conds.push(`${campoFecha} < ($${i}::date + interval '1 day')`);    vals.push(fecha_hasta); i++; }
+      if (conds.length === 1) return res.status(400).json({ mensaje: 'Se requieren ids o al menos un filtro' });
+      query = `DELETE FROM productos_propios WHERE ${conds.join(' AND ')} RETURNING id`;
+    }
+
+    const r = await pool.query(query, vals);
+    res.json({ ok: true, eliminados: r.rowCount });
+  } catch (err) {
+    console.error('DELETE /productos error:', err.message);
+    res.status(500).json({ mensaje: 'Error al eliminar productos', detalle: err.message });
+  }
+});
+
 // ════════════════════════════════════════════════════════════════
 // HELPERS — IMPORTADOR LIBRE
 // ════════════════════════════════════════════════════════════════
