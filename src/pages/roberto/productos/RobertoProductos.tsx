@@ -72,6 +72,7 @@ interface ProductoReal {
   stock_actual: number;
   stock_minimo: number;
   activo: boolean;
+  destacado: boolean;
   creado_en: string;
   modificado_en: string;
 }
@@ -1173,6 +1174,7 @@ const COLS: { key: string; label: string; width?: number }[] = [
   { key: 'unidad_medida',   label: 'Unidad',       width: 70 },
   { key: 'creado_en',       label: 'F. Import',    width: 90 },
   { key: 'activo',          label: 'Estado',       width: 75 },
+  { key: 'destacado',       label: '⭐',            width: 50 },
 ];
 
 const CAMPOS_MASIVOS = [
@@ -1313,6 +1315,16 @@ function RobertoProductos() {
     if (fechaDesde || fechaHasta) p.set('fecha_tipo', fechaTipo);
     return p;
   }, [busquedaDb, filtroProveedor, filtroMarca, filtroRubro, filtroEstado, fechaDesde, fechaHasta, fechaTipo]);
+
+  const toggleDestacado = async (p: ProductoReal) => {
+    const r = await fetch(`${API}/api/superadmin/catalogo/${clienteId}/productos/${p.id}/destacado`, {
+      method: 'PUT', headers: { 'x-superadmin-token': token },
+    });
+    if (r.ok) {
+      const data = await r.json();
+      setProductos(prev => prev.map(x => x.id === p.id ? { ...x, destacado: data.destacado } : x));
+    }
+  };
 
   const cargarProductos = useCallback(async (pg: number) => {
     if (!clienteId) return;
@@ -1984,7 +1996,7 @@ function RobertoProductos() {
                     </td>
                     <td style={{ ...td, width: 60, textAlign: 'center', position: 'sticky', left: 36, zIndex: 1 }}>
                       {p.imagen_url
-                        ? <img src={p.imagen_url} alt="" style={{ width: 36, height: 36, objectFit: 'contain', borderRadius: 4 }} onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                        ? <img src={p.imagen_url} alt="" style={{ width: 36, height: 36, objectFit: 'cover', borderRadius: 4 }} onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
                         : <span style={{ fontSize: 20 }}>📦</span>}
                     </td>
                     {/* Código */}
@@ -2073,6 +2085,15 @@ function RobertoProductos() {
                     {colVisible('creado_en') && <td style={{ ...td, width: 90 }}>{fmtFecha(p.creado_en)}</td>}
                     {/* Estado */}
                     {colVisible('activo') && <td style={{ ...td, width: 75 }}><BadgeEstado activo={p.activo} /></td>}
+                    {/* Destacado */}
+                    {colVisible('destacado') && (
+                      <td style={{ ...td, width: 50, textAlign: 'center' }}>
+                        <button onClick={() => toggleDestacado(p)} title={p.destacado ? 'Quitar destacado' : 'Marcar destacado'}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, opacity: p.destacado ? 1 : 0.25, padding: 0 }}>
+                          ⭐
+                        </button>
+                      </td>
+                    )}
                     {/* Acciones */}
                     <td style={{ ...td, width: 90 }}>
                       <button style={{ ...btnStyle(BLUE, '#fff'), padding: '4px 10px', fontSize: 11 }} onClick={() => setModalEditar(p)}>✏️ Editar</button>
