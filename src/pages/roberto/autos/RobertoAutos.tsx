@@ -12,6 +12,10 @@ const ROJO    = '#C1121F';
 const BORDE   = '#E9ECEF';
 const GRIS    = '#6C757D';
 
+const CLOUD_NAME    = process.env.REACT_APP_CLOUDINARY_CLOUD_NAME    || '';
+const UPLOAD_PRESET = process.env.REACT_APP_CLOUDINARY_UPLOAD_PRESET || '';
+const MAX_FOTOS = 10;
+
 // ── TIPOS ────────────────────────────────────────────────────
 interface Sesion {
   token: string;
@@ -162,6 +166,100 @@ function ModalOverlay({ titulo, onClose, children, ancho = 560 }: { titulo: stri
   );
 }
 
+// ── GALERÍA EDITOR DE FOTOS ───────────────────────────────────
+function GaleriaFotosEditor({ fotos, onChange }: { fotos: string[]; onChange: (f: string[]) => void }) {
+  const [subiendo, setSubiendo] = useState(false);
+  const [urlInput, setUrlInput] = useState('');
+  const [mostrarUrl, setMostrarUrl] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const subirCloudinary = async (file: File) => {
+    if (!CLOUD_NAME || !UPLOAD_PRESET) { setMostrarUrl(true); return; }
+    setSubiendo(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('upload_preset', UPLOAD_PRESET);
+      const r = await fetch(`https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`, { method: 'POST', body: fd });
+      const d = await r.json();
+      if (d.secure_url) onChange([...fotos, d.secure_url]);
+      else throw new Error();
+    } catch { alert('Error al subir. Usá "Pegar URL".'); }
+    finally { setSubiendo(false); }
+  };
+
+  const agregarUrl = () => {
+    const url = urlInput.trim();
+    if (!url) return;
+    onChange([...fotos, url]);
+    setUrlInput('');
+    setMostrarUrl(false);
+  };
+
+  const quitar = (i: number) => onChange(fotos.filter((_, idx) => idx !== i));
+
+  const mover = (i: number, dir: -1 | 1) => {
+    const j = i + dir;
+    if (j < 0 || j >= fotos.length) return;
+    const next = [...fotos]; [next[i], next[j]] = [next[j], next[i]]; onChange(next);
+  };
+
+  return (
+    <div>
+      {/* Grid de fotos */}
+      {fotos.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
+          {fotos.map((url, i) => (
+            <div key={i} style={{ position: 'relative', width: 80, height: 80 }}>
+              <img src={url} alt={`foto ${i + 1}`}
+                style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 8, border: `2px solid ${i === 0 ? DORADO : BORDE}` }} />
+              {i === 0 && (
+                <span style={{ position: 'absolute', bottom: 2, left: 2, fontSize: 9, backgroundColor: DORADO, color: '#fff', borderRadius: 4, padding: '1px 4px', fontWeight: 700 }}>PRINCIPAL</span>
+              )}
+              <button onClick={() => quitar(i)}
+                style={{ position: 'absolute', top: -6, right: -6, width: 20, height: 20, borderRadius: '50%', border: 'none', backgroundColor: ROJO, color: '#fff', fontSize: 11, cursor: 'pointer', fontWeight: 700, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
+              <div style={{ position: 'absolute', bottom: 2, right: 2, display: 'flex', gap: 2 }}>
+                {i > 0 && <button onClick={() => mover(i, -1)} style={{ width: 16, height: 16, fontSize: 9, border: 'none', borderRadius: 3, backgroundColor: 'rgba(0,0,0,0.5)', color: '#fff', cursor: 'pointer' }}>◀</button>}
+                {i < fotos.length - 1 && <button onClick={() => mover(i, 1)} style={{ width: 16, height: 16, fontSize: 9, border: 'none', borderRadius: 3, backgroundColor: 'rgba(0,0,0,0.5)', color: '#fff', cursor: 'pointer' }}>▶</button>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Botones agregar */}
+      {fotos.length < MAX_FOTOS && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <button type="button" disabled={subiendo} onClick={() => fileRef.current?.click()}
+            style={{ fontSize: 12, padding: '6px 12px', border: `1.5px solid ${DORADO}`, borderRadius: 7, backgroundColor: '#fdf9f0', color: TEXTO, cursor: subiendo ? 'not-allowed' : 'pointer', fontWeight: 600 }}>
+            {subiendo ? '⏳ Subiendo...' : '📷 Subir foto'}
+          </button>
+          <button type="button" onClick={() => setMostrarUrl(v => !v)}
+            style={{ fontSize: 12, padding: '6px 12px', border: `1.5px solid ${BORDE}`, borderRadius: 7, backgroundColor: CARD, color: GRIS, cursor: 'pointer', fontWeight: 600 }}>
+            🔗 Pegar URL
+          </button>
+          <span style={{ fontSize: 11, color: GRIS }}>{fotos.length}/{MAX_FOTOS} fotos · Primera = principal</span>
+        </div>
+      )}
+
+      <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }}
+        onChange={e => { const f = e.target.files?.[0]; if (f) subirCloudinary(f); e.target.value = ''; }} />
+
+      {mostrarUrl && (
+        <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+          <input value={urlInput} onChange={e => setUrlInput(e.target.value)} placeholder="https://..."
+            style={{ flex: 1, border: `1.5px solid ${BORDE}`, borderRadius: 7, padding: '6px 10px', fontSize: 13 }}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); agregarUrl(); } }} />
+          <button onClick={agregarUrl}
+            style={{ padding: '6px 12px', backgroundColor: DORADO, color: '#fff', border: 'none', borderRadius: 7, cursor: 'pointer', fontWeight: 700, fontSize: 13 }}>
+            Agregar
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── MODAL NUEVO VEHÍCULO ──────────────────────────────────────
 function ModalNuevoVehiculo({ clienteId, token, onGuardado, onClose }: {
   clienteId: number; token: string;
@@ -177,6 +275,7 @@ function ModalNuevoVehiculo({ clienteId, token, onGuardado, onClose }: {
     precio_minimo_consignacion: '', valor_permuta: '',
     consignante_nombre: '', consignante_cuit: '', consignante_telefono: '',
   });
+  const [fotos, setFotos] = useState<string[]>([]);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState('');
 
@@ -205,7 +304,7 @@ function ModalNuevoVehiculo({ clienteId, token, onGuardado, onClose }: {
       const res = await fetch(`${API_BASE}/api/superadmin/autos/${clienteId}/vehiculos`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-superadmin-token': token },
-        body: JSON.stringify({ ...form, tipo, km: parseInt(form.km) || 0 }),
+        body: JSON.stringify({ ...form, tipo, km: parseInt(form.km) || 0, fotos }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.mensaje || 'Error al guardar');
@@ -261,6 +360,9 @@ function ModalNuevoVehiculo({ clienteId, token, onGuardado, onClose }: {
             <Campo label="VIN"><input style={inputSt} value={form.vin} onChange={e => set('vin', e.target.value)} /></Campo>
             <Campo label="Km"><input style={inputSt} type="number" value={form.km} onChange={e => set('km', e.target.value)} placeholder="45000" /></Campo>
             <Campo label="Observaciones" full><textarea style={{ ...inputSt, resize: 'vertical', minHeight: '60px' }} value={form.observaciones} onChange={e => set('observaciones', e.target.value)} /></Campo>
+            <Campo label="Fotos del vehículo" full>
+              <GaleriaFotosEditor fotos={fotos} onChange={setFotos} />
+            </Campo>
           </div>
           {error && <p style={{ color: ROJO, fontSize: '12px', margin: '8px 0' }}>{error}</p>}
           <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px' }}>
@@ -320,6 +422,7 @@ function ModalEditarVehiculo({ v, clienteId, token, onGuardado, onClose }: {
     consignante_cuit: v.consignante_cuit,
     consignante_telefono: v.consignante_telefono,
   });
+  const [fotos, setFotos] = useState<string[]>(Array.isArray(v.fotos) ? v.fotos : []);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState('');
   const set = (k: string, val: string) => setForm(f => ({ ...f, [k]: val }));
@@ -331,7 +434,7 @@ function ModalEditarVehiculo({ v, clienteId, token, onGuardado, onClose }: {
       const res = await fetch(`${API_BASE}/api/superadmin/autos/${clienteId}/vehiculos/${v.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', 'x-superadmin-token': token },
-        body: JSON.stringify({ ...form, km: parseInt(form.km) || 0 }),
+        body: JSON.stringify({ ...form, km: parseInt(form.km) || 0, fotos }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.mensaje || 'Error al guardar');
@@ -373,6 +476,9 @@ function ModalEditarVehiculo({ v, clienteId, token, onGuardado, onClose }: {
         </>}
 
         <Campo label="Observaciones" full><textarea style={{ ...inputSt, resize: 'vertical', minHeight: '60px' }} value={form.observaciones} onChange={e => set('observaciones', e.target.value)} /></Campo>
+        <Campo label="Fotos del vehículo" full>
+          <GaleriaFotosEditor fotos={fotos} onChange={setFotos} />
+        </Campo>
       </div>
       {error && <p style={{ color: ROJO, fontSize: '12px', margin: '8px 0' }}>{error}</p>}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '8px' }}>

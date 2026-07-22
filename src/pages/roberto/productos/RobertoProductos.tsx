@@ -16,6 +16,9 @@ const YELLOW = '#D69E2E';
 const CALC_BG = '#EBF8FF';
 const CALC_BG2 = '#F0FFF4';
 
+const CLOUD_NAME    = process.env.REACT_APP_CLOUDINARY_CLOUD_NAME    || '';
+const UPLOAD_PRESET = process.env.REACT_APP_CLOUDINARY_UPLOAD_PRESET || '';
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 function getToken() {
@@ -855,6 +858,24 @@ function ModalEditarProducto({ producto, proveedores, clienteId, token, onCerrar
   const [error, setError]       = useState('');
   const [historial, setHistorial] = useState<{ precio_costo_anterior: number; precio_venta_anterior: number; fecha: string }[]>([]);
   const [pvActivo, setPvActivo] = useState<1 | 2 | 3>(1);
+  const [subiendoImg, setSubiendoImg] = useState(false);
+  const [modoUrl, setModoUrl]         = useState(false);
+  const imgInputRef = useRef<HTMLInputElement>(null);
+
+  const subirImagenCloudinary = async (file: File) => {
+    if (!CLOUD_NAME || !UPLOAD_PRESET) { setModoUrl(true); return; }
+    setSubiendoImg(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('upload_preset', UPLOAD_PRESET);
+      const r = await fetch(`https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`, { method: 'POST', body: fd });
+      const d = await r.json();
+      if (d.secure_url) setForm(prev => ({ ...prev, imagen_url: d.secure_url }));
+      else throw new Error('Sin URL');
+    } catch { alert('Error al subir la imagen. Usá la opción "Pegar URL".'); }
+    finally { setSubiendoImg(false); }
+  };
 
   const n = (v: any) => parseFloat(String(v)) || 0;
   const pcFinal = calcPcFinal(n(form.precio_costo), n(form.dto_1), n(form.dto_2), n(form.dto_3));
@@ -893,6 +914,7 @@ function ModalEditarProducto({ producto, proveedores, clienteId, token, onCerrar
           unidad_medida:   form.unidad_medida || null,
           stock_minimo:    n(form.stock_minimo),
           activo:          form.activo,
+          imagen_url:      form.imagen_url || null,
         }],
       };
       const r = await fetch(`${API}/api/superadmin/importador/actualizar-precios-v2`, {
@@ -980,9 +1002,46 @@ function ModalEditarProducto({ producto, proveedores, clienteId, token, onCerrar
                   <input style={{ ...inputSt, fontSize: 13, padding: '7px 10px' }} value={form.ean || ''} onChange={set('ean')} />
                 </div>
               </div>
-              <div>
-                <label style={labelSt}>Imagen URL</label>
-                <input style={{ ...inputSt, fontSize: 13, padding: '7px 10px' }} value={form.imagen_url || ''} onChange={set('imagen_url')} />
+              {/* ── IMAGEN DEL PRODUCTO ── */}
+              <div style={{ gridColumn: '1 / -1' }}>
+                <label style={labelSt}>Imagen del producto</label>
+                {form.imagen_url ? (
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 8 }}>
+                    <img src={form.imagen_url} alt="preview" style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 8, border: '1px solid #E2E8F0', flexShrink: 0 }} />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <button type="button" onClick={() => imgInputRef.current?.click()} disabled={subiendoImg}
+                        style={{ ...btnStyle(BLUE, '#fff', subiendoImg), fontSize: 12, padding: '5px 10px' }}>
+                        {subiendoImg ? '⏳ Subiendo...' : '📷 Cambiar foto'}
+                      </button>
+                      <button type="button" onClick={() => setForm(prev => ({ ...prev, imagen_url: null }))}
+                        style={{ ...btnStyle('#EDF2F7', RED), fontSize: 12, padding: '5px 10px' }}>
+                        ✕ Quitar imagen
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                    <button type="button" onClick={() => imgInputRef.current?.click()} disabled={subiendoImg}
+                      style={{ ...btnStyle(BLUE, '#fff', subiendoImg), fontSize: 12, padding: '7px 12px' }}>
+                      {subiendoImg ? '⏳ Subiendo...' : '📷 Subir foto'}
+                    </button>
+                    <button type="button" onClick={() => setModoUrl(v => !v)}
+                      style={{ ...btnStyle('#EDF2F7', GRAY), fontSize: 12, padding: '7px 12px' }}>
+                      🔗 Pegar URL
+                    </button>
+                  </div>
+                )}
+                <input ref={imgInputRef} type="file" accept="image/*" style={{ display: 'none' }}
+                  onChange={e => { const f = e.target.files?.[0]; if (f) subirImagenCloudinary(f); e.target.value = ''; }} />
+                {(modoUrl || (!form.imagen_url && CLOUD_NAME === '')) && (
+                  <input style={{ ...inputSt, fontSize: 13, padding: '7px 10px' }}
+                    placeholder="https://..."
+                    value={form.imagen_url || ''}
+                    onChange={e => setForm(prev => ({ ...prev, imagen_url: e.target.value || null }))} />
+                )}
+                {!CLOUD_NAME && (
+                  <div style={{ fontSize: 11, color: GRAY, marginTop: 4 }}>Requiere REACT_APP_CLOUDINARY_CLOUD_NAME</div>
+                )}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <label style={{ fontSize: 13, fontWeight: 600, color: TEXT, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
