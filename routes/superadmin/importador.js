@@ -1260,7 +1260,7 @@ router.post('/analizar-diff', upload.single('archivo'), async (req, res) => {
           precio_costo:       numVal(fila, mapeo.precio_costo, enc),
           precio_venta_1:     numVal(fila, mapeo.precio_venta_1, enc),
           precio_venta_2:     numVal(fila, mapeo.precio_venta_2, enc),
-          precio_venta_final: numVal(fila, mapeo.precio_venta_3, enc),
+          precio_venta_final: numVal(fila, mapeo.precio_venta_final || mapeo.precio_venta_1, enc),
           precio_venta_3:     numVal(fila, mapeo.precio_venta_3, enc),
           descripcion:        descripcion || null,
           marca:              val(fila, mapeo.marca, enc) || marca_defecto || null,
