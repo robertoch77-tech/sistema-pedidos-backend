@@ -583,7 +583,7 @@ router.get('/productos/:cliente_id', async (req, res) => {
                 alicuota_iva, utilidad_1, utilidad_2, utilidad_3,
                 COALESCE(stock_actual, 0) AS stock_actual,
                 COALESCE(stock_minimo, 0) AS stock_minimo,
-                activo, creado_en, modificado_en
+                activo, destacado, creado_en, modificado_en
          FROM productos_propios
          WHERE ${whereStr}
          ORDER BY descripcion ASC
