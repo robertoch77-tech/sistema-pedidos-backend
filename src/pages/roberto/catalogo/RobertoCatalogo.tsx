@@ -368,7 +368,7 @@ function TabConfig({
   const [productos,    setProductos]    = useState<Producto[]>([]);
   const [toggleando,   setToggleando]   = useState<number | null>(null);
 
-  const linkPublico = `${BASE_URL_CAT}/catalogo/${codigoAcceso}`;
+  const linkPublico = `${BASE_URL_CAT}/catalogo/${cfg.tipo === 'autos' ? 'autos' : 'productos'}/${codigoAcceso}`;
   const [copiado, setCopiado] = useState(false);
 
   // Cargar productos
@@ -731,7 +731,7 @@ export default function RobertoCatalogo() {
       .finally(() => setCargConfig(false));
   }, [clienteId, superToken]);
 
-  const urlPublica = `${BASE_URL_CAT}/catalogo/${codigoAcc}`;
+  const urlPublica = `${BASE_URL_CAT}/catalogo/${config?.tipo === 'autos' ? 'autos' : 'productos'}/${codigoAcc}`;
 
   if (!clienteId) return (
     <div style={{ minHeight: '100vh', backgroundColor: BG, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
