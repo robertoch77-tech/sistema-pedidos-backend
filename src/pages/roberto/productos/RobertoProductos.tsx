@@ -198,6 +198,11 @@ const CAMPOS_MAPEO = [
   { campo: 'stock_minimo', label: 'Stock mínimo' },
 ];
 
+const letraCol = (i: number): string =>
+  i < 26
+    ? String.fromCharCode(65 + i)
+    : String.fromCharCode(64 + Math.floor(i / 26)) + String.fromCharCode(65 + (i % 26));
+
 function ModalImportadorV2({ onCerrar, onExito }: { onCerrar: () => void; onExito: () => void }) {
   const [paso, setPaso]           = useState(1);
   const [drag, setDrag]           = useState(false);
@@ -214,6 +219,8 @@ function ModalImportadorV2({ onCerrar, onExito }: { onCerrar: () => void; onExit
   const [subId, setSubId]               = useState('');
   const [guardarMapeo, setGuardarMapeo] = useState(true);
   const [mapeoMsg, setMapeoMsg]         = useState('');
+  const [mapeoDisponible, setMapeoDisponible] = useState<any>(null);
+  const [claveMapeoActual, setClaveMapeoActual] = useState('');
   const [analisisDiff, setAnalisisDiff] = useState<DiffAnalisis | null>(null);
   const [resultado, setResultado] = useState<{ importados: number; nuevos: number; actualizados: number; errores: number; por_hoja: {hoja:string;nuevos:number;actualizados:number;errores:number}[] } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -225,25 +232,30 @@ function ModalImportadorV2({ onCerrar, onExito }: { onCerrar: () => void; onExit
   const claveMapeo = (prov: string, sub: string) =>
     sub.trim() ? `${prov.trim()}_${sub.trim()}` : prov.trim();
 
+  const aplicarMapeo = (d: any) => {
+    const { descripcion, ...restoMapeo } = d.mapeo;
+    setMapeo(restoMapeo || {});
+    setDescCols(Array.isArray(descripcion) ? descripcion : []);
+    if (d.marca_defecto !== undefined) setMarcaDef(d.marca_defecto || '');
+    if (d.rubro_defecto !== undefined) setRubroDef(d.rubro_defecto || '');
+    setGuardarMapeo(true);
+  };
+
   useEffect(() => {
     const nombre = proveedorDb.trim();
-    if (!nombre || nombre.length < 2 || !clienteId) { setMapeoMsg(''); return; }
+    if (!nombre || nombre.length < 2 || !clienteId) { setMapeoMsg(''); setMapeoDisponible(null); return; }
     const clave = claveMapeo(nombre, subIdDb);
     fetch(`${API}/api/superadmin/importador/mapeo-proveedor/${clienteId}/${encodeURIComponent(clave)}`, {
       headers: { 'x-superadmin-token': token },
     })
       .then(r => r.ok ? r.json() : null)
       .then(d => {
-        if (!d?.mapeo) { setMapeoMsg(''); return; }
-        const { descripcion, ...restoMapeo } = d.mapeo;
-        setMapeo(restoMapeo || {});
-        setDescCols(Array.isArray(descripcion) ? descripcion : []);
-        if (d.marca_defecto !== undefined) setMarcaDef(d.marca_defecto || '');
-        if (d.rubro_defecto !== undefined) setRubroDef(d.rubro_defecto || '');
-        setGuardarMapeo(true);
-        setMapeoMsg(`✅ Mapeo anterior cargado para ${clave}`);
+        if (!d?.mapeo) { setMapeoMsg(''); setMapeoDisponible(null); return; }
+        setMapeoDisponible(d);
+        setClaveMapeoActual(clave);
+        setMapeoMsg('');
       })
-      .catch(() => { setMapeoMsg(''); });
+      .catch(() => { setMapeoMsg(''); setMapeoDisponible(null); });
   }, [proveedorDb, subIdDb, clienteId, token]);
 
   const allColumnas = Array.from(new Set(
@@ -335,7 +347,11 @@ function ModalImportadorV2({ onCerrar, onExito }: { onCerrar: () => void; onExit
   };
 
   const toggleHoja = (nombre: string) => {
-    setHojasOk(prev => prev.includes(nombre) ? prev.filter(h => h !== nombre) : [...prev, nombre]);
+    setHojasOk(prev => {
+      const next = prev.includes(nombre) ? prev.filter(h => h !== nombre) : [...prev, nombre];
+      if (!prev.includes(nombre)) setRubroDef(r => r || nombre);
+      return next;
+    });
   };
 
   const addDescCol = (col: string) => {
@@ -396,6 +412,20 @@ function ModalImportadorV2({ onCerrar, onExito }: { onCerrar: () => void; onExit
                 <label style={labelSt}>Nombre del proveedor <span style={{ color: RED }}>*</span></label>
                 <input style={{ ...inputSt, fontSize: 14, padding: '8px 12px' }} value={proveedor} onChange={e => { setProveedor(e.target.value); setMapeoMsg(''); }} placeholder="Ej: BERGER, LALO GAS, LEKONS" />
               </div>
+              {mapeoDisponible && (
+                <div style={{ background: '#EBF4FF', border: '1px solid #2B6CB0', borderRadius: 8, padding: '10px 14px', marginBottom: 4, display: 'flex', gap: 10, alignItems: 'center', fontSize: 13 }}>
+                  <span>📋 Hay mapeo guardado para <strong>{claveMapeoActual}</strong></span>
+                  <button style={{ ...btnStyle('#2B6CB0', '#fff'), padding: '4px 10px', fontSize: 12 }} onClick={() => { aplicarMapeo(mapeoDisponible); setMapeoDisponible(null); setMapeoMsg(`✅ Mapeo aplicado para ${claveMapeoActual}`); }}>✅ Usar</button>
+                  <button style={{ ...btnStyle('#EDF2F7', GRAY), padding: '4px 10px', fontSize: 12 }} onClick={() => setMapeoDisponible(null)}>❌ Ignorar</button>
+                </div>
+              )}
+              {claveMapeoActual && !mapeoDisponible && (
+                <button style={{ ...btnStyle('#FFF5F5', RED), padding: '4px 10px', fontSize: 12, marginBottom: 4 }} onClick={async () => {
+                  await fetch(`${API}/api/superadmin/importador/mapeo-proveedor/${clienteId}/${encodeURIComponent(claveMapeoActual)}`, { method: 'DELETE', headers: { 'x-superadmin-token': token } });
+                  setClaveMapeoActual('');
+                  setMapeoMsg('✅ Mapeo eliminado');
+                }}>🗑 Borrar mapeo guardado</button>
+              )}
               {mapeoMsg && (
                 <div style={{ backgroundColor: '#F0FFF4', border: `1px solid ${GREEN}`, borderRadius: 8, padding: '8px 14px', color: '#276749', fontSize: 13, fontWeight: 500 }}>
                   {mapeoMsg}
@@ -472,7 +502,7 @@ function ModalImportadorV2({ onCerrar, onExito }: { onCerrar: () => void; onExit
                     </div>
                     <select style={{ ...selectSt, width: 'auto', minWidth: 180, fontSize: 12 }} onChange={e => { if (e.target.value) addDescCol(e.target.value); e.target.value = ''; }} defaultValue="">
                       <option value="">＋ Agregar columna...</option>
-                      {allColumnas.filter(c => !descCols.includes(c)).map(c => <option key={c} value={c}>{c}</option>)}
+                      {allColumnas.filter(c => !descCols.includes(c)).map(c => <option key={c} value={c}>Columna {letraCol(allColumnas.indexOf(c))} — {muestraActual[0]?.[c] ?? ''}</option>)}
                     </select>
                   </div>
 
@@ -489,7 +519,7 @@ function ModalImportadorV2({ onCerrar, onExito }: { onCerrar: () => void; onExit
                             <td style={{ padding: '4px 0' }}>
                               <select style={{ ...selectSt, width: '100%', fontSize: 12 }} value={mapeo[campo] || ''} onChange={e => setMapeo(prev => ({ ...prev, [campo]: e.target.value }))}>
                                 <option value="">— No usar —</option>
-                                {allColumnas.map(c => <option key={c} value={c}>{c}</option>)}
+                                {allColumnas.map(c => <option key={c} value={c}>Columna {letraCol(allColumnas.indexOf(c))} — {muestraActual[0]?.[c] ?? ''}</option>)}
                               </select>
                             </td>
                           </tr>
@@ -520,7 +550,7 @@ function ModalImportadorV2({ onCerrar, onExito }: { onCerrar: () => void; onExit
                             <td style={{ padding: '4px 8px', borderBottom: '1px solid #EDF2F7' }}>
                               <select style={{ ...selectSt, width: '100%', fontSize: 12 }} value={mapeo[campo] || ''} onChange={e => setMapeo(prev => ({ ...prev, [campo]: e.target.value }))}>
                                 <option value="">— No usar —</option>
-                                {allColumnas.map(c => <option key={c} value={c}>{c}</option>)}
+                                {allColumnas.map(c => <option key={c} value={c}>Columna {letraCol(allColumnas.indexOf(c))} — {muestraActual[0]?.[c] ?? ''}</option>)}
                               </select>
                             </td>
                           </tr>
@@ -1850,10 +1880,28 @@ function RobertoProductos() {
           </div>
           <div style={{ flex: '1 1 130px' }}>
             <label style={labelSt}>Proveedor</label>
-            <select style={{ ...selectSt, fontSize: 13, padding: '7px 10px' }} value={filtroProveedor} onChange={e => { setFiltroProveedor(e.target.value); setPagina(1); }}>
-              <option value="">Todos</option>
-              {filtrosOpts.proveedores.map(p => <option key={p.id} value={String(p.id)}>{p.nombre}</option>)}
-            </select>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 2 }}>
+              <button onClick={() => { setFiltroProveedor(''); setPagina(1); }}
+                style={{ background: filtroProveedor === '' ? '#2B6CB0' : '#F0F0F0', color: filtroProveedor === '' ? '#fff' : '#333', border: 'none', borderRadius: 20, padding: '4px 12px', cursor: 'pointer', fontSize: 13 }}>
+                Todos
+              </button>
+              {filtrosOpts.proveedores.map(p => (
+                <div key={p.id} style={{ display: 'flex', alignItems: 'center', background: filtroProveedor === String(p.id) ? '#2B6CB0' : '#F0F0F0', borderRadius: 20, overflow: 'hidden' }}>
+                  <button onClick={() => { setFiltroProveedor(String(p.id)); setPagina(1); }}
+                    style={{ background: 'none', border: 'none', color: filtroProveedor === String(p.id) ? '#fff' : '#333', padding: '4px 8px 4px 12px', cursor: 'pointer', fontSize: 13 }}>
+                    {p.nombre}
+                  </button>
+                  <button onClick={async () => {
+                    if (!window.confirm(`¿Eliminar proveedor "${p.nombre}"?`)) return;
+                    await fetch(`${API}/api/superadmin/importador/proveedor/${clienteId}/${p.id}`, { method: 'DELETE', headers: { 'x-superadmin-token': token } });
+                    cargarFiltros();
+                    if (filtroProveedor === String(p.id)) setFiltroProveedor('');
+                  }} style={{ background: 'none', border: 'none', color: filtroProveedor === String(p.id) ? '#fff' : '#999', padding: '4px 8px 4px 4px', cursor: 'pointer', fontSize: 11 }}>
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
           <div style={{ flex: '1 1 120px' }}>
             <label style={labelSt}>Marca</label>
