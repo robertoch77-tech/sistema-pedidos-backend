@@ -21,12 +21,14 @@ const GOLD  = '#C9A84C';
 
 // ─── TIPOS ────────────────────────────────────────────────────
 interface CatConfig {
-  cliente_id:    number;
-  tipo:          string;
-  activo:        boolean;
-  mostrar_stock: string;
-  whatsapp:      string;
-  banners:       string[];
+  cliente_id:        number;
+  tipo:              string;
+  activo:            boolean;
+  mostrar_stock:     string;
+  whatsapp:          string;
+  banners:           string[];
+  texto_bienvenida:  string;
+  mensaje_cierre:    string;
 }
 
 interface Pedido {
@@ -544,6 +546,42 @@ function TabConfig({
               <input type="tel" value={cfg.whatsapp} onChange={e => setCfg(p => ({ ...p, whatsapp: e.target.value }))}
                 placeholder="+54 9 11 1234-5678" style={inp} />
             </div>
+
+            {/* Texto de bienvenida */}
+            <div style={{ gridColumn: '1/-1' }}>
+              <label style={{ fontSize: 12, fontWeight: 600, color: '#4A5568', display: 'block', marginBottom: 4 }}>
+                Texto de bienvenida
+              </label>
+              <input
+                type="text"
+                value={cfg.texto_bienvenida}
+                onChange={e => setCfg(p => ({ ...p, texto_bienvenida: e.target.value }))}
+                maxLength={150}
+                placeholder="Bienvenidos a nuestra tienda, encontrá todo lo que necesitás"
+                style={{ ...inp }}
+              />
+              <div style={{ fontSize: 11, color: '#718096', marginTop: 2 }}>
+                {cfg.texto_bienvenida.length}/150
+              </div>
+            </div>
+
+            {/* Mensaje al confirmar pedido */}
+            <div style={{ gridColumn: '1/-1' }}>
+              <label style={{ fontSize: 12, fontWeight: 600, color: '#4A5568', display: 'block', marginBottom: 4 }}>
+                Mensaje al confirmar pedido
+              </label>
+              <input
+                type="text"
+                value={cfg.mensaje_cierre}
+                onChange={e => setCfg(p => ({ ...p, mensaje_cierre: e.target.value }))}
+                maxLength={150}
+                placeholder="¡Gracias por tu pedido! Te contactamos en menos de 24hs."
+                style={{ ...inp }}
+              />
+              <div style={{ fontSize: 11, color: '#718096', marginTop: 2 }}>
+                {cfg.mensaje_cierre.length}/150
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -796,6 +834,7 @@ export default function RobertoCatalogo() {
               configInicial={config || {
                 cliente_id: clienteId, tipo: 'productos', activo: false,
                 mostrar_stock: 'disponibilidad', whatsapp: '', banners: [],
+                texto_bienvenida: '', mensaje_cierre: '',
               }}
               onConfigGuardada={setConfig}
             />

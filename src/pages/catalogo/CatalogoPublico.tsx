@@ -16,15 +16,17 @@ const C = {
 
 // ─── TIPOS ────────────────────────────────────────────────────
 interface CatConfig {
-  nombre_comercial: string;
-  logo_url:         string;
-  direccion:        string;
-  whatsapp:         string;
-  banners:          string[];
-  tipo:             string;
-  activo:           boolean;
-  mostrar_stock:    string;
-  color_primario:   string;
+  nombre_comercial:  string;
+  logo_url:          string;
+  direccion:         string;
+  whatsapp:          string;
+  banners:           string[];
+  tipo:              string;
+  activo:            boolean;
+  mostrar_stock:     string;
+  color_primario:    string;
+  texto_bienvenida?: string;
+  mensaje_cierre?:   string;
 }
 
 interface Producto {
@@ -450,7 +452,7 @@ function ModalPedido({
             ¡Pedido {exito.numero} recibido!
           </h2>
           <p style={{ color: C.gris, fontSize: 14, margin: '0 0 28px' }}>
-            Te contactamos a la brevedad.
+            {config.mensaje_cierre || 'Te contactamos a la brevedad.'}
           </p>
           {config.whatsapp && (
             <a
@@ -862,6 +864,20 @@ export default function CatalogoPublico() {
         {config.banners.length > 0 && (
           <div style={{ margin: '16px 0' }}>
             <Carousel banners={config.banners} />
+          </div>
+        )}
+
+        {/* ── TEXTO BIENVENIDA ────────────────────────────── */}
+        {config.texto_bienvenida && (
+          <div style={{
+            textAlign: 'center',
+            padding: '16px 20px',
+            fontSize: 15,
+            color: '#555555',
+            background: '#FFFFFF',
+            borderBottom: '1px solid #EEEEEE',
+          }}>
+            {config.texto_bienvenida}
           </div>
         )}
 
