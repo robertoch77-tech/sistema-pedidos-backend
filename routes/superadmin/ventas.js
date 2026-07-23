@@ -393,6 +393,51 @@ router.get('/buscar-ean/:cliente_id/:ean', async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
+// GET /:cliente_id/dashboard — estadísticas de ventas
+// ═══════════════════════════════════════════════════════════════
+router.get('/:cliente_id/dashboard', async (req, res) => {
+  try {
+    const { cliente_id } = req.params;
+    const result = await pool.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE fecha = CURRENT_DATE)
+           AS ventas_hoy_cantidad,
+         COALESCE(SUM(total) FILTER
+           (WHERE fecha = CURRENT_DATE), 0)
+           AS ventas_hoy_monto,
+         COALESCE(SUM(total) FILTER
+           (WHERE DATE_TRUNC('month', fecha) =
+            DATE_TRUNC('month', CURRENT_DATE)), 0)
+           AS ventas_mes_monto,
+         COALESCE(
+           SUM(total) FILTER (
+             WHERE DATE_TRUNC('month', fecha) =
+             DATE_TRUNC('month', CURRENT_DATE)
+           ) /
+           NULLIF(COUNT(*) FILTER (
+             WHERE DATE_TRUNC('month', fecha) =
+             DATE_TRUNC('month', CURRENT_DATE)
+           ), 0)
+         , 0) AS ticket_promedio_mes
+       FROM ventas
+       WHERE cliente_id = $1
+       AND anulada = false`,
+      [cliente_id]
+    );
+    const row = result.rows[0];
+    res.json({
+      ventas_hoy_cantidad:  parseInt(row.ventas_hoy_cantidad,  10) || 0,
+      ventas_hoy_monto:     parseFloat(row.ventas_hoy_monto)       || 0,
+      ventas_mes_monto:     parseFloat(row.ventas_mes_monto)        || 0,
+      ticket_promedio_mes:  parseFloat(row.ticket_promedio_mes)     || 0,
+    });
+  } catch (err) {
+    console.error('GET /ventas/dashboard error:', err.message);
+    res.status(500).json({ mensaje: 'Error al cargar dashboard', detalle: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
 // GET /:cliente_id/:id — detalle con items
 // ═══════════════════════════════════════════════════════════════
 router.get('/:cliente_id/:id', async (req, res) => {
