@@ -598,12 +598,33 @@ export default function CatalogoPublico() {
         if (!d) return;
         if (!d.activo) { setNoDisponible(true); setCargando(false); return; }
         setConfig(d);
+
+        // PWA — manifest dinámico por cliente
+        const existingManifest = document.querySelector('link[rel="manifest"]');
+        if (existingManifest) {
+          existingManifest.setAttribute('href', `/api/catalogo/${codigo}/manifest.json`);
+        } else {
+          const link = document.createElement('link');
+          link.rel = 'manifest';
+          link.href = `/api/catalogo/${codigo}/manifest.json`;
+          document.head.appendChild(link);
+        }
+        const metaTheme = document.querySelector('meta[name="theme-color"]');
+        if (metaTheme) metaTheme.setAttribute('content', '#2B6CB0');
+        document.title = d.nombre_comercial || 'Catálogo';
+
         // Cargar filtros
         fetch(`${API}/api/catalogo/${codigo}/filtros`)
           .then(r => r.json()).then(setFiltros).catch(() => {});
         setCargando(false);
       })
       .catch(() => { setNoDisponible(true); setCargando(false); });
+
+    return () => {
+      document.title = 'Gestión Integral Pedidos';
+      const m = document.querySelector('link[rel="manifest"]');
+      if (m) m.setAttribute('href', '/manifest.json');
+    };
   }, [codigo]);
 
   // ── CARGAR PRODUCTOS ─────────────────────────────────────────
