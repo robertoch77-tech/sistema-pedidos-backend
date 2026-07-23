@@ -119,8 +119,10 @@ router.get('/:cid/dashboard', async (req, res) => {
         [cid]
       ),
       pool.query(
-        `SELECT COALESCE(SUM(ganancia), 0) AS comisiones_mes,
-                COUNT(*) AS vendidos_mes
+        `SELECT
+           COALESCE(SUM(ganancia), 0) AS ganancia_mes,
+           COALESCE(SUM(comision_socio), 0) AS comisiones_socios_mes,
+           COUNT(*) AS vendidos_mes
          FROM ventas_autos
          WHERE cliente_id = $1 AND creado_en >= $2`,
         [cid, mesInicio]
@@ -140,7 +142,8 @@ router.get('/:cid/dashboard', async (req, res) => {
       disponibles:    conteo.disponible  || 0,
       reservados:     conteo.reservado   || 0,
       vendidos_mes:   parseInt(ventasMesRes.rows[0].vendidos_mes, 10) || 0,
-      comisiones_mes: n(ventasMesRes.rows[0].comisiones_mes),
+      ganancia_mes: n(ventasMesRes.rows[0].ganancia_mes),
+      comisiones_socios_mes: n(ventasMesRes.rows[0].comisiones_socios_mes),
       dinero_transito: n(transitoRes.rows[0].dinero_transito),
     });
   } catch (err) {
@@ -498,6 +501,25 @@ router.post('/:cid/ventas', async (req, res) => {
                  saldo_actual  = saldo_actual  - $1
              WHERE id = $2`,
             [dinero_transito, caja_id]
+          );
+        }
+
+        if (socio_id && comision_calc > 0 && cajaRes.rows.length > 0) {
+          await pool.query(
+            `INSERT INTO caja_movimientos
+               (caja_id, cliente_id, tipo,
+                tipo_operacion, monto, medio_pago,
+                descripcion, venta_id)
+             VALUES ($1,$2,'comision_socio',
+                     'egreso_pendiente',$3,
+                     'pendiente',$4,$5)`,
+            [
+              caja_id,
+              cid,
+              comision_calc,
+              `Comisión socio - venta ${v.marca} ${v.modelo} ${v.anio}`,
+              venta_id
+            ]
           );
         }
       }
