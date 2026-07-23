@@ -39,7 +39,8 @@ interface Vehiculo {
 interface VentaAuto {
   id: number;
   vehiculo_id: number; marca: string; modelo: string; anio: number | null; patente: string;
-  comprador_nombre: string; comprador_cuit: string; comprador_telefono: string;
+  version: string | null; color: string | null; vin: string | null; km: number | null;
+  comprador_nombre: string; comprador_cuit: string; comprador_telefono: string; comprador_email?: string;
   precio_venta: number; precio_costo: number; ganancia: number; dinero_transito: number;
   forma_pago: string; estado: string;
   socio_id: number | null; socio_nombre: string | null; comision_socio: number;
@@ -777,6 +778,151 @@ function ModalImportar({ clienteId, token, onImportado, onClose }: {
 }
 
 // ════════════════════════════════════════════════════════════════
+// ── NUMERO A LETRAS ──────────────────────────────────────────────
+function numeroALetras(n: number): string {
+  const unidades = ['', 'UN', 'DOS', 'TRES', 'CUATRO', 'CINCO', 'SEIS', 'SIETE', 'OCHO', 'NUEVE',
+                    'DIEZ', 'ONCE', 'DOCE', 'TRECE', 'CATORCE', 'QUINCE', 'DIECISÉIS',
+                    'DIECISIETE', 'DIECIOCHO', 'DIECINUEVE'];
+  const decenas  = ['', '', 'VEINTE', 'TREINTA', 'CUARENTA', 'CINCUENTA',
+                    'SESENTA', 'SETENTA', 'OCHENTA', 'NOVENTA'];
+  const centenas = ['', 'CIEN', 'DOSCIENTOS', 'TRESCIENTOS', 'CUATROCIENTOS', 'QUINIENTOS',
+                    'SEISCIENTOS', 'SETECIENTOS', 'OCHOCIENTOS', 'NOVECIENTOS'];
+
+  if (n === 0) return 'CERO';
+
+  function menorMil(num: number): string {
+    if (num === 0) return '';
+    if (num === 100) return 'CIEN';
+    if (num < 20) return unidades[num];
+    if (num < 100) {
+      const d = Math.floor(num / 10);
+      const u = num % 10;
+      return u === 0 ? decenas[d] : `${decenas[d]} Y ${unidades[u]}`;
+    }
+    const c = Math.floor(num / 100);
+    const resto = num % 100;
+    const centStr = c === 1 && resto > 0 ? 'CIENTO' : centenas[c];
+    return resto === 0 ? centStr : `${centStr} ${menorMil(resto)}`;
+  }
+
+  const millones = Math.floor(n / 1_000_000);
+  const miles    = Math.floor((n % 1_000_000) / 1_000);
+  const resto    = n % 1_000;
+
+  let resultado = '';
+  if (millones > 0) {
+    resultado += millones === 1 ? 'UN MILLÓN ' : `${menorMil(millones)} MILLONES `;
+  }
+  if (miles > 0) {
+    resultado += miles === 1 ? 'MIL ' : `${menorMil(miles)} MIL `;
+  }
+  if (resto > 0) {
+    resultado += menorMil(resto);
+  }
+  return resultado.trim();
+}
+
+// ── CONTRATO PDF ─────────────────────────────────────────────────
+function generarContratoPDF(venta: VentaAuto, clienteId: number) {
+  const cfg = (() => {
+    try { return JSON.parse(localStorage.getItem(`roberto_config_${clienteId}`) || '{}'); }
+    catch { return {}; }
+  })();
+
+  const fecha   = venta.fecha ? new Date(venta.fecha) : new Date();
+  const dia     = fecha.getDate();
+  const mes     = fecha.toLocaleDateString('es-AR', { month: 'long' });
+  const anio    = fecha.getFullYear();
+  const ciudad  = cfg.ciudad || '[Ciudad]';
+  const precio  = Number(venta.precio_venta) || 0;
+  const fmtPrecio = precio.toLocaleString('es-AR');
+  const enLetras  = numeroALetras(Math.round(precio));
+
+  const html = `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Contrato de Compraventa — ${venta.marca} ${venta.modelo}</title>
+<style>
+  @media print { body { margin: 0; } .no-print { display: none; } }
+  body { font-family: Arial, sans-serif; font-size: 14px; color: #333; max-width: 800px; margin: 0 auto; padding: 40px; }
+  h1 { text-align: center; font-size: 20px; text-transform: uppercase; border-bottom: 2px solid #333; padding-bottom: 10px; }
+  h2 { font-size: 14px; margin-top: 20px; text-transform: uppercase; border-bottom: 1px solid #ccc; padding-bottom: 4px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0; }
+  .field label { font-weight: bold; font-size: 12px; color: #666; }
+  .field span { display: block; }
+  .precio { font-size: 18px; font-weight: bold; margin: 15px 0; }
+  .firmas { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 60px; }
+  .firma-box { border-top: 1px solid #333; padding-top: 10px; text-align: center; }
+  .aclaracion { font-size: 11px; color: #999; text-align: center; margin-top: 30px; border-top: 1px solid #eee; padding-top: 10px; }
+  .btn-imprimir { display: block; margin: 0 auto 20px; padding: 10px 24px; background: #1a1a2e; color: #fff; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; }
+</style>
+</head>
+<body>
+<button class="btn-imprimir no-print" onclick="window.print()">🖨 Imprimir / Guardar PDF</button>
+<h1>Contrato de Compraventa de Vehículo</h1>
+<p>En <strong>${ciudad}</strong>, a los <strong>${dia}</strong> días del mes de <strong>${mes}</strong> de <strong>${anio}</strong></p>
+
+<h2>Vendedor</h2>
+<div class="grid">
+  <div class="field"><label>Razón Social</label><span>${cfg.nombre_comercial || '___________'}</span></div>
+  <div class="field"><label>CUIT</label><span>${cfg.cuit || '___________'}</span></div>
+  <div class="field"><label>Dirección</label><span>${cfg.direccion || '___________'}</span></div>
+</div>
+
+<h2>Comprador</h2>
+<div class="grid">
+  <div class="field"><label>Nombre y Apellido</label><span>${venta.comprador_nombre || '___________'}</span></div>
+  <div class="field"><label>Teléfono</label><span>${venta.comprador_telefono || '___________'}</span></div>
+  <div class="field"><label>Email</label><span>${venta.comprador_email || '—'}</span></div>
+  <div class="field"><label>CUIT/DNI</label><span>${venta.comprador_cuit || '___________'}</span></div>
+</div>
+
+<h2>Vehículo</h2>
+<div class="grid">
+  <div class="field"><label>Marca</label><span>${venta.marca || '—'}</span></div>
+  <div class="field"><label>Modelo</label><span>${venta.modelo || '—'}</span></div>
+  <div class="field"><label>Año</label><span>${venta.anio || '—'}</span></div>
+  <div class="field"><label>Versión</label><span>${venta.version || '—'}</span></div>
+  <div class="field"><label>Color</label><span>${venta.color || '—'}</span></div>
+  <div class="field"><label>Patente/Dominio</label><span>${venta.patente || '—'}</span></div>
+  <div class="field"><label>Número de Chasis (VIN)</label><span>${venta.vin || '___________'}</span></div>
+  <div class="field"><label>Kilometraje</label><span>${venta.km != null ? venta.km.toLocaleString('es-AR') + ' km' : '—'}</span></div>
+</div>
+
+<h2>Precio y Forma de Pago</h2>
+<p class="precio">$ ${fmtPrecio}</p>
+<p>${enLetras} PESOS</p>
+<p><strong>Forma de pago:</strong> ${venta.forma_pago || '—'}</p>
+
+<p style="margin-top:20px;line-height:1.8">
+  El vendedor declara que el vehículo descripto es de su legítima propiedad y se encuentra libre de todo gravamen,
+  prenda, embargo o inhibición. Las partes acuerdan que la transferencia del dominio se realizará conforme a las
+  disposiciones legales vigentes ante el Registro Nacional del Automotor correspondiente.
+</p>
+
+<div class="firmas">
+  <div class="firma-box">
+    <p>${cfg.nombre_comercial || 'VENDEDOR'}</p>
+    <p style="font-size:12px;color:#666">CUIT: ${cfg.cuit || ''}</p>
+  </div>
+  <div class="firma-box">
+    <p>${venta.comprador_nombre || 'COMPRADOR'}</p>
+    <p style="font-size:12px;color:#666">DNI/CUIT: ___________</p>
+  </div>
+</div>
+
+<p class="aclaracion">
+  Este documento es un comprobante comercial interno. Para su validez legal debe ser certificado ante
+  escribano público o en el Registro Nacional del Automotor correspondiente.
+</p>
+</body>
+</html>`;
+
+  const w = window.open('', '_blank');
+  if (w) { w.document.write(html); w.document.close(); }
+}
+
 // COMPONENTE PRINCIPAL
 // ════════════════════════════════════════════════════════════════
 function RobertoAutos() {
@@ -1135,14 +1281,14 @@ function RobertoAutos() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
                 <thead>
                   <tr style={{ backgroundColor: BG }}>
-                    {['Fecha', 'Auto', 'Comprador', 'Precio venta', 'Ganancia', 'Socio', 'Forma pago'].map(h => (
+                    {['Fecha', 'Auto', 'Comprador', 'Precio venta', 'Ganancia', 'Socio', 'Forma pago', 'Acciones'].map(h => (
                       <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontWeight: 600, fontSize: '11px', color: GRIS, textTransform: 'uppercase', letterSpacing: '0.4px', borderBottom: `1px solid ${BORDE}` }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {ventas.length === 0 ? (
-                    <tr><td colSpan={7} style={{ textAlign: 'center', padding: '32px', color: GRIS }}>No hay ventas</td></tr>
+                    <tr><td colSpan={8} style={{ textAlign: 'center', padding: '32px', color: GRIS }}>No hay ventas</td></tr>
                   ) : ventas.map((v, i) => (
                     <tr key={v.id} style={{ borderBottom: `1px solid ${BORDE}`, backgroundColor: i % 2 === 0 ? CARD : BG }}>
                       <td style={{ padding: '10px 14px', color: GRIS }}>{fmtF(v.fecha)}</td>
@@ -1152,6 +1298,12 @@ function RobertoAutos() {
                       <td style={{ padding: '10px 14px', color: v.ganancia >= 0 ? VERDE : ROJO, fontWeight: 600 }}>{fmt(v.ganancia)}</td>
                       <td style={{ padding: '10px 14px', color: GRIS }}>{v.socio_nombre || '—'}</td>
                       <td style={{ padding: '10px 14px', color: GRIS }}>{fmtPago(v.forma_pago)}</td>
+                      <td style={{ padding: '10px 14px' }}>
+                        <button onClick={() => generarContratoPDF(v, clienteId)}
+                          style={{ background: 'none', border: `1px solid ${BORDE}`, borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer', color: TEXTO }}>
+                          📄 Contrato
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
