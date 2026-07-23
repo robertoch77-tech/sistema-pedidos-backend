@@ -34,9 +34,11 @@ const pool = require('../../db');
         creado_en           TIMESTAMPTZ DEFAULT now()
       )
     `);
-    await pool.query(`ALTER TABLE productos_propios ADD COLUMN IF NOT EXISTS destacado   BOOLEAN DEFAULT false`);
-    await pool.query(`ALTER TABLE productos_propios ADD COLUMN IF NOT EXISTS imagen_url  TEXT    DEFAULT ''`);
-    await pool.query(`ALTER TABLE vehiculos         ADD COLUMN IF NOT EXISTS destacado   BOOLEAN DEFAULT false`);
+    await pool.query(`ALTER TABLE productos_propios ADD COLUMN IF NOT EXISTS destacado         BOOLEAN DEFAULT false`);
+    await pool.query(`ALTER TABLE productos_propios ADD COLUMN IF NOT EXISTS imagen_url        TEXT    DEFAULT ''`);
+    await pool.query(`ALTER TABLE vehiculos         ADD COLUMN IF NOT EXISTS destacado         BOOLEAN DEFAULT false`);
+    await pool.query(`ALTER TABLE catalogo_config   ADD COLUMN IF NOT EXISTS texto_bienvenida TEXT    DEFAULT ''`);
+    await pool.query(`ALTER TABLE catalogo_config   ADD COLUMN IF NOT EXISTS mensaje_cierre   TEXT    DEFAULT ''`);
   } catch (err) {
     console.error('catalogo: error al asegurar tablas:', err.message);
   }
@@ -47,7 +49,8 @@ async function clienteYConfig(codigo) {
   const r = await pool.query(
     `SELECT c.id AS cliente_id, c.nombre_comercial, c.codigo_acceso,
             m.config_habilitada,
-            cc.activo, cc.tipo, cc.mostrar_stock, cc.whatsapp, cc.banners
+            cc.activo, cc.tipo, cc.mostrar_stock, cc.whatsapp, cc.banners,
+            cc.texto_bienvenida, cc.mensaje_cierre
      FROM clientes_roberto c
      LEFT JOIN mayoristas m       ON m.id = c.mayorista_id
      LEFT JOIN catalogo_config cc ON cc.cliente_id = c.id
@@ -82,15 +85,17 @@ router.get('/:codigo/config', async (req, res) => {
     } catch { /* config_negocio puede no existir aún */ }
 
     res.json({
-      nombre_comercial: row.nombre_comercial,
+      nombre_comercial:  row.nombre_comercial,
       logo_url,
       direccion,
-      whatsapp:      row.whatsapp      || '',
-      banners:       row.banners       || [],
-      tipo:          row.tipo          || 'productos',
-      activo:        !!row.activo,
-      mostrar_stock: row.mostrar_stock || 'disponibilidad',
+      whatsapp:          row.whatsapp          || '',
+      banners:           row.banners           || [],
+      tipo:              row.tipo              || 'productos',
+      activo:            !!row.activo,
+      mostrar_stock:     row.mostrar_stock     || 'disponibilidad',
       color_primario,
+      texto_bienvenida:  row.texto_bienvenida  || '',
+      mensaje_cierre:    row.mensaje_cierre    || '',
     });
   } catch (err) {
     console.error('catalogo/config error:', err.message);

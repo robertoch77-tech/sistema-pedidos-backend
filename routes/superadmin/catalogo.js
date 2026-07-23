@@ -104,23 +104,36 @@ router.get('/:cid/config', async (req, res) => {
 router.put('/:cid/config', async (req, res) => {
   try {
     const { cid } = req.params;
-    const { tipo, activo, mostrar_stock, whatsapp, banners } = req.body;
+    const { tipo, activo, mostrar_stock, whatsapp, banners,
+            texto_bienvenida, mensaje_cierre } = req.body;
+
+    await pool.query(`
+      ALTER TABLE catalogo_config
+        ADD COLUMN IF NOT EXISTS texto_bienvenida TEXT DEFAULT '',
+        ADD COLUMN IF NOT EXISTS mensaje_cierre   TEXT DEFAULT ''
+    `);
+
     const r = await pool.query(
       `INSERT INTO catalogo_config
-         (cliente_id, tipo, activo, mostrar_stock, whatsapp, banners, modificado_en)
-       VALUES ($1,$2,$3,$4,$5,$6,now())
+         (cliente_id, tipo, activo, mostrar_stock, whatsapp, banners,
+          texto_bienvenida, mensaje_cierre, modificado_en)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now())
        ON CONFLICT (cliente_id) DO UPDATE SET
-         tipo           = EXCLUDED.tipo,
-         activo         = EXCLUDED.activo,
-         mostrar_stock  = EXCLUDED.mostrar_stock,
-         whatsapp       = EXCLUDED.whatsapp,
-         banners        = EXCLUDED.banners,
-         modificado_en  = now()
+         tipo              = EXCLUDED.tipo,
+         activo            = EXCLUDED.activo,
+         mostrar_stock     = EXCLUDED.mostrar_stock,
+         whatsapp          = EXCLUDED.whatsapp,
+         banners           = EXCLUDED.banners,
+         texto_bienvenida  = EXCLUDED.texto_bienvenida,
+         mensaje_cierre    = EXCLUDED.mensaje_cierre,
+         modificado_en     = now()
        RETURNING *`,
       [cid, tipo || 'productos', !!activo,
        mostrar_stock || 'disponibilidad',
        whatsapp || '',
-       JSON.stringify(banners || [])]
+       JSON.stringify(banners || []),
+       texto_bienvenida || '',
+       mensaje_cierre || '']
     );
     res.json({ ok: true, config: r.rows[0] });
   } catch (err) {
