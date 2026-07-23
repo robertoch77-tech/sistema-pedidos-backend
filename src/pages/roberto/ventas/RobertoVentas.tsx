@@ -407,6 +407,10 @@ function RobertoVentas() {
   const [errVenta,     setErrVenta]     = useState('');
   const [comprobante,  setComprobante]  = useState<ComprobanteData | null>(null);
 
+  // Detalle venta
+  const [ventaDetalle,  setVentaDetalle]  = useState<{ venta: any; items: any[] } | null>(null);
+  const [modalDetalle,  setModalDetalle]  = useState(false);
+
   // ── Poblar config del negocio desde sesión (fallback) ────────
   useEffect(() => {
     if (!cid) return;
@@ -435,7 +439,7 @@ function RobertoVentas() {
   // ── Load dashboard ────────────────────────────────────────────
   const cargarDash = useCallback(() => {
     if (!cid) return;
-    fetch(`${API_BASE}/api/superadmin/clientes-finales/${cid}/dashboard`, { headers: authHdr })
+    fetch(`${API_BASE}/api/superadmin/ventas/${cid}/dashboard`, { headers: authHdr })
       .then(r => r.ok ? r.json() : null)
       .then(d => d && setDash(d))
       .catch(() => {});
@@ -589,6 +593,21 @@ function RobertoVentas() {
     resetModal();
   };
 
+  // ── Ver detalle de venta ──────────────────────────────────────
+  const handleVerVenta = async (v: VentaRow) => {
+    try {
+      const r = await fetch(
+        `${API_BASE}/api/superadmin/ventas/${cid}/${v.id}`,
+        { headers: authHdr }
+      );
+      const data = await r.json();
+      setVentaDetalle(data);
+      setModalDetalle(true);
+    } catch {
+      console.error('Error cargando detalle de venta');
+    }
+  };
+
   // ── Confirmar venta ───────────────────────────────────────────
   const confirmarVenta = async () => {
     if (!items.length) { setErrVenta('Agregá al menos un producto.'); return; }
@@ -655,6 +674,66 @@ function RobertoVentas() {
   const { sumaSubtotales, descuentoMonto, recargoMonto, ivaByAlic, ivaTotal, total } = calcTotales(items, descGlobal, recargo, precioConIva);
   const vueltoRT = formaPago === 'efectivo' ? montoRecibido - total : 0;
   const confirmDisabled = procesando || items.length === 0 || (formaPago === 'efectivo' && montoRecibido > 0 && montoRecibido < total);
+
+  // ── Generar HTML para imprimir desde detalle ─────────────────
+  const generarHTMLDetalle = (det: { venta: any; items: any[] }) => {
+    const cfg = JSON.parse(localStorage.getItem(`roberto_config_${cid}`) || '{}');
+    const nombreNegocio = cfg.nombre_comercial || 'Mi Negocio';
+    const membrete = [cfg.direccion, cfg.cuit, cfg.membrete].filter(Boolean)
+      .map(l => `<div>${l}</div>`).join('');
+    const itemsHTML = det.items.map(it =>
+      `<tr><td>${it.cantidad}</td><td>${it.descripcion_libre || it.producto_descripcion || '—'}</td><td style="text-align:right">$${Number(it.total).toLocaleString('es-AR', { minimumFractionDigits: 2 })}</td></tr>`
+    ).join('');
+    const pagoLabels: Record<string, string> = {
+      efectivo: 'Efectivo', transferencia: 'Transferencia',
+      tarjeta_debito: 'Débito', tarjeta_credito: 'Crédito',
+      cheque: 'Cheque', cuenta_corriente: 'Cuenta Corriente', otro: 'Otro',
+    };
+    const pagoLabel = pagoLabels[det.venta.forma_pago] || det.venta.forma_pago || '—';
+    return `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<title>${det.venta.numero_completo}</title>
+<style>
+  @page { size: A4; margin: 12mm; }
+  body { font-family: 'Courier New', monospace; font-size: 13px; margin: 0; }
+  .header { text-align: center; border-bottom: 1px dashed #000; padding-bottom: 8px; margin-bottom: 8px; }
+  .negocio { font-size: 18px; font-weight: bold; }
+  .row { display: flex; justify-content: space-between; margin-bottom: 3px; }
+  .sep { border-top: 1px dashed #000; margin: 7px 0; }
+  .bold { font-weight: bold; }
+  .total { font-size: 18px; font-weight: bold; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 3px 4px; font-size: inherit; }
+  th { border-bottom: 1px solid #000; font-weight: bold; }
+</style></head><body>
+<div class="header">
+  <div class="negocio">${nombreNegocio}</div>
+  <div>Comprobante de Venta</div>
+  ${membrete}
+</div>
+<div class="row"><span class="bold">${det.venta.numero_completo}</span><span>${fmtFecha(det.venta.fecha)}</span></div>
+<div class="row"><span>Cliente:</span><span>${det.venta.comprador_nombre || 'Mostrador'}</span></div>
+<div class="sep"></div>
+<table>
+  <thead><tr><th>Cant</th><th>Descripción</th><th style="text-align:right">Subtotal</th></tr></thead>
+  <tbody>${itemsHTML}</tbody>
+</table>
+<div class="sep"></div>
+<div class="row total"><span>TOTAL:</span><span>$${Number(det.venta.total).toLocaleString('es-AR', { minimumFractionDigits: 2 })}</span></div>
+<div class="sep"></div>
+<div class="row"><span>Forma de pago:</span><span class="bold">${pagoLabel}</span></div>
+<div class="sep"></div>
+<div style="text-align:center;margin-top:12px;font-size:12px">Gracias por su compra</div>
+</body></html>`;
+  };
+
+  const imprimirDetalle = () => {
+    if (!ventaDetalle) return;
+    const w = window.open('', '_blank');
+    if (!w) return;
+    w.document.write(generarHTMLDetalle(ventaDetalle));
+    w.document.close();
+    setTimeout(() => { w.focus(); w.print(); }, 350);
+  };
 
   // ─────────────────────────────────────────────────────────────
   // RENDER
@@ -750,8 +829,8 @@ function RobertoVentas() {
                     <td style={{ padding: '10px 14px' }}><BadgeEstado estado={v.estado} anulada={v.anulada} /></td>
                     <td style={{ padding: '10px 14px' }}>
                       <div style={{ display: 'flex', gap: '4px' }}>
-                        <button style={{ backgroundColor: '#EBF4FF', color: BLUE, border: 'none', borderRadius: '5px', padding: '5px 9px', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>👁️ Ver</button>
-                        <button style={{ backgroundColor: '#EDF2F7', color: GRAY, border: 'none', borderRadius: '5px', padding: '5px 9px', fontSize: '12px', cursor: 'pointer' }}>🖨️</button>
+                        <button onClick={() => handleVerVenta(v)} style={{ backgroundColor: '#EBF4FF', color: BLUE, border: 'none', borderRadius: '5px', padding: '5px 9px', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>👁️ Ver</button>
+                        <button onClick={() => handleVerVenta(v)} style={{ backgroundColor: '#EDF2F7', color: GRAY, border: 'none', borderRadius: '5px', padding: '5px 9px', fontSize: '12px', cursor: 'pointer' }}>🖨️</button>
                       </div>
                     </td>
                   </tr>
@@ -1125,6 +1204,70 @@ function RobertoVentas() {
       {/* Producto libre modal */}
       {modalLibre && (
         <ModalProductoLibre onAgregar={agregarLibre} onCerrar={() => setModalLibre(false)} />
+      )}
+
+      {/* ── Modal detalle de venta ───────────────────────────── */}
+      {modalDetalle && ventaDetalle && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.55)', zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+          <div style={{ backgroundColor: '#fff', borderRadius: '16px', width: '100%', maxWidth: '680px', boxShadow: '0 24px 72px rgba(0,0,0,0.35)', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
+
+            {/* Header */}
+            <div style={{ padding: '16px 24px', borderBottom: `2px solid ${SEP}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+              <div>
+                <div style={{ fontSize: '16px', fontWeight: 700, color: NAVY }}>{ventaDetalle.venta.numero_completo}</div>
+                <div style={{ fontSize: '12px', color: GRAY, marginTop: '2px' }}>
+                  {fmtFecha(ventaDetalle.venta.fecha)} &nbsp;·&nbsp; {ventaDetalle.venta.comprador_nombre || 'Mostrador'}
+                </div>
+              </div>
+              <button onClick={() => setModalDetalle(false)} style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', color: GRAY, lineHeight: 1, padding: '2px 6px' }}>×</button>
+            </div>
+
+            {/* Body */}
+            <div style={{ padding: '20px 24px', overflowY: 'auto', flex: 1 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                <thead>
+                  <tr style={{ backgroundColor: '#EBF4FF' }}>
+                    {['Cant', 'Descripción', 'P. Unit', 'Dto%', 'Subtotal'].map(h => (
+                      <th key={h} style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, fontSize: '11px' }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {ventaDetalle.items.map((it: any, idx: number) => (
+                    <tr key={it.id} style={{ backgroundColor: idx % 2 === 0 ? '#fff' : '#F7FAFC' }}>
+                      <td style={{ padding: '8px 10px', color: GRAY }}>{it.cantidad}</td>
+                      <td style={{ padding: '8px 10px', color: TEXT }}>{it.descripcion_libre || it.producto_descripcion || '—'}</td>
+                      <td style={{ padding: '8px 10px', fontFamily: 'monospace', color: TEXT }}>{fmt(it.precio_unitario)}</td>
+                      <td style={{ padding: '8px 10px', color: GRAY }}>{it.descuento_porcentaje > 0 ? `${it.descuento_porcentaje}%` : '—'}</td>
+                      <td style={{ padding: '8px 10px', fontWeight: 700, color: GREEN, fontFamily: 'monospace' }}>{fmt(it.total)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              <div style={{ marginTop: '16px', borderTop: `2px solid ${SEP}`, paddingTop: '14px', display: 'flex', flexDirection: 'column', gap: '6px', maxWidth: '300px', marginLeft: 'auto' }}>
+                {ventaDetalle.venta.iva_monto > 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: GRAY }}>
+                    <span>IVA:</span><span>{fmt(ventaDetalle.venta.iva_monto)}</span>
+                  </div>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '17px', fontWeight: 800, color: NAVY }}>
+                  <span>TOTAL:</span><span style={{ color: GREEN }}>{fmt(ventaDetalle.venta.total)}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: GRAY }}>
+                  <span>Forma de pago:</span>
+                  <span style={{ fontWeight: 600 }}>{ventaDetalle.venta.forma_pago || '—'}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div style={{ padding: '14px 24px', borderTop: `1px solid #EDF2F7`, display: 'flex', justifyContent: 'flex-end', gap: '10px', flexShrink: 0 }}>
+              <button onClick={() => setModalDetalle(false)} style={btnStyle('#EDF2F7', GRAY)}>Cerrar</button>
+              <button onClick={imprimirDetalle} style={btnStyle(NAVY)}>🖨️ Imprimir</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
