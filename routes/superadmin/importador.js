@@ -271,7 +271,7 @@ router.post('/mapear', async (req, res) => {
     // Crear o recuperar proveedor (sin ON CONFLICT para compatibilidad)
     let proveedor_id;
     const provExiste = await pool.query(
-      'SELECT id FROM proveedores WHERE cliente_id=$1 AND nombre=$2 LIMIT 1',
+      'SELECT id FROM proveedores WHERE cliente_id=$1 AND LOWER(nombre)=LOWER($2) LIMIT 1',
       [cliente_id, proveedor_nombre.trim()]
     );
     if (provExiste.rows[0]) {
@@ -896,7 +896,7 @@ function toNum(str) {
 
 async function getOrCreateProveedor(cliente_id, nombre) {
   const row = await pool.query(
-    'SELECT id FROM proveedores WHERE cliente_id=$1 AND nombre=$2 LIMIT 1',
+    'SELECT id FROM proveedores WHERE cliente_id=$1 AND LOWER(nombre)=LOWER($2) LIMIT 1',
     [cliente_id, nombre.trim()]
   );
   if (row.rows[0]) return row.rows[0].id;
@@ -978,6 +978,23 @@ router.post('/mapeo-proveedor/:cliente_id', async (req, res) => {
   } catch (err) {
     console.error('POST /mapeo-proveedor error:', err.message);
     res.status(500).json({ mensaje: 'Error al guardar mapeo', detalle: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// ENDPOINT LIBRE 3b — DELETE /mapeo-proveedor/:cliente_id/:clave
+// ═══════════════════════════════════════════════════════════════
+router.delete('/mapeo-proveedor/:cliente_id/:clave', async (req, res) => {
+  try {
+    const { cliente_id, clave } = req.params;
+    await pool.query(
+      'DELETE FROM proveedores_mapeo_excel WHERE cliente_id=$1 AND proveedor_nombre=$2',
+      [cliente_id, decodeURIComponent(clave)]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('DELETE /mapeo-proveedor error:', err.message);
+    res.status(500).json({ mensaje: 'Error al eliminar mapeo', detalle: err.message });
   }
 });
 
@@ -1741,6 +1758,23 @@ router.put('/ajuste-porcentaje', async (req, res) => {
   } catch (err) {
     console.error('PUT /ajuste-porcentaje error:', err.message);
     res.status(500).json({ mensaje: 'Error al aplicar ajuste', detalle: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// DELETE /proveedor/:cliente_id/:proveedor_id — soft delete
+// ═══════════════════════════════════════════════════════════════
+router.delete('/proveedor/:cliente_id/:proveedor_id', async (req, res) => {
+  try {
+    const { cliente_id, proveedor_id } = req.params;
+    await pool.query(
+      'UPDATE proveedores SET activo=false WHERE id=$1 AND cliente_id=$2',
+      [proveedor_id, cliente_id]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('DELETE /proveedor error:', err.message);
+    res.status(500).json({ mensaje: 'Error al eliminar proveedor', detalle: err.message });
   }
 });
 
