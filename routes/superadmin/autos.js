@@ -543,6 +543,7 @@ router.get('/:cid/ventas', async (req, res) => {
       pool.query(
         `SELECT va.*,
                 v.marca, v.modelo, v.anio, v.patente, v.tipo AS vehiculo_tipo,
+                v.version, v.color, v.vin, v.km,
                 sa.nombre AS socio_nombre
          FROM ventas_autos va
          LEFT JOIN vehiculos v ON v.id = va.vehiculo_id
