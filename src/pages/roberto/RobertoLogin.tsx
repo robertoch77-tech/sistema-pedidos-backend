@@ -51,6 +51,20 @@ function RobertoLogin() {
   const params   = new URLSearchParams(window.location.search);
   const codigo   = params.get('m') || '';
 
+  useEffect(() => {
+    const link = document.querySelector('link[rel="manifest"]');
+    if (link) link.setAttribute('href', '/manifest-roberto.json');
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', '#1B2A4A');
+    document.title = 'RCH Gestión Comercial';
+
+    return () => {
+      if (link) link.setAttribute('href', '/manifest.json');
+      if (meta) meta.setAttribute('content', '#000000');
+      document.title = 'Gestión Integral Pedidos';
+    };
+  }, []);
+
   const [portal,      setPortal]      = useState<PortalData | null>(null);
   const [cargando,    setCargando]    = useState(true);
   const [clave,       setClave]       = useState('');
