@@ -286,4 +286,47 @@ router.post('/:codigo/pedido', async (req, res) => {
   }
 });
 
+// ─── GET /:codigo/manifest.json ──────────────────────────────
+router.get('/:codigo/manifest.json', async (req, res) => {
+  try {
+    const row = await clienteYConfig(req.params.codigo);
+    if (!row || !row.activo) return res.status(404).json({ error: 'Catálogo no disponible' });
+
+    let logo_url = '';
+    try {
+      const cfg = await pool.query(
+        `SELECT logo_url FROM config_negocio WHERE cliente_id = $1 LIMIT 1`,
+        [row.cliente_id]
+      );
+      if (cfg.rows[0]) logo_url = cfg.rows[0].logo_url || '';
+    } catch { /* config_negocio puede no existir aún */ }
+
+    const tipo      = row.tipo || 'productos';
+    const startPath = tipo === 'autos' ? 'autos' : 'productos';
+    const nombre    = row.nombre_comercial || 'Catálogo';
+    const shortName = nombre.slice(0, 12);
+    const iconSrc192 = logo_url || '/logo192.png';
+    const iconSrc512 = logo_url || '/logo512.png';
+
+    res.setHeader('Content-Type', 'application/manifest+json');
+    res.json({
+      name:             nombre,
+      short_name:       shortName,
+      description:      `Catálogo de ${nombre}`,
+      start_url:        `/catalogo/${startPath}/${req.params.codigo}`,
+      display:          'standalone',
+      orientation:      'portrait',
+      background_color: '#F5F5F5',
+      theme_color:      '#2B6CB0',
+      icons: [
+        { src: iconSrc192, sizes: '192x192', type: 'image/png', purpose: 'any maskable' },
+        { src: iconSrc512, sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
+      ],
+    });
+  } catch (err) {
+    console.error('catalogo/manifest error:', err.message);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
 module.exports = router;
