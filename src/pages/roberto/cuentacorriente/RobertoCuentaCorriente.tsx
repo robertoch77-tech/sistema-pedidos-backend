@@ -258,9 +258,13 @@ function ModalCobro({ cid, entidad, tipoCobro, onClose, onOk }: {
           <p style={{ margin: '0 0 4px', fontSize: '13px', color: GRAY }}>{comprobante.numero_completo}</p>
           <p style={{ margin: '0 0 24px', fontSize: '22px', fontWeight: 700, color: GREEN }}>{fmt(totalMedios)}</p>
           <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' }}>
-            <button onClick={() => generarPDF(comprobante)}
+            <button onClick={() => {
+                const sesion = (() => { try { return JSON.parse(localStorage.getItem('roberto_portal_session') || '{}'); } catch { return {}; } })();
+                const cliId = sesion?.cliente?.id || '';
+                generarReciboHTML(comprobante, entidad, medios, saldoActual, cliId);
+              }}
               style={{ padding: '10px 20px', backgroundColor: BLUE, color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 600 }}>
-              🖨️ Imprimir PDF
+              🧾 Imprimir recibo
             </button>
             <button onClick={() => enviarWhatsApp(comprobante)}
               style={{ padding: '10px 20px', backgroundColor: GREEN, color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 600 }}>
@@ -382,6 +386,187 @@ function ModalCobro({ cid, entidad, tipoCobro, onClose, onOk }: {
     </div>
   );
 }
+
+// ─── NUMERO A LETRAS ─────────────────────────────────────────
+function numeroALetras(n: number): string {
+  const unidades = ['', 'UN', 'DOS', 'TRES', 'CUATRO', 'CINCO', 'SEIS', 'SIETE', 'OCHO', 'NUEVE',
+                    'DIEZ', 'ONCE', 'DOCE', 'TRECE', 'CATORCE', 'QUINCE', 'DIECISÉIS',
+                    'DIECISIETE', 'DIECIOCHO', 'DIECINUEVE'];
+  const decenas  = ['', '', 'VEINTE', 'TREINTA', 'CUARENTA', 'CINCUENTA',
+                    'SESENTA', 'SETENTA', 'OCHENTA', 'NOVENTA'];
+  const centenas = ['', 'CIEN', 'DOSCIENTOS', 'TRESCIENTOS', 'CUATROCIENTOS', 'QUINIENTOS',
+                    'SEISCIENTOS', 'SETECIENTOS', 'OCHOCIENTOS', 'NOVECIENTOS'];
+
+  if (n === 0) return 'CERO';
+
+  function menorMil(num: number): string {
+    if (num === 0) return '';
+    if (num === 100) return 'CIEN';
+    if (num < 20) return unidades[num];
+    if (num < 100) {
+      const d = Math.floor(num / 10);
+      const u = num % 10;
+      return u === 0 ? decenas[d] : `${decenas[d]} Y ${unidades[u]}`;
+    }
+    const c = Math.floor(num / 100);
+    const resto = num % 100;
+    const centStr = c === 1 && resto > 0 ? 'CIENTO' : centenas[c];
+    return resto === 0 ? centStr : `${centStr} ${menorMil(resto)}`;
+  }
+
+  const millones = Math.floor(n / 1_000_000);
+  const miles    = Math.floor((n % 1_000_000) / 1_000);
+  const resto    = n % 1_000;
+
+  let resultado = '';
+  if (millones > 0) {
+    resultado += millones === 1 ? 'UN MILLÓN ' : `${menorMil(millones)} MILLONES `;
+  }
+  if (miles > 0) {
+    resultado += miles === 1 ? 'MIL ' : `${menorMil(miles)} MIL `;
+  }
+  if (resto > 0) {
+    resultado += menorMil(resto);
+  }
+  return resultado.trim();
+}
+
+// ─── RECIBO DE PAGO ──────────────────────────────────────────
+const generarReciboHTML = (
+  comprobante: any,
+  entidad: any,
+  medios: MedioPago[],
+  saldoAnterior: number,
+  clienteId: string | number
+) => {
+  const cfg = (() => {
+    try { return JSON.parse(localStorage.getItem(`roberto_config_${clienteId}`) || '{}'); }
+    catch { return {}; }
+  })();
+
+  const keyRec = `rec_counter_${clienteId}`;
+  const nRec = (parseInt(localStorage.getItem(keyRec) || '0') + 1);
+  localStorage.setItem(keyRec, String(nRec));
+  const numRec = 'REC-' + String(nRec).padStart(6, '0');
+
+  const fecha = new Date().toLocaleDateString('es-AR');
+  const total = medios.reduce((s, m) => s + Number(m.monto || 0), 0);
+  const saldoNuevo = comprobante.saldo_nuevo;
+
+  const MEDIOS_LABEL: Record<string, string> = {
+    efectivo: 'Efectivo', transferencia: 'Transferencia',
+    cheque_propio: 'Cheque propio', cheque_tercero: 'Cheque tercero',
+    echeq: 'eCheq', otro: 'Otro',
+  };
+
+  const detalleHtml = medios.map(m => `
+    <tr>
+      <td>${MEDIOS_LABEL[m.tipo] ?? m.tipo}</td>
+      <td style="text-align:right">$${Number(m.monto || 0).toLocaleString('es-AR', { minimumFractionDigits: 2 })}</td>
+      <td>${m.referencia || ''}</td>
+    </tr>
+    ${m.cheque_datos ? `
+    <tr>
+      <td colspan="3" style="font-size:12px;color:#666;padding-left:20px">
+        Cheque: ${m.cheque_datos.banco} N° ${m.cheque_datos.numero} - ${m.cheque_datos.titular}
+      </td>
+    </tr>` : ''}
+  `).join('');
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  body { font-family: Arial, sans-serif; font-size: 14px; color: #333; max-width: 600px; margin: 0 auto; padding: 30px; }
+  .header { text-align: center; border-bottom: 2px solid #333; padding-bottom: 15px; margin-bottom: 20px; }
+  .negocio { font-size: 20px; font-weight: bold; }
+  .titulo { text-align: center; font-size: 18px; font-weight: bold; text-transform: uppercase; margin: 20px 0 5px; }
+  .numero { text-align: center; font-size: 14px; color: #666; margin-bottom: 20px; }
+  .seccion { margin: 15px 0; }
+  .seccion label { font-weight: bold; font-size: 12px; color: #666; text-transform: uppercase; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+  td { padding: 6px 8px; }
+  tr:nth-child(even) { background: #F9F9F9; }
+  .monto-total { font-size: 20px; font-weight: bold; text-align: right; border-top: 2px solid #333; padding-top: 8px; }
+  .en-letras { font-style: italic; color: #555; margin: 5px 0 15px; }
+  .saldos { background: #F5F5F5; padding: 12px; border-radius: 6px; margin: 15px 0; }
+  .firma { margin-top: 60px; border-top: 1px solid #333; padding-top: 10px; width: 200px; text-align: center; font-size: 12px; color: #666; }
+  @media print { body { padding: 10px; } }
+</style>
+</head>
+<body>
+  <div class="header">
+    <div class="negocio">${cfg.nombre_comercial || 'Mi Negocio'}</div>
+    ${cfg.direccion ? `<div>${cfg.direccion}</div>` : ''}
+    ${cfg.cuit ? `<div>CUIT: ${cfg.cuit}</div>` : ''}
+  </div>
+
+  <div class="titulo">Recibo de Pago</div>
+  <div class="numero">${numRec}</div>
+
+  <div class="seccion">
+    <label>Fecha</label>
+    <div>${fecha}</div>
+  </div>
+
+  <div class="seccion">
+    <label>Recibimos de</label>
+    <div style="font-size:16px;font-weight:bold">${entidad.nombre || entidad.comprador_nombre || ''}</div>
+    ${entidad.cuit ? `<div>CUIT: ${entidad.cuit}</div>` : ''}
+  </div>
+
+  <div class="seccion">
+    <label>La suma de</label>
+    <div class="monto-total">$${total.toLocaleString('es-AR', { minimumFractionDigits: 2 })}</div>
+    <div class="en-letras">${numeroALetras(Math.round(total))} PESOS</div>
+  </div>
+
+  <div class="seccion">
+    <label>Detalle de pago</label>
+    <table>
+      <thead>
+        <tr style="background:#E8E8E8">
+          <th style="text-align:left">Medio</th>
+          <th style="text-align:right">Monto</th>
+          <th style="text-align:left">Referencia</th>
+        </tr>
+      </thead>
+      <tbody>${detalleHtml}</tbody>
+    </table>
+  </div>
+
+  <div class="seccion">
+    <label>En concepto de</label>
+    <div>Pago cuenta corriente</div>
+  </div>
+
+  <div class="saldos">
+    <div style="display:flex;justify-content:space-between">
+      <span>Saldo anterior:</span>
+      <span>$${saldoAnterior.toLocaleString('es-AR', { minimumFractionDigits: 2 })}</span>
+    </div>
+    <div style="display:flex;justify-content:space-between">
+      <span>Monto abonado:</span>
+      <span style="color:#2D6A4F;font-weight:bold">-$${total.toLocaleString('es-AR', { minimumFractionDigits: 2 })}</span>
+    </div>
+    <div style="display:flex;justify-content:space-between;font-weight:bold;border-top:1px solid #ccc;margin-top:8px;padding-top:8px">
+      <span>Saldo restante:</span>
+      <span>$${Math.abs(saldoNuevo).toLocaleString('es-AR', { minimumFractionDigits: 2 })}</span>
+    </div>
+  </div>
+
+  <div class="firma">Firma y aclaración</div>
+</body>
+</html>`;
+
+  const w = window.open('', '_blank');
+  if (w) {
+    w.document.write(html);
+    w.document.close();
+    w.print();
+  }
+};
 
 // ─── PDF ESTADO DE CUENTA ────────────────────────────────────
 function generarEstadoCuentaPDF(entidad: EntidadCC, movs: Movimiento[], tipo: TabCC) {
