@@ -7,6 +7,42 @@ const http = require('http');
 
 dotenv.config();
 
+const pool = require('./db');
+
+const crearIndices = async () => {
+  const indices = [
+    'CREATE INDEX IF NOT EXISTS idx_productos_cliente ON productos_propios(cliente_id)',
+    'CREATE INDEX IF NOT EXISTS idx_productos_codigo ON productos_propios(cliente_id, codigo)',
+    'CREATE INDEX IF NOT EXISTS idx_productos_proveedor ON productos_propios(cliente_id, proveedor_id)',
+    'CREATE INDEX IF NOT EXISTS idx_productos_activo ON productos_propios(cliente_id, activo)',
+    'CREATE INDEX IF NOT EXISTS idx_ventas_cliente ON ventas(cliente_id)',
+    'CREATE INDEX IF NOT EXISTS idx_ventas_fecha ON ventas(cliente_id, fecha)',
+    'CREATE INDEX IF NOT EXISTS idx_ventas_estado ON ventas(cliente_id, estado)',
+    'CREATE INDEX IF NOT EXISTS idx_ventas_items_venta ON ventas_items(venta_id)',
+    'CREATE INDEX IF NOT EXISTS idx_ventas_items_producto ON ventas_items(producto_id)',
+    'CREATE INDEX IF NOT EXISTS idx_compras_cliente ON compras(cliente_id)',
+    'CREATE INDEX IF NOT EXISTS idx_compras_proveedor ON compras(cliente_id, proveedor_id)',
+    'CREATE INDEX IF NOT EXISTS idx_caja_mov_caja ON caja_movimientos(caja_id)',
+    'CREATE INDEX IF NOT EXISTS idx_caja_mov_cliente ON caja_movimientos(cliente_id)',
+    'CREATE INDEX IF NOT EXISTS idx_mov_cc_cuenta ON movimientos_cuentas_corrientes(cuenta_corriente_id)',
+    'CREATE INDEX IF NOT EXISTS idx_mov_cc_cliente ON movimientos_cuentas_corrientes(cliente_id)',
+    'CREATE INDEX IF NOT EXISTS idx_cc_clientes_cliente ON cuentas_corrientes_clientes(cliente_id)',
+    'CREATE INDEX IF NOT EXISTS idx_proveedores_cliente ON proveedores(cliente_id)',
+    'CREATE INDEX IF NOT EXISTS idx_vehiculos_cliente ON vehiculos(cliente_id)',
+    'CREATE INDEX IF NOT EXISTS idx_vehiculos_estado ON vehiculos(cliente_id, estado)',
+    'CREATE INDEX IF NOT EXISTS idx_ventas_autos_cliente ON ventas_autos(cliente_id)',
+    'CREATE INDEX IF NOT EXISTS idx_cat_pedidos_cliente ON catalogo_pedidos(cliente_id)',
+    'CREATE INDEX IF NOT EXISTS idx_cat_pedidos_estado ON catalogo_pedidos(cliente_id, estado)',
+  ];
+  for (const sql of indices) {
+    await pool.query(sql).catch(err =>
+      console.error('Índice error:', err.message));
+  }
+  console.log('✅ Índices verificados');
+};
+
+crearIndices();
+
 const app = express();
 app.use(cors({
   origin: [
