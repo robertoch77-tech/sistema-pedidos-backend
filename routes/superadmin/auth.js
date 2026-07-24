@@ -3,6 +3,21 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const pool = require('../../db');
 
+pool.query(`
+  CREATE TABLE IF NOT EXISTS sesiones_superadmin (
+    id BIGSERIAL PRIMARY KEY,
+    token TEXT NOT NULL UNIQUE,
+    usuario_id BIGINT NOT NULL,
+    expira_en BIGINT NOT NULL,
+    creado_en TIMESTAMPTZ DEFAULT now()
+  )
+`).catch(() => {});
+
+pool.query(
+  'DELETE FROM sesiones_superadmin WHERE expira_en < $1',
+  [Date.now()]
+).catch(() => {});
+
 async function asegurarUsuarioPorDefecto() {
   try {
     const resultado = await pool.query(
@@ -70,6 +85,15 @@ router.post('/auth/login', async (req, res) => {
       [usuario.id]
     ).catch(() => {});
 
+    const token = `sa_${usuario.id}_${Date.now()}`;
+    const expira = Date.now() + (7 * 24 * 60 * 60 * 1000);
+
+    await pool.query(
+      `INSERT INTO sesiones_superadmin (token, usuario_id, expira_en)
+       VALUES ($1, $2, $3)`,
+      [token, usuario.id, expira]
+    );
+
     res.json({
       ok: true,
       usuario: {
@@ -80,7 +104,7 @@ router.post('/auth/login', async (req, res) => {
         rol: usuario.rol,
         permisos: usuario.permisos || {},
       },
-      token: `sa_${usuario.id}_${Date.now()}`,
+      token,
     });
   } catch (error) {
     console.error('SuperAdmin login error:', error.message);
@@ -92,14 +116,24 @@ router.post('/auth/login', async (req, res) => {
 async function verificarTokenSuperAdmin(req, res, next) {
   const token = req.headers['x-superadmin-token'];
   if (!token) return res.status(401).json({ mensaje: 'Token requerido' });
-  const match = token.match(/^sa_(\d+)_\d+$/);
-  if (!match) return res.status(401).json({ mensaje: 'Token inválido' });
   try {
-    const resultado = await pool.query(
-      'SELECT id FROM superadmin_usuarios WHERE id=$1 AND activo=true',
-      [match[1]]
+    const sesion = await pool.query(
+      `SELECT usuario_id, expira_en FROM sesiones_superadmin WHERE token = $1`,
+      [token]
     );
-    if (!resultado.rows[0]) return res.status(401).json({ mensaje: 'Token inválido' });
+
+    if (sesion.rows.length === 0) {
+      return res.status(401).json({ error: 'Sesión inválida' });
+    }
+
+    if (sesion.rows[0].expira_en < Date.now()) {
+      await pool.query(
+        'DELETE FROM sesiones_superadmin WHERE token=$1',
+        [token]
+      );
+      return res.status(401).json({ error: 'Sesión expirada' });
+    }
+
     next();
   } catch (err) {
     res.status(500).json({ mensaje: 'Error del servidor' });

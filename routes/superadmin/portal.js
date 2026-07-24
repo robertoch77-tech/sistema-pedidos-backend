@@ -20,23 +20,36 @@ const pool = require('../../db');
   }
 })();
 
-// Middleware: verifica que el token rp_{id}_{ts} corresponde al cliente_id del request
-function verificarTokenPortal(req, res, next) {
+// Middleware: verifica token rp_ contra sesiones_portal con expiración
+async function verificarTokenPortal(req, res, next) {
   const token = req.headers['x-roberto-token'];
   if (!token) {
     return res.status(401).json({ error: 'Token requerido' });
   }
-  // Formato esperado: rp_{cliente_id}_{timestamp}
-  const partes = token.split('_');
-  if (partes.length < 3 || partes[0] !== 'rp') {
-    return res.status(401).json({ error: 'Token inválido' });
+
+  try {
+    const sesion = await pool.query(
+      `SELECT cliente_id, expira_en FROM sesiones_portal WHERE token = $1`,
+      [token]
+    );
+
+    if (sesion.rows.length === 0) {
+      return res.status(401).json({ error: 'Sesión inválida' });
+    }
+
+    if (sesion.rows[0].expira_en < Date.now()) {
+      await pool.query(
+        'DELETE FROM sesiones_portal WHERE token=$1',
+        [token]
+      );
+      return res.status(401).json({ error: 'Sesión expirada' });
+    }
+
+    next();
+  } catch (err) {
+    console.error('verificarTokenPortal:', err.message);
+    return res.status(500).json({ error: 'Error de autenticación' });
   }
-  const tokenClienteId = partes[1];
-  const clienteId = req.params.cliente_id || req.params.cid;
-  if (tokenClienteId !== String(clienteId)) {
-    return res.status(403).json({ error: 'Token no corresponde al cliente' });
-  }
-  next();
 }
 
 // GET /:codigo — público, sin auth. Verifica tipo_fuente='roberto'

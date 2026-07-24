@@ -3,6 +3,21 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const pool = require('../../db');
 
+pool.query(`
+  CREATE TABLE IF NOT EXISTS sesiones_portal (
+    id BIGSERIAL PRIMARY KEY,
+    token TEXT NOT NULL UNIQUE,
+    cliente_id BIGINT NOT NULL,
+    expira_en BIGINT NOT NULL,
+    creado_en TIMESTAMPTZ DEFAULT now()
+  )
+`).catch(() => {});
+
+pool.query(
+  'DELETE FROM sesiones_portal WHERE expira_en < $1',
+  [Date.now()]
+).catch(() => {});
+
 router.post('/login', async (req, res) => {
   try {
     const { codigo, clave } = req.body;
@@ -40,6 +55,13 @@ router.post('/login', async (req, res) => {
     }
 
     const token = `rp_${cliente.id}_${Date.now()}`;
+    const expira = Date.now() + (7 * 24 * 60 * 60 * 1000);
+
+    await pool.query(
+      `INSERT INTO sesiones_portal (token, cliente_id, expira_en)
+       VALUES ($1, $2, $3)`,
+      [token, cliente.id, expira]
+    );
 
     res.json({
       ok: true,
