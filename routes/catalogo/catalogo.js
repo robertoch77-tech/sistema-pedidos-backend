@@ -65,7 +65,20 @@ async function clienteYConfig(codigo) {
 router.get('/:codigo/config', async (req, res) => {
   try {
     const row = await clienteYConfig(req.params.codigo);
-    if (!row || !row.activo) return res.status(404).json({ error: 'Catálogo no disponible' });
+    if (!row) return res.status(404).json({ error: 'Catálogo no disponible' });
+    if (row.activo === false) return res.status(404).json({ error: 'Catálogo no disponible' });
+    if (row.activo === null) {
+      return res.json({
+        ...row,
+        activo:           false,
+        tipo:             'productos',
+        mostrar_stock:    'disponibilidad',
+        whatsapp:         '',
+        banners:          [],
+        texto_bienvenida: '',
+        mensaje_cierre:   '',
+      });
+    }
 
     // Buscar color_primario y logo desde config_negocio si existe
     let color_primario = '#2B6CB0';
