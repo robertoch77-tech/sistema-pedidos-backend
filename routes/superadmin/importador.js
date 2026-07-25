@@ -90,6 +90,8 @@ async function asegurarTablas() {
       ['productos_propios', 'utilidad_3',          'NUMERIC DEFAULT 0'],
       ['productos_propios', 'precio_venta_3',      'NUMERIC DEFAULT 0'],
       ['productos_propios', 'punto_reposicion',    'NUMERIC DEFAULT 0'],
+      ['productos_propios', 'destacado',          'BOOLEAN DEFAULT false'],
+      ['productos_propios', 'imagen_url',         'TEXT'],
       ['importaciones_historial', 'total_excel',  'INT DEFAULT 0'],
       ['importaciones_historial', 'nuevos',        'INT DEFAULT 0'],
       ['importaciones_historial', 'subieron',      'INT DEFAULT 0'],
