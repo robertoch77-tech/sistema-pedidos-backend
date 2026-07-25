@@ -117,7 +117,7 @@ router.get('/resumen/:cliente_id', async (req, res) => {
       pool.query(`SELECT COALESCE(SUM(haber),0) AS total FROM movimientos_cuentas_corrientes
                   WHERE cliente_id=$1 AND tipo='cobro'
                   AND DATE_TRUNC('month',creado_en)=DATE_TRUNC('month',NOW())`, [cliente_id]),
-      pool.query(`SELECT COALESCE(SUM(saldo),0) AS total, COUNT(*) FILTER (WHERE saldo>0) AS con_deuda
+      pool.query(`SELECT COALESCE(SUM(saldo_actual),0) AS total, COUNT(*) FILTER (WHERE saldo_actual>0) AS con_deuda
                   FROM proveedores WHERE cliente_id=$1 AND activo=true`, [cliente_id]),
       pool.query(`SELECT COALESCE(SUM(saldo_vencido),0) AS total FROM proveedores
                   WHERE cliente_id=$1 AND activo=true`, [cliente_id]),
@@ -212,7 +212,7 @@ router.get('/proveedores/:cliente_id', async (req, res) => {
       params.push(`%${buscar}%`);
       conds.push(`(p.nombre ILIKE $${params.length} OR p.cuit ILIKE $${params.length} OR p.nombre_corto ILIKE $${params.length})`);
     }
-    if (con_deuda === 'true')  conds.push('p.saldo > 0');
+    if (con_deuda === 'true')  conds.push('p.saldo_actual > 0');
     if (vencida   === 'true')  conds.push('p.saldo_vencido > 0');
 
     const where = conds.join(' AND ');
@@ -220,13 +220,13 @@ router.get('/proveedores/:cliente_id', async (req, res) => {
     const [rows, tot] = await Promise.all([
       pool.query(
         `SELECT p.id, p.nombre, p.cuit, p.nombre_corto,
-                p.saldo AS saldo_actual, p.saldo_vencido, p.moneda,
+                p.saldo_actual AS saldo_actual, p.saldo_vencido, p.moneda,
                 p.plazo_pago_dias, p.whatsapp, p.telefono, p.email,
                 (SELECT MAX(creado_en) FROM cuentas_corrientes_proveedores_movimientos
                  WHERE proveedor_id=p.id) AS ultimo_movimiento
          FROM proveedores p
          WHERE ${where}
-         ORDER BY p.saldo DESC, p.nombre
+         ORDER BY p.saldo_actual DESC, p.nombre
          LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
         [...params, parseInt(limit), offset]
       ),
@@ -319,7 +319,7 @@ router.get('/proveedores/:cliente_id/:proveedor_id/movimientos', async (req, res
       ),
       pool.query(`SELECT COUNT(*) FROM cuentas_corrientes_proveedores_movimientos m WHERE ${where}`, params),
       pool.query(
-        `SELECT saldo AS saldo_actual, saldo_vencido, nombre, cuit,
+        `SELECT saldo_actual, saldo_vencido, nombre, cuit,
                 whatsapp, telefono, moneda, plazo_pago_dias
          FROM proveedores WHERE id=$1`, [proveedor_id]
       ),
