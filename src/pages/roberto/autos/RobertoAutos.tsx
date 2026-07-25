@@ -1293,7 +1293,7 @@ function RobertoAutos() {
                     <tr><td colSpan={8} style={{ textAlign: 'center', padding: '32px', color: GRIS }}>No hay ventas</td></tr>
                   ) : ventas.map((v, i) => (
                     <tr key={v.id} style={{ borderBottom: `1px solid ${BORDE}`, backgroundColor: i % 2 === 0 ? CARD : BG }}>
-                      <td style={{ padding: '10px 14px', color: GRIS }}>{fmtF(v.fecha)}</td>
+                      <td style={{ padding: '10px 14px', color: GRIS }}>{fmtF(v.fecha ? String(v.fecha).substring(0, 10) : '')}</td>
                       <td style={{ padding: '10px 14px', fontWeight: 600 }}>{v.marca} {v.modelo} {v.anio || ''}</td>
                       <td style={{ padding: '10px 14px' }}>{v.comprador_nombre || '—'}</td>
                       <td style={{ padding: '10px 14px', fontWeight: 600 }}>{fmt(v.precio_venta)}</td>
