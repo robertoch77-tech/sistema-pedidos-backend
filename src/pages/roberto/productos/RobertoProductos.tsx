@@ -485,7 +485,24 @@ function ModalImportadorV2({ onCerrar, onExito }: { onCerrar: () => void; onExit
                     ⚠️ Campos requeridos
                   </div>
 
-                  {/* Descripción multi-columna */}
+                  {/* PASO 1 — Código */}
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, marginBottom: 12 }}>
+                    <tbody>
+                      <tr>
+                        <td style={{ padding: '5px 8px 5px 0', fontWeight: 700, color: NAVY, width: '45%', fontSize: 12 }}>
+                          Código <span style={{ color: RED }}>*</span>
+                        </td>
+                        <td style={{ padding: '4px 0' }}>
+                          <select style={{ ...selectSt, width: '100%', fontSize: 12 }} value={mapeo['codigo'] || ''} onChange={e => setMapeo(prev => ({ ...prev, codigo: e.target.value }))}>
+                            <option value="">— No usar —</option>
+                            {allColumnas.map(c => <option key={c} value={c}>Columna {letraCol(allColumnas.indexOf(c))} — {muestraActual[0]?.[c] ?? ''}</option>)}
+                          </select>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+
+                  {/* PASO 2 — Descripción multi-columna */}
                   <div style={{ marginBottom: 12 }}>
                     <div style={{ fontSize: 11, fontWeight: 700, color: NAVY, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.3px' }}>
                       Descripción <span style={{ color: RED }}>*</span> — columnas que la forman (en orden):
@@ -506,25 +523,20 @@ function ModalImportadorV2({ onCerrar, onExito }: { onCerrar: () => void; onExit
                     </select>
                   </div>
 
-                  {/* Código y Precio costo */}
+                  {/* PASO 3 — Precio costo */}
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                     <tbody>
-                      {(['codigo', 'precio_costo'] as const).map(campo => {
-                        const meta = CAMPOS_MAPEO.find(c => c.campo === campo)!;
-                        return (
-                          <tr key={campo}>
-                            <td style={{ padding: '5px 8px 5px 0', fontWeight: 700, color: NAVY, width: '45%', fontSize: 12 }}>
-                              {meta.label} <span style={{ color: RED }}>*</span>
-                            </td>
-                            <td style={{ padding: '4px 0' }}>
-                              <select style={{ ...selectSt, width: '100%', fontSize: 12 }} value={mapeo[campo] || ''} onChange={e => setMapeo(prev => ({ ...prev, [campo]: e.target.value }))}>
-                                <option value="">— No usar —</option>
-                                {allColumnas.map(c => <option key={c} value={c}>Columna {letraCol(allColumnas.indexOf(c))} — {muestraActual[0]?.[c] ?? ''}</option>)}
-                              </select>
-                            </td>
-                          </tr>
-                        );
-                      })}
+                      <tr>
+                        <td style={{ padding: '5px 8px 5px 0', fontWeight: 700, color: NAVY, width: '45%', fontSize: 12 }}>
+                          Precio costo <span style={{ color: RED }}>*</span>
+                        </td>
+                        <td style={{ padding: '4px 0' }}>
+                          <select style={{ ...selectSt, width: '100%', fontSize: 12 }} value={mapeo['precio_costo'] || ''} onChange={e => setMapeo(prev => ({ ...prev, precio_costo: e.target.value }))}>
+                            <option value="">— No usar —</option>
+                            {allColumnas.map(c => <option key={c} value={c}>Columna {letraCol(allColumnas.indexOf(c))} — {muestraActual[0]?.[c] ?? ''}</option>)}
+                          </select>
+                        </td>
+                      </tr>
                     </tbody>
                   </table>
                 </div>
