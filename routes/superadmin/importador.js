@@ -1609,14 +1609,15 @@ router.put('/actualizar-precios-v2', async (req, res) => {
              precio_venta_2=COALESCE($12,precio_venta_2), precio_venta_3=COALESCE($13,precio_venta_3),
              marca=COALESCE($14,marca), rubro=COALESCE($15,rubro),
              unidad_medida=COALESCE($16,unidad_medida), stock_minimo=COALESCE($17,stock_minimo),
-             activo=COALESCE($18,activo), modificado_en=now()
-           WHERE id=$19 AND cliente_id=$20`,
+             activo=COALESCE($18,activo), imagen_url=COALESCE($19,imagen_url),
+             modificado_en=now()
+           WHERE id=$20 AND cliente_id=$21`,
           [p.precio_costo??null, p.descuento_1??null, p.descuento_2??null, p.descuento_3??null,
            p.impuesto_1??null, p.impuesto_2??null, p.iva??null,
            p.utilidad_1??null, p.utilidad_2??null, p.utilidad_3??null,
            p.precio_venta_final??null, p.precio_venta_2??null, p.precio_venta_3??null,
            p.marca??null, p.rubro??null, p.unidad_medida??null,
-           p.stock_minimo??null, p.activo??null, p.id, cliente_id]
+           p.stock_minimo??null, p.activo??null, p.imagen_url??null, p.id, cliente_id]
         );
         actualizados += r.rowCount;
       } catch (err) {
