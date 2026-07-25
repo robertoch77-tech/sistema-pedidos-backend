@@ -58,7 +58,11 @@ interface ProductoResult {
   id: number;
   codigo: string;
   descripcion: string;
+  precio_costo: number;
   precio_venta_1: number;
+  precio_venta_2: number;
+  precio_venta_3: number;
+  precio_venta_final: number;
   stock_actual: number;
   alicuota_iva: number;
   ean: string;
@@ -388,6 +392,7 @@ function RobertoVentas() {
   const [items,        setItems]        = useState<ItemVenta[]>([]);
   const [busqProd,     setBusqProd]     = useState('');
   const [prodsDrop,    setProdsDrop]    = useState<ProductoResult[]>([]);
+  const [listaPrecio,  setListaPrecio]  = useState<'pv1'|'pv2'|'pv3'>('pv1');
   const [showDrop,     setShowDrop]     = useState(false);
   const [loadProd,     setLoadProd]     = useState(false);
   const [modalLibre,   setModalLibre]   = useState(false);
@@ -550,7 +555,13 @@ function RobertoVentas() {
       descripcion: p.descripcion,
       es_libre:    false,
       cantidad:    1,
-      precio:      parseFloat(String(p.precio_venta_1)) || 0,
+      precio:      parseFloat(String(
+        listaPrecio === 'pv1'
+          ? (p.precio_venta_1 || p.precio_venta_final || p.precio_costo)
+          : listaPrecio === 'pv2'
+          ? (p.precio_venta_2 || p.precio_venta_1 || p.precio_venta_final || p.precio_costo)
+          : (p.precio_venta_3 || p.precio_venta_2 || p.precio_venta_1 || p.precio_venta_final || p.precio_costo)
+      )) || 0,
       dto:         0,
       alicuota:    parseFloat(String(p.alicuota_iva))   || 21,
       stock_actual:parseFloat(String(p.stock_actual))   || 0,
@@ -951,6 +962,18 @@ function RobertoVentas() {
                 <div style={{ marginBottom: '20px' }}>
                   <div style={{ fontSize: '12px', fontWeight: 700, color: NAVY, textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `2px solid ${SEP}`, paddingBottom: '6px', marginBottom: '12px' }}>
                     📦 Productos
+                  </div>
+
+                  {/* Selector lista de precios */}
+                  <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
+                    {(['pv1','pv2','pv3'] as const).map(lp => (
+                      <button key={lp} onClick={() => setListaPrecio(lp)}
+                        style={{ padding: '4px 14px', borderRadius: '6px', border: 'none', cursor: 'pointer', fontWeight: 600, fontSize: '13px',
+                          backgroundColor: listaPrecio === lp ? '#2B6CB0' : '#E2E8F0',
+                          color:           listaPrecio === lp ? '#fff'    : '#4A5568' }}>
+                        {lp === 'pv1' ? 'PV1' : lp === 'pv2' ? 'PV2' : 'PV3'}
+                      </button>
+                    ))}
                   </div>
 
                   {/* Buscador */}
