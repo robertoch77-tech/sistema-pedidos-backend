@@ -65,7 +65,7 @@ interface Liquidacion {
 
 interface Dashboard {
   disponibles: number; reservados: number;
-  vendidos_mes: number; comisiones_mes: number; dinero_transito: number;
+  vendidos_mes: number; ganancia_mes: number; comisiones_socios_mes: number; dinero_transito: number;
 }
 
 // ── HELPERS ──────────────────────────────────────────────────
@@ -829,7 +829,7 @@ function generarContratoPDF(venta: VentaAuto, clienteId: number) {
     catch { return {}; }
   })();
 
-  const fecha   = venta.fecha ? new Date(venta.fecha) : new Date();
+  const fecha   = venta.fecha ? new Date(venta.fecha + 'T00:00:00') : new Date();
   const dia     = fecha.getDate();
   const mes     = fecha.toLocaleDateString('es-AR', { month: 'long' });
   const anio    = fecha.getFullYear();
@@ -930,7 +930,7 @@ function RobertoAutos() {
 
   const [sesion,    setSesion]    = useState<Sesion | null>(null);
   const [tab,       setTab]       = useState<'stock' | 'ventas' | 'socios' | 'liquidaciones'>('stock');
-  const [dash,      setDash]      = useState<Dashboard>({ disponibles: 0, reservados: 0, vendidos_mes: 0, comisiones_mes: 0, dinero_transito: 0 });
+  const [dash,      setDash]      = useState<Dashboard>({ disponibles: 0, reservados: 0, vendidos_mes: 0, ganancia_mes: 0, comisiones_socios_mes: 0, dinero_transito: 0 });
 
   // Stock
   const [vehiculos,   setVehiculos]   = useState<Vehiculo[]>([]);
@@ -1148,12 +1148,13 @@ function RobertoAutos() {
       <div style={{ padding: '24px 28px', maxWidth: '1280px', margin: '0 auto' }}>
 
         {/* DASHBOARD CARDS */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '14px', marginBottom: '24px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '14px', marginBottom: '24px' }}>
           {[
-            { label: 'Disponibles',      valor: dash.disponibles,    color: VERDE  },
-            { label: 'Reservados',        valor: dash.reservados,     color: DORADO },
-            { label: 'Vendidos este mes', valor: dash.vendidos_mes,   color: TEXTO  },
-            { label: 'Comisiones mes',    valor: fmt(dash.comisiones_mes), color: TEXTO },
+            { label: 'Disponibles',      valor: dash.disponibles,              color: VERDE  },
+            { label: 'Reservados',        valor: dash.reservados,               color: DORADO },
+            { label: 'Vendidos este mes', valor: dash.vendidos_mes,             color: TEXTO  },
+            { label: 'Ganancia mes',      valor: fmt(dash.ganancia_mes),        color: VERDE  },
+            { label: 'Comisiones socios', valor: fmt(dash.comisiones_socios_mes), color: DORADO },
           ].map(c => (
             <div key={c.label} style={{ backgroundColor: CARD, borderRadius: '10px', border: `1px solid ${BORDE}`, borderLeft: `4px solid ${c.color}`, padding: '16px 18px' }}>
               <div style={{ fontSize: '22px', fontWeight: 700, color: c.color, marginBottom: '4px' }}>{c.valor}</div>

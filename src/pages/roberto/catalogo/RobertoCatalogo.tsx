@@ -6,7 +6,7 @@ const API = process.env.REACT_APP_API_URL || '';
 // REACT_APP_CLOUDINARY_UPLOAD_PRESET=xxxxx
 const CLOUD_NAME     = process.env.REACT_APP_CLOUDINARY_CLOUD_NAME     || '';
 const UPLOAD_PRESET  = process.env.REACT_APP_CLOUDINARY_UPLOAD_PRESET  || '';
-const BASE_URL_CAT   = 'sistemagestionpedidos.netlify.app';
+const BASE_URL_CAT   = 'https://sistemagestionpedidos.netlify.app';
 
 // ─── PALETA ───────────────────────────────────────────────────
 const NAVY  = '#1B2A4A';
