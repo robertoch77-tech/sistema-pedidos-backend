@@ -540,7 +540,7 @@ router.get('/productos/:cliente_id', async (req, res) => {
     } = req.query;
 
     const pageNum  = Math.max(1, parseInt(page, 10) || 1);
-    const limitNum = Math.min(200, Math.max(1, parseInt(limit, 10) || 25));
+    const limitNum = Math.min(5000, Math.max(1, parseInt(limit, 10) || 25));
     const offset   = (pageNum - 1) * limitNum;
 
     const values  = [cliente_id];
