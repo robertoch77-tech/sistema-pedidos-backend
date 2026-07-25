@@ -50,6 +50,13 @@ function useDebounce<T>(val: T, ms: number): T {
   return d;
 }
 
+// ─── OPTIMIZAR URL CLOUDINARY ────────────────────────────────
+const optimizarUrl = (url: string) => {
+  if (!url) return url;
+  if (!url.includes('cloudinary.com')) return url;
+  return url.replace('/upload/', '/upload/f_auto,q_auto,w_600/');
+};
+
 // ─── PLACEHOLDER ─────────────────────────────────────────────
 const ImgPlaceholder = ({ ratio = '16/9' }: { ratio?: string }) => (
   <div style={{
@@ -57,12 +64,7 @@ const ImgPlaceholder = ({ ratio = '16/9' }: { ratio?: string }) => (
     backgroundColor: '#F0F0F0',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
   }}>
-    <svg width="56" height="40" viewBox="0 0 56 40" fill="none">
-      <rect x="2" y="12" width="52" height="26" rx="4" stroke="#CCC" strokeWidth="2" fill="none"/>
-      <path d="M8 12L14 4h28l6 8" stroke="#CCC" strokeWidth="2" strokeLinejoin="round"/>
-      <circle cx="14" cy="36" r="4" fill="#CCC"/>
-      <circle cx="42" cy="36" r="4" fill="#CCC"/>
-    </svg>
+    <span style={{ fontSize: 13, color: '#CCCCCC', fontWeight: 500 }}>Próximamente</span>
   </div>
 );
 
@@ -101,7 +103,7 @@ function Galeria({ fotos, alt }: { fotos: string[]; alt: string }) {
   return (
     <div style={{ position: 'relative', borderRadius: '12px 12px 0 0', overflow: 'hidden', backgroundColor: '#000' }}
       onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
-      <img src={fotos[idx]} alt={`${alt} ${idx + 1}`} style={{
+      <img src={optimizarUrl(fotos[idx])} alt={`${alt} ${idx + 1}`} style={{
         width: '100%', aspectRatio: '16/9', objectFit: 'cover', display: 'block',
         transition: 'opacity 0.3s',
       }} />
@@ -176,7 +178,7 @@ function CardAuto({
       {/* Foto 16:9 */}
       <div style={{ position: 'relative', flexShrink: 0 }}>
         {foto ? (
-          <img src={foto} alt={`${auto.marca} ${auto.modelo}`} style={{
+          <img src={optimizarUrl(foto)} alt={`${auto.marca} ${auto.modelo}`} style={{
             width: '100%', aspectRatio: '16/9', objectFit: 'cover', display: 'block',
           }} />
         ) : <ImgPlaceholder ratio="16/9" />}

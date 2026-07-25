@@ -65,6 +65,13 @@ function useDebounce<T>(val: T, ms: number): T {
   return d;
 }
 
+// ─── OPTIMIZAR URL CLOUDINARY ────────────────────────────────
+const optimizarUrl = (url: string) => {
+  if (!url) return url;
+  if (!url.includes('cloudinary.com')) return url;
+  return url.replace('/upload/', '/upload/f_auto,q_auto,w_600/');
+};
+
 // ─── PLACEHOLDER IMAGEN ───────────────────────────────────────
 const ImgPlaceholder = ({ size = 160 }: { size?: number }) => (
   <div style={{
@@ -152,7 +159,7 @@ function CardProducto({
 
       <div onClick={() => onDetalle(p)} style={{ flexShrink: 0 }}>
         {p.imagen_url ? (
-          <img src={p.imagen_url} alt={p.descripcion} style={{
+          <img src={optimizarUrl(p.imagen_url)} alt={p.descripcion} style={{
             width: '100%', height: 180, objectFit: 'cover', display: 'block',
           }} />
         ) : <ImgPlaceholder size={180} />}
@@ -231,7 +238,7 @@ function ModalDetalle({
         }}>✕</button>
 
         {p.imagen_url ? (
-          <img src={p.imagen_url} alt={p.descripcion} style={{
+          <img src={optimizarUrl(p.imagen_url)} alt={p.descripcion} style={{
             width: '100%', height: 320, objectFit: 'cover',
             borderRadius: '12px 12px 0 0',
           }} />
@@ -326,7 +333,7 @@ function PanelCarrito({
               borderBottom: `1px solid ${C.borde}`,
             }}>
               {item.imagen_url ? (
-                <img src={item.imagen_url} alt={item.descripcion} style={{ width: 60, height: 60, objectFit: 'cover', borderRadius: 6, flexShrink: 0 }} />
+                <img src={optimizarUrl(item.imagen_url)} alt={item.descripcion} style={{ width: 60, height: 60, objectFit: 'cover', borderRadius: 6, flexShrink: 0 }} />
               ) : (
                 <div style={{ width: 60, height: 60, backgroundColor: '#F0F0F0', borderRadius: 6, flexShrink: 0 }} />
               )}
