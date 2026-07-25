@@ -1007,7 +1007,13 @@ function RobertoVentas() {
                               onMouseLeave={e => { e.currentTarget.style.backgroundColor = '#fff'; }}>
                               <span style={{ fontFamily: 'monospace', color: GRAY, fontSize: '11px' }}>{p.codigo || '—'}</span>
                               <span style={{ fontWeight: 500, color: TEXT }}>{p.descripcion}</span>
-                              <span style={{ fontWeight: 700, color: GREEN }}>{fmt(p.precio_venta_1 || 0)}</span>
+                              <span style={{ fontWeight: 700, color: GREEN }}>{fmt(
+                                listaPrecio === 'pv1'
+                                  ? (p.precio_venta_1 || p.precio_venta_final || p.precio_costo || 0)
+                                  : listaPrecio === 'pv2'
+                                  ? (p.precio_venta_2 || p.precio_venta_1 || p.precio_venta_final || p.precio_costo || 0)
+                                  : (p.precio_venta_3 || p.precio_venta_2 || p.precio_venta_1 || p.precio_venta_final || p.precio_costo || 0)
+                              )}</span>
                               <span style={{ fontWeight: 700, color: (p.stock_actual || 0) <= 0 ? RED : TEXT }}>
                                 {p.stock_actual ?? 0}
                               </span>
