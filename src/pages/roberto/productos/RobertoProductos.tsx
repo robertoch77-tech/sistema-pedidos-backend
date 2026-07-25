@@ -1482,7 +1482,7 @@ function RobertoProductos() {
     try {
       let ids: number[];
       if (modoAplicar === 'filtrados') {
-        const params = new URLSearchParams({ cliente_id: String(clienteId), limit: String(Math.min(total || 9999, 5000)) });
+        const params = new URLSearchParams({ limit: String(Math.min(total || 9999, 5000)) });
         if (busquedaDb.trim()) params.set('buscar', busquedaDb.trim());
         if (filtroProveedor) params.set('proveedor_id', filtroProveedor);
         if (filtroMarca) params.set('marca', filtroMarca);
@@ -1491,7 +1491,7 @@ function RobertoProductos() {
         if (fechaDesde) params.set('fecha_desde', fechaDesde);
         if (fechaHasta) params.set('fecha_hasta', fechaHasta);
         if (fechaDesde || fechaHasta) params.set('fecha_tipo', fechaTipo);
-        const rIds = await fetch(`${API}/api/superadmin/importador/productos?${params}`, {
+        const rIds = await fetch(`${API}/api/superadmin/importador/productos/${clienteId}?${params}`, {
           headers: { 'x-superadmin-token': token },
         });
         const dIds = await rIds.json();
