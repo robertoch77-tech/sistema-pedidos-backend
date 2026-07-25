@@ -1240,6 +1240,10 @@ function RobertoProductos() {
   // Filtros
   const [busqueda,        setBusqueda]        = useState('');
   const [filtroProveedor, setFiltroProveedor] = useState('');
+  const [busqProv,        setBusqProv]        = useState('');
+  const [busqProvText,    setBusqProvText]    = useState('');
+  const [dropProvOpen,    setDropProvOpen]    = useState(false);
+  const busqProvTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [filtroMarca,     setFiltroMarca]     = useState('');
   const [filtroRubro,     setFiltroRubro]     = useState('');
   const [filtroEstado,    setFiltroEstado]    = useState('');
@@ -1604,7 +1608,7 @@ function RobertoProductos() {
       });
       const d = await r.json();
       if (r.ok && d.ok) {
-        setBusqueda(''); setFiltroProveedor(''); setFiltroMarca(''); setFiltroRubro(''); setFiltroEstado('');
+        setBusqueda(''); setFiltroProveedor(''); setBusqProvText(''); setBusqProv(''); setFiltroMarca(''); setFiltroRubro(''); setFiltroEstado('');
         setFechaDesde(''); setFechaHasta('');
         cargarProductos(1); cargarFiltros();
       } else alert(d.mensaje || 'Error al eliminar');
@@ -1889,30 +1893,58 @@ function RobertoProductos() {
             <label style={labelSt}>Buscar</label>
             <input style={{ ...inputSt, fontSize: 13, padding: '7px 10px' }} value={busqueda} onChange={e => setBusqueda(e.target.value)} placeholder="Código o descripción..." />
           </div>
-          <div style={{ flex: '1 1 130px' }}>
+          <div style={{ flex: '1 1 200px', position: 'relative' }}>
             <label style={labelSt}>Proveedor</label>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 2 }}>
-              <button onClick={() => { setFiltroProveedor(''); setPagina(1); }}
-                style={{ background: filtroProveedor === '' ? '#2B6CB0' : '#F0F0F0', color: filtroProveedor === '' ? '#fff' : '#333', border: 'none', borderRadius: 20, padding: '4px 12px', cursor: 'pointer', fontSize: 13 }}>
-                Todos
-              </button>
-              {filtrosOpts.proveedores.map(p => (
-                <div key={p.id} style={{ display: 'flex', alignItems: 'center', background: filtroProveedor === String(p.id) ? '#2B6CB0' : '#F0F0F0', borderRadius: 20, overflow: 'hidden' }}>
-                  <button onClick={() => { setFiltroProveedor(String(p.id)); setPagina(1); }}
-                    style={{ background: 'none', border: 'none', color: filtroProveedor === String(p.id) ? '#fff' : '#333', padding: '4px 8px 4px 12px', cursor: 'pointer', fontSize: 13 }}>
-                    {p.nombre}
-                  </button>
-                  <button onClick={async () => {
-                    if (!window.confirm(`¿Eliminar proveedor "${p.nombre}"?`)) return;
-                    await fetch(`${API}/api/superadmin/importador/proveedor/${clienteId}/${p.id}`, { method: 'DELETE', headers: { 'x-superadmin-token': token } });
-                    cargarFiltros();
-                    if (filtroProveedor === String(p.id)) setFiltroProveedor('');
-                  }} style={{ background: 'none', border: 'none', color: filtroProveedor === String(p.id) ? '#fff' : '#999', padding: '4px 8px 4px 4px', cursor: 'pointer', fontSize: 11 }}>
-                    ✕
-                  </button>
-                </div>
-              ))}
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+              <input
+                style={{ ...inputSt, fontSize: 13, padding: '7px 10px', paddingRight: filtroProveedor ? 28 : 10 }}
+                value={busqProvText}
+                placeholder={filtroProveedor ? filtrosOpts.proveedores.find(p => String(p.id) === filtroProveedor)?.nombre || 'Buscar proveedor...' : 'Todos los proveedores'}
+                onChange={e => {
+                  const v = e.target.value;
+                  setBusqProvText(v);
+                  setDropProvOpen(true);
+                  if (busqProvTimer.current) clearTimeout(busqProvTimer.current);
+                  busqProvTimer.current = setTimeout(() => setBusqProv(v), 300);
+                }}
+                onFocus={() => setDropProvOpen(true)}
+                onBlur={() => setTimeout(() => setDropProvOpen(false), 150)}
+              />
+              {filtroProveedor && (
+                <button
+                  onClick={() => { setFiltroProveedor(''); setBusqProvText(''); setBusqProv(''); setPagina(1); }}
+                  style={{ position: 'absolute', right: 6, background: 'none', border: 'none', cursor: 'pointer', color: GRAY, fontSize: 14, lineHeight: 1, padding: 2 }}
+                  title="Limpiar filtro"
+                >✕</button>
+              )}
             </div>
+            {dropProvOpen && (
+              <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, backgroundColor: '#fff', border: '1.5px solid #CBD5E0', borderRadius: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.12)', zIndex: 50, marginTop: 2, overflow: 'hidden' }}>
+                {(() => {
+                  const txt = busqProv.toLowerCase();
+                  const opts = txt
+                    ? filtrosOpts.proveedores.filter(p => p.nombre.toLowerCase().includes(txt)).slice(0, 8)
+                    : filtrosOpts.proveedores.slice(0, 8);
+                  return opts.length === 0
+                    ? <div style={{ padding: '8px 12px', fontSize: 13, color: GRAY }}>Sin resultados</div>
+                    : opts.map(p => (
+                      <button
+                        key={p.id}
+                        onMouseDown={() => {
+                          setFiltroProveedor(String(p.id));
+                          setBusqProvText('');
+                          setBusqProv('');
+                          setDropProvOpen(false);
+                          setPagina(1);
+                        }}
+                        style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px', fontSize: 13, background: filtroProveedor === String(p.id) ? '#EBF8FF' : 'none', border: 'none', cursor: 'pointer', color: filtroProveedor === String(p.id) ? BLUE : TEXT, fontWeight: filtroProveedor === String(p.id) ? 600 : 400 }}
+                      >
+                        {p.nombre}
+                      </button>
+                    ));
+                })()}
+              </div>
+            )}
           </div>
           <div style={{ flex: '1 1 120px' }}>
             <label style={labelSt}>Marca</label>
@@ -1949,7 +1981,7 @@ function RobertoProductos() {
             <input type="date" style={{ ...inputSt, width: 140, fontSize: 13, padding: '7px 10px' }} value={fechaHasta} onChange={e => { setFechaHasta(e.target.value); setPagina(1); }} />
           </div>
           {hayFiltros && (
-            <button style={btnStyle('#EDF2F7', GRAY)} onClick={() => { setBusqueda(''); setFiltroProveedor(''); setFiltroMarca(''); setFiltroRubro(''); setFiltroEstado(''); setFechaDesde(''); setFechaHasta(''); }}>
+            <button style={btnStyle('#EDF2F7', GRAY)} onClick={() => { setBusqueda(''); setFiltroProveedor(''); setBusqProvText(''); setBusqProv(''); setFiltroMarca(''); setFiltroRubro(''); setFiltroEstado(''); setFechaDesde(''); setFechaHasta(''); }}>
               ✕ Limpiar filtros
             </button>
           )}
