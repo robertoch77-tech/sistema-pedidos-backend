@@ -914,9 +914,10 @@ function ModalEditarProducto({ producto, proveedores, clienteId, token, onCerrar
       fd.append('upload_preset', UPLOAD_PRESET);
       const r = await fetch(`https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`, { method: 'POST', body: fd });
       const d = await r.json();
+      console.log('Cloudinary response:', d);
       if (d.secure_url) setForm(prev => ({ ...prev, imagen_url: d.secure_url }));
-      else throw new Error('Sin URL');
-    } catch { alert('Error al subir la imagen. Usá la opción "Pegar URL".'); }
+      else { console.error('Cloudinary error:', d); throw new Error(JSON.stringify(d)); }
+    } catch (err) { console.error('Cloudinary fetch error:', err); alert('Error al subir la imagen. Usá la opción "Pegar URL".'); }
     finally { setSubiendoImg(false); }
   };
 

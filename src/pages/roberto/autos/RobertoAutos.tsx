@@ -183,9 +183,10 @@ function GaleriaFotosEditor({ fotos, onChange }: { fotos: string[]; onChange: (f
       fd.append('upload_preset', UPLOAD_PRESET);
       const r = await fetch(`https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`, { method: 'POST', body: fd });
       const d = await r.json();
+      console.log('Cloudinary response:', d);
       if (d.secure_url) onChange([...fotos, d.secure_url]);
-      else throw new Error();
-    } catch { alert('Error al subir. Usá "Pegar URL".'); }
+      else { console.error('Cloudinary error:', d); throw new Error(JSON.stringify(d)); }
+    } catch (err) { console.error('Cloudinary fetch error:', err); alert('Error al subir. Usá "Pegar URL".'); }
     finally { setSubiendo(false); }
   };
 
