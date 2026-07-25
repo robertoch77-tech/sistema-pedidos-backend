@@ -42,7 +42,7 @@ async function asegurarTablas() {
         proveedor_id BIGINT NOT NULL,
         numero       TEXT DEFAULT '',
         fecha        DATE NOT NULL DEFAULT CURRENT_DATE,
-        monto_total  NUMERIC NOT NULL DEFAULT 0,
+        total_pagado  NUMERIC NOT NULL DEFAULT 0,
         observaciones TEXT DEFAULT '',
         usuario      TEXT DEFAULT '',
         creado_en    TIMESTAMPTZ DEFAULT now()
@@ -493,7 +493,7 @@ router.post('/proveedores/:cliente_id/pago', async (req, res) => {
     const numero = `CP-${String(numRes.rows[0].num).padStart(6, '0')}`;
 
     const cpRes = await client.query(
-      `INSERT INTO cartas_pago (cliente_id, proveedor_id, numero, fecha, monto_total, observaciones)
+      `INSERT INTO cartas_pago (cliente_id, proveedor_id, numero, fecha, total_pagado, observaciones)
        VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
       [cliente_id, proveedor_id, numero, fecha || new Date().toISOString().slice(0,10), n(monto_total), observaciones || '']
     );
@@ -526,9 +526,9 @@ router.post('/proveedores/:cliente_id/pago', async (req, res) => {
 
     // Saldo proveedor
     const provRes = await client.query(
-      `SELECT saldo FROM proveedores WHERE id=$1 FOR UPDATE`, [proveedor_id]
+      `SELECT saldo_actual FROM proveedores WHERE id=$1 FOR UPDATE`, [proveedor_id]
     );
-    const saldoAnterior = n(provRes.rows[0]?.saldo ?? 0);
+    const saldoAnterior = n(provRes.rows[0]?.saldo_actual ?? 0);
     const saldoNuevo    = saldoAnterior - n(monto_total);
 
     // INSERT movimiento
@@ -551,7 +551,7 @@ router.post('/proveedores/:cliente_id/pago', async (req, res) => {
     const saldoVencido = Math.max(0, n(vencRes.rows[0].sv));
 
     await client.query(
-      `UPDATE proveedores SET saldo=$1, saldo_vencido=$2, modificado_en=now() WHERE id=$3`,
+      `UPDATE proveedores SET saldo_actual=$1, saldo_vencido=$2, modificado_en=now() WHERE id=$3`,
       [saldoNuevo, saldoVencido, proveedor_id]
     );
 
