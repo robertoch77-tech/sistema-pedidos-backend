@@ -1482,7 +1482,7 @@ function RobertoProductos() {
     try {
       let ids: number[];
       if (modoAplicar === 'filtrados') {
-        const params = new URLSearchParams({ cliente_id: String(clienteId), por_pagina: String(total || 9999) });
+        const params = new URLSearchParams({ cliente_id: String(clienteId), limit: String(Math.min(total || 9999, 5000)) });
         if (busquedaDb.trim()) params.set('buscar', busquedaDb.trim());
         if (filtroProveedor) params.set('proveedor_id', filtroProveedor);
         if (filtroMarca) params.set('marca', filtroMarca);
