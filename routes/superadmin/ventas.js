@@ -375,9 +375,12 @@ router.get('/buscar-ean/:cliente_id/:ean', async (req, res) => {
     const { cliente_id, ean } = req.params;
     const result = await pool.query(
       `SELECT id, codigo, descripcion, precio_costo,
-              COALESCE(precio_venta_1, 0) AS precio_venta_1,
-              COALESCE(stock_actual, 0)   AS stock_actual,
-              COALESCE(alicuota_iva, 21)  AS alicuota_iva,
+              COALESCE(precio_venta_1, 0)     AS precio_venta_1,
+              COALESCE(precio_venta_2, 0)     AS precio_venta_2,
+              COALESCE(precio_venta_3, 0)     AS precio_venta_3,
+              COALESCE(precio_venta_final, 0) AS precio_venta_final,
+              COALESCE(stock_actual, 0)       AS stock_actual,
+              COALESCE(alicuota_iva, 21)      AS alicuota_iva,
               ean
        FROM productos_propios
        WHERE ean = $1 AND cliente_id = $2 AND activo = true
