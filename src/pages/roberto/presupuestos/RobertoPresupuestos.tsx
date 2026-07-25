@@ -66,6 +66,10 @@ interface ProductoResult {
   codigo: string;
   descripcion: string;
   precio_venta_1: number;
+  precio_venta_2: number;
+  precio_venta_3: number;
+  precio_venta_final: number;
+  precio_costo: number;
   stock_actual: number;
   alicuota_iva: number;
   ean: string;
@@ -458,6 +462,7 @@ function RobertoPresupuestos() {
   // Items
   const [items,         setItems]          = useState<ItemForm[]>([]);
   const [busqProd,      setBusqProd]       = useState('');
+  const [listaPrecio,   setListaPrecio]   = useState<'pv1'|'pv2'|'pv3'>('pv1');
   const [prodsDrop,     setProdsDrop]      = useState<ProductoResult[]>([]);
   const [showDrop,      setShowDrop]       = useState(false);
   const [loadProd,      setLoadProd]       = useState(false);
@@ -575,7 +580,13 @@ function RobertoPresupuestos() {
     setItems(prev => [...prev, {
       tempId: nextTid(), producto_id: p.id, codigo: p.codigo || '',
       descripcion: p.descripcion, es_libre: false,
-      cantidad: 1, precio: parseFloat(String(p.precio_venta_1)) || 0,
+      cantidad: 1, precio: parseFloat(String(
+        listaPrecio === 'pv1'
+          ? (p.precio_venta_1 || p.precio_venta_final || p.precio_costo)
+          : listaPrecio === 'pv2'
+          ? (p.precio_venta_2 || p.precio_venta_1 || p.precio_venta_final || p.precio_costo)
+          : (p.precio_venta_3 || p.precio_venta_2 || p.precio_venta_1 || p.precio_venta_final || p.precio_costo)
+      )) || 0,
       dto: 0, alicuota: parseFloat(String(p.alicuota_iva)) || 21,
       stock_actual: parseFloat(String(p.stock_actual)) || 0,
     }]);
@@ -957,6 +968,15 @@ function RobertoPresupuestos() {
                 <div style={{ marginBottom: '20px' }}>
                   <div style={{ fontSize: '12px', fontWeight: 700, color: NAVY, textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `2px solid ${SEP}`, paddingBottom: '6px', marginBottom: '12px' }}>📦 Productos</div>
 
+                  <div style={{ display: 'flex', gap: '6px', marginBottom: '8px', alignItems: 'center' }}>
+                    <span style={{ fontSize: '11px', fontWeight: 700, color: GRAY, textTransform: 'uppercase', letterSpacing: '0.4px', whiteSpace: 'nowrap' }}>Lista precio:</span>
+                    {(['pv1', 'pv2', 'pv3'] as const).map(lp => (
+                      <button key={lp} onClick={() => setListaPrecio(lp)} style={{ padding: '4px 10px', fontSize: '12px', fontWeight: 700, border: 'none', borderRadius: '6px', cursor: 'pointer', backgroundColor: listaPrecio === lp ? BLUE : '#EDF2F7', color: listaPrecio === lp ? '#fff' : GRAY }}>
+                        {lp.toUpperCase()}
+                      </button>
+                    ))}
+                  </div>
+
                   <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
                     <div style={{ position: 'relative', flex: 1 }}>
                       <input ref={itemRef} value={busqProd}
@@ -979,7 +999,13 @@ function RobertoPresupuestos() {
                               onMouseLeave={e => { e.currentTarget.style.backgroundColor = '#fff'; }}>
                               <span style={{ fontFamily: 'monospace', color: GRAY, fontSize: '11px' }}>{p.codigo || '—'}</span>
                               <span style={{ fontWeight: 500 }}>{p.descripcion}</span>
-                              <span style={{ fontWeight: 700, color: GREEN }}>{fmt(p.precio_venta_1 || 0)}</span>
+                              <span style={{ fontWeight: 700, color: GREEN }}>{fmt(
+                                listaPrecio === 'pv1'
+                                  ? (p.precio_venta_1 || p.precio_venta_final || p.precio_costo || 0)
+                                  : listaPrecio === 'pv2'
+                                  ? (p.precio_venta_2 || p.precio_venta_1 || p.precio_venta_final || p.precio_costo || 0)
+                                  : (p.precio_venta_3 || p.precio_venta_2 || p.precio_venta_1 || p.precio_venta_final || p.precio_costo || 0)
+                              )}</span>
                               <span style={{ fontWeight: 700, color: (p.stock_actual || 0) <= 0 ? RED : TEXT }}>{p.stock_actual ?? 0}</span>
                             </div>
                           ))}
