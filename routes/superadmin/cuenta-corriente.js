@@ -14,7 +14,7 @@ async function asegurarTablas() {
         cuenta_corriente_id BIGINT NOT NULL,
         numero              TEXT DEFAULT '',
         fecha               DATE NOT NULL DEFAULT CURRENT_DATE,
-        monto_total         NUMERIC NOT NULL DEFAULT 0,
+        total_cobrado        NUMERIC NOT NULL DEFAULT 0,
         observaciones       TEXT DEFAULT '',
         usuario             TEXT DEFAULT '',
         creado_en           TIMESTAMPTZ DEFAULT now()
@@ -358,7 +358,7 @@ router.post('/clientes/:cliente_id/cobro', async (req, res) => {
 
     // INSERT cobranza
     const cobRes = await client.query(
-      `INSERT INTO cobranzas (cliente_id, cuenta_corriente_id, numero, fecha, monto_total, observaciones)
+      `INSERT INTO cobranzas (cliente_id, cuenta_corriente_id, numero, fecha, total_cobrado, observaciones)
        VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
       [cliente_id, cuenta_corriente_id, numero, fecha || new Date().toISOString().slice(0,10), n(monto_total), observaciones || '']
     );
