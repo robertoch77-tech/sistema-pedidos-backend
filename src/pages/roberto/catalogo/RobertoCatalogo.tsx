@@ -421,8 +421,7 @@ function TabConfig({
     try {
       const r = await fetch(`https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`, { method: 'POST', body: fd });
       const d = await r.json();
-      console.log('Cloudinary response:', d);
-      if (!r.ok) console.error('Cloudinary error:', d);
+      if (!r.ok) return null;
       return d.secure_url || null;
     } catch (err) { console.error('Cloudinary fetch error:', err); return null; }
     finally { setSubiendo(false); }
