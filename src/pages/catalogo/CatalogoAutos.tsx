@@ -603,7 +603,7 @@ function SidebarFiltrosAutos({
 
 // ─── COMPONENTE PRINCIPAL ─────────────────────────────────────
 export default function CatalogoAutos() {
-  const codigo = window.location.pathname.split('/').find((_, i, arr) => arr[i - 1] === 'catalogo') || '';
+  const codigo = window.location.pathname.split('/').pop() || '';
 
   const [config,       setConfig]       = useState<CatConfig | null>(null);
   const [autos,        setAutos]        = useState<Auto[]>([]);

@@ -549,7 +549,7 @@ function ModalPedido({
 
 // ─── COMPONENTE PRINCIPAL ─────────────────────────────────────
 export default function CatalogoPublico() {
-  const codigo = window.location.pathname.split('/').find((_, i, arr) => arr[i - 1] === 'catalogo') || '';
+  const codigo = window.location.pathname.split('/').pop() || '';
 
   const [config,       setConfig]       = useState<CatConfig | null>(null);
   const [productos,    setProductos]    = useState<Producto[]>([]);
