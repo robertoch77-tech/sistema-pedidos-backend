@@ -72,11 +72,7 @@ const ImgPlaceholder = ({ size = 160 }: { size?: number }) => (
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     borderRadius: 4,
   }}>
-    <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-      <rect x="6" y="10" width="36" height="28" rx="3" stroke="#CCCCCC" strokeWidth="2" fill="none"/>
-      <path d="M6 32l10-10 8 8 6-6 12 12" stroke="#CCCCCC" strokeWidth="2" strokeLinejoin="round"/>
-      <circle cx="16" cy="20" r="3" fill="#CCCCCC"/>
-    </svg>
+    <span style={{ fontSize: 13, color: '#CCCCCC', fontWeight: 500 }}>Próximamente</span>
   </div>
 );
 
@@ -122,13 +118,11 @@ function CardProducto({
 }) {
   const [hover, setHover] = useState(false);
   const stockLabel = config.mostrar_stock === 'cantidad'
-    ? (p.stock != null ? (p.stock > 0 ? `${p.stock} en stock` : 'Sin stock') : '')
+    ? (p.stock != null && p.stock > 0 ? `${p.stock} en stock` : '')
     : config.mostrar_stock === 'disponibilidad'
-    ? (p.disponible ? '● Disponible' : '● Sin stock')
+    ? (p.disponible ? '● Disponible' : '')
     : '';
-  const stockColor = (config.mostrar_stock === 'cantidad' && p.stock != null && p.stock > 0)
-    || (config.mostrar_stock === 'disponibilidad' && p.disponible)
-    ? C.verde : C.gris;
+  const stockColor = C.verde;
 
   return (
     <div
@@ -209,13 +203,11 @@ function ModalDetalle({
   onAgregar: (p: Producto) => void;
 }) {
   const stockLabel = config.mostrar_stock === 'cantidad'
-    ? (p.stock != null ? (p.stock > 0 ? `${p.stock} en stock` : 'Sin stock') : '')
+    ? (p.stock != null && p.stock > 0 ? `${p.stock} en stock` : '')
     : config.mostrar_stock === 'disponibilidad'
-    ? (p.disponible ? '● Disponible' : '● Sin stock')
+    ? (p.disponible ? '● Disponible' : '')
     : '';
-  const stockColor = (config.mostrar_stock === 'cantidad' && p.stock != null && p.stock > 0)
-    || (config.mostrar_stock === 'disponibilidad' && p.disponible)
-    ? C.verde : C.gris;
+  const stockColor = C.verde;
 
   const waText = encodeURIComponent(
     `Hola! Me interesa: ${p.descripcion}\nCódigo: ${p.codigo}\n¿Tienen disponibilidad?`
