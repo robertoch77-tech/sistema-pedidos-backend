@@ -562,7 +562,7 @@ function TabConfig({
                 style={{ ...inp }}
               />
               <div style={{ fontSize: 11, color: '#718096', marginTop: 2 }}>
-                {cfg.texto_bienvenida.length}/150
+                {(cfg.texto_bienvenida || '').length}/150
               </div>
             </div>
 
@@ -580,7 +580,7 @@ function TabConfig({
                 style={{ ...inp }}
               />
               <div style={{ fontSize: 11, color: '#718096', marginTop: 2 }}>
-                {cfg.mensaje_cierre.length}/150
+                {(cfg.mensaje_cierre || '').length}/150
               </div>
             </div>
           </div>
