@@ -239,11 +239,14 @@ router.post('/analizar', upload.single('archivo'), async (req, res) => {
     if (!filas.length) return res.status(400).json({ mensaje: 'El archivo está vacío' });
 
     const filaEnc = detectarEncabezado(filas);
-    const columnas = filas[filaEnc].map(c => String(c).trim()).filter(c => c !== '');
+    const columnasConIdx = filas[filaEnc]
+      .map((c, i) => ({ nombre: String(c ?? '').trim().replace('[object Object]', ''), idx: i }))
+      .filter(({ nombre }) => nombre !== '');
+    const columnas = columnasConIdx.map(c => c.nombre);
 
     const datos = filas.slice(filaEnc + 1).filter(f => f.some(c => c !== '' && c != null));
     const muestra = datos.slice(0, 5).map(fila =>
-      Object.fromEntries(columnas.map((col, i) => [col, fila[i] ?? '']))
+      Object.fromEntries(columnasConIdx.map(({ nombre, idx }) => [nombre, fila[idx] != null ? String(fila[idx]) : '']))
     );
 
     res.json({
@@ -916,10 +919,13 @@ router.post('/analizar-libre', upload.single('archivo'), async (req, res) => {
     const filas = leerExcel(req.file.buffer);
     if (!filas.length) return res.status(400).json({ mensaje: 'El archivo está vacío' });
     const headerIdx = detectarEncabezado(filas);
-    const columnas = filas[headerIdx].map(c => String(c).trim()).filter(c => c !== '');
+    const columnasConIdx = filas[headerIdx]
+      .map((c, i) => ({ nombre: String(c ?? '').trim().replace('[object Object]', ''), idx: i }))
+      .filter(({ nombre }) => nombre !== '');
+    const columnas = columnasConIdx.map(c => c.nombre);
     const datos = filas.slice(headerIdx + 1).filter(f => f.some(c => c !== '' && c != null));
     const muestra = datos.slice(0, 5).map(fila =>
-      Object.fromEntries(columnas.map((col, i) => [col, fila[i] != null ? String(fila[i]) : '']))
+      Object.fromEntries(columnasConIdx.map(({ nombre, idx }) => [nombre, fila[idx] != null ? String(fila[idx]) : '']))
     );
     res.json({ columnas, muestra, total_filas: datos.length, proveedor_sugerido: null });
   } catch (err) {
@@ -1379,10 +1385,13 @@ router.post('/analizar-v2', upload.single('archivo'), async (req, res) => {
         const filas = XLSX.utils.sheet_to_json(wb.Sheets[nombre], { header: 1, defval: '' });
         if (!filas.length) return { nombre, columnas: [], total_filas: 0, muestra: [] };
         const headerIdx = detectarEncabezado(filas);
-        const columnas = filas[headerIdx].map(c => String(c).trim()).filter(c => c !== '');
+        const columnasConIdx = filas[headerIdx]
+          .map((c, i) => ({ nombre: String(c ?? '').trim().replace('[object Object]', ''), idx: i }))
+          .filter(({ nombre }) => nombre !== '');
+        const columnas = columnasConIdx.map(c => c.nombre);
         const datos = filas.slice(headerIdx + 1).filter(f => f.some(c => c !== '' && c != null));
         const muestra = datos.slice(0, 3).map(fila =>
-          Object.fromEntries(columnas.map((col, i) => [col, fila[i] != null ? String(fila[i]) : '']))
+          Object.fromEntries(columnasConIdx.map(({ nombre, idx }) => [nombre, fila[idx] != null ? String(fila[idx]) : '']))
         );
         return { nombre, columnas, total_filas: datos.length, muestra };
       } catch { return { nombre, columnas: [], total_filas: 0, muestra: [] }; }
