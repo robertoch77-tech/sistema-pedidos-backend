@@ -132,7 +132,7 @@ router.get('/:codigo/productos', async (req, res) => {
     let   i      = 2;
 
     if (buscar) {
-      where.push(`(p.descripcion ILIKE $${i} OR p.codigo ILIKE $${i})`);
+      where.push(`(p.descripcion ILIKE $${i} OR p.codigo ILIKE $${i} OR p.marca ILIKE $${i} OR p.rubro ILIKE $${i})`);
       params.push(`%${buscar}%`); i++;
     }
     if (rubro) {
