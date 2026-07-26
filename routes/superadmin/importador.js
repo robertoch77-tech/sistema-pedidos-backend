@@ -1779,6 +1779,81 @@ router.put('/ajuste-porcentaje', async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
+// POST /buscar-imagen-producto — búsqueda IA de imagen por producto
+// ═══════════════════════════════════════════════════════════════
+router.post('/buscar-imagen-producto', async (req, res) => {
+  try {
+    const { descripcion, codigo, marca, cliente_id, productos: lote } = req.body;
+
+    // Modo lote: array de hasta 50 productos
+    if (Array.isArray(lote)) {
+      if (lote.length > 50)
+        return res.status(400).json({ mensaje: 'Máximo 50 productos por request' });
+
+      const Anthropic = require('@anthropic-ai/sdk');
+      const claude = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+      const resultados = [];
+      for (const prod of lote) {
+        try {
+          const query = [prod.descripcion, prod.marca ? 'marca ' + prod.marca : '', prod.codigo ? 'código ' + prod.codigo : ''].filter(Boolean).join(' ');
+          const response = await claude.messages.create({
+            model: 'claude-sonnet-4-6',
+            max_tokens: 200,
+            tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+            messages: [{
+              role: 'user',
+              content: `Buscá una imagen del producto: "${prod.descripcion}" ${prod.marca ? 'marca ' + prod.marca : ''} ${prod.codigo ? 'código ' + prod.codigo : ''}. Devolvé SOLO la URL directa de una imagen del producto (jpg, png o webp). Si no encontrás nada devolvé null.`,
+            }],
+          });
+          const url = extraerUrlImagen(response);
+          resultados.push({ id: prod.id, url });
+        } catch (err) {
+          console.error('buscar-imagen-producto lote item error:', err.message);
+          resultados.push({ id: prod.id, url: null });
+        }
+      }
+      return res.json({ ok: true, resultados });
+    }
+
+    // Modo individual
+    if (!descripcion)
+      return res.status(400).json({ mensaje: 'descripcion es requerida' });
+
+    const Anthropic = require('@anthropic-ai/sdk');
+    const claude = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+    const response = await claude.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 200,
+      tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+      messages: [{
+        role: 'user',
+        content: `Buscá una imagen del producto: "${descripcion}" ${marca ? 'marca ' + marca : ''} ${codigo ? 'código ' + codigo : ''}. Devolvé SOLO la URL directa de una imagen del producto (jpg, png o webp). Si no encontrás nada devolvé null.`,
+      }],
+    });
+
+    const url = extraerUrlImagen(response);
+    res.json({ ok: true, url });
+  } catch (err) {
+    console.error('POST /buscar-imagen-producto error:', err.message);
+    res.status(500).json({ mensaje: 'Error al buscar imagen', detalle: err.message });
+  }
+});
+
+function extraerUrlImagen(response) {
+  for (const block of response.content || []) {
+    if (block.type === 'text') {
+      const text = block.text || '';
+      const match = text.match(/https?:\/\/\S+\.(?:jpg|jpeg|png|webp)(?:\?\S*)?/i);
+      if (match) return match[0];
+      if (text.trim().toLowerCase() === 'null') return null;
+    }
+  }
+  return null;
+}
+
+// ═══════════════════════════════════════════════════════════════
 // DELETE /proveedor/:cliente_id/:proveedor_id — soft delete
 // ═══════════════════════════════════════════════════════════════
 router.delete('/proveedor/:cliente_id/:proveedor_id', async (req, res) => {
