@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { API_BASE } from '../../config/api';
 
 const NAVY  = '#1B2A4A';
@@ -9,6 +9,9 @@ const GRAY  = '#718096';
 const TEXT  = '#2D3748';
 const BG    = '#F4F6F9';
 const RED   = '#E53E3E';
+
+const CLOUD_NAME    = process.env.REACT_APP_CLOUDINARY_CLOUD_NAME    || '';
+const UPLOAD_PRESET = process.env.REACT_APP_CLOUDINARY_UPLOAD_PRESET || '';
 
 interface Config {
   tamano_defecto: 'A4' | 'A5';
@@ -80,7 +83,10 @@ function RobertoConfig() {
     direccion: '',
     logo_url: '',
   });
-  const [logoError,  setLogoError]  = useState(false);
+  const [logoError,    setLogoError]    = useState(false);
+  const [subiendoLogo, setSubiendoLogo] = useState(false);
+  const [modoUrlLogo,  setModoUrlLogo]  = useState(false);
+  const logoInputRef = useRef<HTMLInputElement>(null);
   const [guardando,  setGuardando]  = useState(false);
   const [cargando,   setCargando]   = useState(true);
   const [exito,      setExito]      = useState('');
@@ -145,6 +151,21 @@ function RobertoConfig() {
 
   const setF = <K extends keyof Config>(field: K) => (val: Config[K]) =>
     setConfig(prev => ({ ...prev, [field]: val }));
+
+  const subirImagenCloudinary = async (file: File) => {
+    if (!CLOUD_NAME || !UPLOAD_PRESET) { setModoUrlLogo(true); return; }
+    setSubiendoLogo(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('upload_preset', UPLOAD_PRESET);
+      const r = await fetch(`https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`, { method: 'POST', body: fd });
+      const d = await r.json();
+      if (d.secure_url) { setF('logo_url')(d.secure_url); setLogoError(false); }
+      else throw new Error(JSON.stringify(d));
+    } catch (err) { console.error('Cloudinary error:', err); alert('Error al subir la imagen. Usá la opción "Pegar URL".'); }
+    finally { setSubiendoLogo(false); }
+  };
 
   const guardar = async () => {
     if (!sesion) return;
@@ -279,20 +300,52 @@ function RobertoConfig() {
           </div>
         </div>
         <div>
-          <label style={labelStyle}>URL del logo</label>
-          <input type="url" value={config.logo_url} onChange={e => { setF('logo_url')(e.target.value); setLogoError(false); }}
-            placeholder="https://mi-negocio.com/logo.png" style={inputStyle} />
-          {config.logo_url && !logoError && (
-            <div style={{ marginTop: '12px' }}>
-              <p style={{ fontSize: '11px', fontWeight: 600, color: GRAY, textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '8px' }}>Vista previa del logo</p>
-              <div style={{ border: '1px dashed #CBD5E0', borderRadius: '8px', padding: '16px', display: 'inline-block', backgroundColor: '#FAFAFA' }}>
+          <label style={labelStyle}>Logo del negocio</label>
+          <input ref={logoInputRef} type="file" accept="image/*" style={{ display: 'none' }}
+            onChange={e => { const f = e.target.files?.[0]; if (f) subirImagenCloudinary(f); e.target.value = ''; }} />
+
+          {config.logo_url && !logoError ? (
+            <div>
+              <div style={{ border: '1px dashed #CBD5E0', borderRadius: '8px', padding: '16px', display: 'inline-block', backgroundColor: '#FAFAFA', marginBottom: '10px' }}>
                 <img src={config.logo_url} alt="Logo" onError={() => setLogoError(true)}
-                  style={{ maxHeight: '80px', maxWidth: '240px', objectFit: 'contain' }} />
+                  style={{ maxHeight: '80px', maxWidth: '240px', objectFit: 'contain', display: 'block' }} />
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button type="button" onClick={() => logoInputRef.current?.click()} disabled={subiendoLogo}
+                  style={{ backgroundColor: BLUE, color: '#fff', border: 'none', borderRadius: '7px', padding: '8px 16px', fontSize: '13px', fontWeight: 600, cursor: subiendoLogo ? 'not-allowed' : 'pointer' }}>
+                  {subiendoLogo ? 'Subiendo...' : '📷 Cambiar logo'}
+                </button>
+                <button type="button" onClick={() => { setF('logo_url')(''); setLogoError(false); setModoUrlLogo(false); }}
+                  style={{ backgroundColor: '#FFF5F5', color: RED, border: `1px solid ${RED}`, borderRadius: '7px', padding: '8px 14px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
+                  ✕ Quitar logo
+                </button>
               </div>
             </div>
-          )}
-          {logoError && (
-            <p style={{ fontSize: '12px', color: RED, marginTop: '6px' }}>No se pudo cargar la imagen. Verificá la URL.</p>
+          ) : (
+            <div>
+              <div style={{ display: 'flex', gap: '8px', marginBottom: modoUrlLogo ? '10px' : '0' }}>
+                <button type="button" onClick={() => logoInputRef.current?.click()} disabled={subiendoLogo}
+                  style={{ backgroundColor: BLUE, color: '#fff', border: 'none', borderRadius: '7px', padding: '8px 16px', fontSize: '13px', fontWeight: 600, cursor: subiendoLogo ? 'not-allowed' : 'pointer' }}>
+                  {subiendoLogo ? 'Subiendo...' : '📷 Subir logo'}
+                </button>
+                {!modoUrlLogo && (
+                  <>
+                    <span style={{ alignSelf: 'center', fontSize: '12px', color: GRAY }}>── o ──</span>
+                    <button type="button" onClick={() => setModoUrlLogo(true)}
+                      style={{ backgroundColor: '#EDF2F7', color: TEXT, border: 'none', borderRadius: '7px', padding: '8px 16px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
+                      🔗 Pegar URL
+                    </button>
+                  </>
+                )}
+              </div>
+              {modoUrlLogo && (
+                <input type="url" value={config.logo_url} onChange={e => { setF('logo_url')(e.target.value); setLogoError(false); }}
+                  placeholder="https://mi-negocio.com/logo.png" style={inputStyle} />
+              )}
+              {logoError && (
+                <p style={{ fontSize: '12px', color: RED, marginTop: '6px' }}>No se pudo cargar la imagen. Verificá la URL.</p>
+              )}
+            </div>
           )}
         </div>
       </Seccion>
