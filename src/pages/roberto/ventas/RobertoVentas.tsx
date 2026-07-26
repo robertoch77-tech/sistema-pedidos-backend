@@ -553,7 +553,7 @@ function RobertoVentas() {
       pvf: p.precio_venta_final,
       pc: p.precio_costo,
       lista: listaPrecio,
-      resultado: p.precio_venta_1 || p.precio_venta_final || p.precio_costo
+      resultado: parseFloat(p.precio_venta_1) || parseFloat(p.precio_venta_final) || parseFloat(p.precio_costo) || 0
     });
     setItems(prev => [...prev, {
       tempId:     nextId(),
@@ -562,13 +562,11 @@ function RobertoVentas() {
       descripcion: p.descripcion,
       es_libre:    false,
       cantidad:    1,
-      precio:      parseFloat(String(
-        listaPrecio === 'pv1'
-          ? (p.precio_venta_1 || p.precio_venta_final || p.precio_costo)
-          : listaPrecio === 'pv2'
-          ? (p.precio_venta_2 || p.precio_venta_1 || p.precio_venta_final || p.precio_costo)
-          : (p.precio_venta_3 || p.precio_venta_2 || p.precio_venta_1 || p.precio_venta_final || p.precio_costo)
-      )) || 0,
+      precio:      listaPrecio === 'pv1'
+        ? (parseFloat(p.precio_venta_1) || parseFloat(p.precio_venta_final) || parseFloat(p.precio_costo) || 0)
+        : listaPrecio === 'pv2'
+        ? (parseFloat(p.precio_venta_2) || parseFloat(p.precio_venta_1) || parseFloat(p.precio_venta_final) || parseFloat(p.precio_costo) || 0)
+        : (parseFloat(p.precio_venta_3) || parseFloat(p.precio_venta_2) || parseFloat(p.precio_venta_1) || parseFloat(p.precio_venta_final) || parseFloat(p.precio_costo) || 0),
       dto:         0,
       alicuota:    parseFloat(String(p.alicuota_iva))   || 21,
       stock_actual:parseFloat(String(p.stock_actual))   || 0,
@@ -1016,10 +1014,10 @@ function RobertoVentas() {
                               <span style={{ fontWeight: 500, color: TEXT }}>{p.descripcion}</span>
                               <span style={{ fontWeight: 700, color: GREEN }}>{fmt(
                                 listaPrecio === 'pv1'
-                                  ? (p.precio_venta_1 || p.precio_venta_final || p.precio_costo || 0)
+                                  ? (parseFloat(p.precio_venta_1) || parseFloat(p.precio_venta_final) || parseFloat(p.precio_costo) || 0)
                                   : listaPrecio === 'pv2'
-                                  ? (p.precio_venta_2 || p.precio_venta_1 || p.precio_venta_final || p.precio_costo || 0)
-                                  : (p.precio_venta_3 || p.precio_venta_2 || p.precio_venta_1 || p.precio_venta_final || p.precio_costo || 0)
+                                  ? (parseFloat(p.precio_venta_2) || parseFloat(p.precio_venta_1) || parseFloat(p.precio_venta_final) || parseFloat(p.precio_costo) || 0)
+                                  : (parseFloat(p.precio_venta_3) || parseFloat(p.precio_venta_2) || parseFloat(p.precio_venta_1) || parseFloat(p.precio_venta_final) || parseFloat(p.precio_costo) || 0)
                               )}</span>
                               <span style={{ fontWeight: 700, color: (p.stock_actual || 0) <= 0 ? RED : TEXT }}>
                                 {p.stock_actual ?? 0}
