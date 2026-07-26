@@ -583,9 +583,14 @@ router.get('/productos/:cliente_id', async (req, res) => {
       pool.query(
         `SELECT id, codigo, descripcion, marca,
                 proveedor_id, rubro, unidad_medida, ean, imagen_url,
-                precio_costo, dto_1, dto_2, dto_3, imp_1, imp_2,
-                precio_venta_1, precio_venta_2, precio_venta_final, precio_venta_3,
-                alicuota_iva, utilidad_1, utilidad_2, utilidad_3,
+                COALESCE(precio_costo, 0)        AS precio_costo,
+                dto_1, dto_2, dto_3, imp_1, imp_2,
+                COALESCE(precio_venta_1, 0)      AS precio_venta_1,
+                COALESCE(precio_venta_2, 0)      AS precio_venta_2,
+                COALESCE(precio_venta_final, 0)  AS precio_venta_final,
+                COALESCE(precio_venta_3, 0)      AS precio_venta_3,
+                COALESCE(alicuota_iva, 21)       AS alicuota_iva,
+                utilidad_1, utilidad_2, utilidad_3,
                 COALESCE(stock_actual, 0) AS stock_actual,
                 COALESCE(stock_minimo, 0) AS stock_minimo,
                 activo, destacado, creado_en, modificado_en
