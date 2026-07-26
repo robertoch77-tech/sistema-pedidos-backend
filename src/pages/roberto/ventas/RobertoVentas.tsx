@@ -972,7 +972,7 @@ function RobertoVentas() {
                   {/* Selector lista de precios */}
                   <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
                     {(['pv1','pv2','pv3'] as const).map(lp => (
-                      <button key={lp} onClick={() => setListaPrecio(lp)}
+                      <button key={lp} onClick={() => { console.log('CAMBIANDO A:', lp); setListaPrecio(lp); }}
                         style={{ padding: '4px 14px', borderRadius: '6px', border: 'none', cursor: 'pointer', fontWeight: 600, fontSize: '13px',
                           backgroundColor: listaPrecio === lp ? '#2B6CB0' : '#E2E8F0',
                           color:           listaPrecio === lp ? '#fff'    : '#4A5568' }}>
