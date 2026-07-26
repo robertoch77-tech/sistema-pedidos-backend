@@ -27,6 +27,7 @@ interface CatConfig {
   color_primario:    string;
   texto_bienvenida?: string;
   mensaje_cierre?:   string;
+  modo_catalogo?:    string;
 }
 
 interface Producto {
@@ -565,7 +566,10 @@ export default function CatalogoPublico() {
   const [marcasSelec,   setMarcasSelec]   = useState<string[]>([]);
   const [precioMin,     setPrecioMin]     = useState('');
   const [precioMax,     setPrecioMax]     = useState('');
-  const [soloDisponible, setSoloDisponible] = useState(false);
+  const [soloDisponible,  setSoloDisponible]  = useState(false);
+  const [soloDestacados,  setSoloDestacados]  = useState(false);
+  const [rubroOpen,       setRubroOpen]       = useState(true);
+  const [marcaOpen,       setMarcaOpen]       = useState(true);
 
   const buscarDb = useDebounce(buscar, 400);
 
@@ -634,33 +638,37 @@ export default function CatalogoPublico() {
     const params = new URLSearchParams({
       page: String(page), limit: String(LIMIT),
     });
-    if (buscarDb)                  params.set('buscar',         buscarDb);
-    if (rubrosSelec.length === 1)  params.set('rubro',          rubrosSelec[0]);
-    if (marcasSelec.length === 1)  params.set('marca',          marcasSelec[0]);
-    if (precioMin)                 params.set('precio_min',     precioMin);
-    if (precioMax)                 params.set('precio_max',     precioMax);
-    if (soloDisponible)            params.set('solo_disponible','true');
+    if (buscarDb)                  params.set('buscar',          buscarDb);
+    if (rubrosSelec.length > 0)    params.set('rubro',           rubrosSelec.join(','));
+    if (marcasSelec.length > 0)    params.set('marca',           marcasSelec.join(','));
+    if (precioMin)                 params.set('precio_min',      precioMin);
+    if (precioMax)                 params.set('precio_max',      precioMax);
+    if (soloDisponible)            params.set('solo_disponible', 'true');
+    const modoCat = config?.modo_catalogo || 'todos';
+    if (soloDestacados || modoCat === 'solo_destacados') params.set('destacado', 'true');
 
     fetch(`${API}/api/catalogo/${codigo}/productos?${params}`)
       .then(r => r.json())
       .then(d => {
         setProductos(d.productos || []);
         setTotal(d.total || 0);
-        // Destacados (solo primera carga sin filtros)
-        if (page === 1 && !buscarDb && !rubrosSelec.length && !marcasSelec.length) {
+        // Destacados separados solo en modo 'destacados_primero', primera carga sin filtros
+        if (page === 1 && !buscarDb && !rubrosSelec.length && !marcasSelec.length && modoCat === 'destacados_primero') {
           const dest = (d.productos || []).filter((p: Producto) => p.destacado);
           setDestacados(dest);
+        } else if (modoCat !== 'destacados_primero') {
+          setDestacados([]);
         }
       })
       .catch(() => {});
-  }, [codigo, page, buscarDb, rubrosSelec, marcasSelec, precioMin, precioMax, soloDisponible]);
+  }, [codigo, page, buscarDb, rubrosSelec, marcasSelec, precioMin, precioMax, soloDisponible, soloDestacados, config]);
 
   useEffect(() => {
     if (config) cargarProductos();
   }, [config, cargarProductos]);
 
   // Reset página al cambiar filtros
-  useEffect(() => { setPage(1); }, [buscarDb, rubrosSelec, marcasSelec, precioMin, precioMax, soloDisponible]);
+  useEffect(() => { setPage(1); }, [buscarDb, rubrosSelec, marcasSelec, precioMin, precioMax, soloDisponible, soloDestacados]);
 
   // ── CARRITO HELPERS ──────────────────────────────────────────
   const agregar = (p: Producto) => {
@@ -688,7 +696,7 @@ export default function CatalogoPublico() {
 
   const limpiarFiltros = () => {
     setBuscar(''); setRubrosSelec([]); setMarcasSelec([]);
-    setPrecioMin(''); setPrecioMax(''); setSoloDisponible(false);
+    setPrecioMin(''); setPrecioMax(''); setSoloDisponible(false); setSoloDestacados(false);
   };
 
   const toggleRubro = (r: string) =>
@@ -698,7 +706,7 @@ export default function CatalogoPublico() {
 
   const totalPages = Math.ceil(total / LIMIT);
   const cantCarrito = carrito.reduce((s, i) => s + i.cantidad, 0);
-  const hayFiltros = !!(buscar || rubrosSelec.length || marcasSelec.length || precioMin || precioMax || soloDisponible);
+  const hayFiltros = !!(buscar || rubrosSelec.length || marcasSelec.length || precioMin || precioMax || soloDisponible || soloDestacados);
 
   // ── PANTALLAS DE ESTADO ──────────────────────────────────────
   if (cargando) return (
@@ -722,59 +730,103 @@ export default function CatalogoPublico() {
   );
 
   // ── SIDEBAR FILTROS ──────────────────────────────────────────
+  const secTitleStyle: React.CSSProperties = {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    cursor: 'pointer', userSelect: 'none', marginBottom: 0,
+    padding: '6px 0',
+  };
+  const secLabelStyle: React.CSSProperties = {
+    fontSize: 11, fontWeight: 700, color: C.gris,
+    textTransform: 'uppercase', letterSpacing: '0.6px',
+  };
+
   const SidebarFiltros = ({ inline }: { inline?: boolean }) => (
-    <div style={{
-      width: inline ? 240 : '100%',
-      backgroundColor: inline ? 'transparent' : C.card,
-      ...(inline ? {} : { padding: '20px 24px' }),
-      flexShrink: 0,
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: C.texto }}>Filtrar</h3>
+    <div style={{ width: inline ? 240 : '100%', flexShrink: 0 }}>
+
+      {/* Cabecera */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: C.texto }}>Filtros</span>
         {hayFiltros && (
-          <button onClick={limpiarFiltros} style={{ background: 'none', border: 'none', color: C.acento, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
-            Limpiar
+          <button onClick={limpiarFiltros} style={{ background: 'none', border: 'none', color: C.acento, fontSize: 12, fontWeight: 600, cursor: 'pointer', padding: 0 }}>
+            Limpiar todo
           </button>
         )}
       </div>
 
+      {/* Solo destacados */}
+      {(config?.modo_catalogo || 'todos') !== 'solo_destacados' && (
+        <div style={{ marginBottom: 16, paddingBottom: 14, borderBottom: `1px solid ${C.borde}` }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, color: C.texto }}>
+            <input type="checkbox" checked={soloDestacados} onChange={e => setSoloDestacados(e.target.checked)}
+              style={{ accentColor: C.acento, width: 15, height: 15 }} />
+            <span>⭐ Solo destacados</span>
+          </label>
+        </div>
+      )}
+
+      {/* Categoría */}
       {filtros.rubros.length > 0 && (
-        <div style={{ marginBottom: 20 }}>
-          <p style={{ fontSize: 12, fontWeight: 700, color: C.gris, textTransform: 'uppercase', letterSpacing: '0.5px', margin: '0 0 8px' }}>Categoría</p>
-          {filtros.rubros.map(r => (
-            <label key={r} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, cursor: 'pointer', fontSize: 13, color: C.texto }}>
-              <input type="checkbox" checked={rubrosSelec.includes(r)} onChange={() => toggleRubro(r)} />
-              {r}
-            </label>
-          ))}
+        <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: `1px solid ${C.borde}` }}>
+          <div style={secTitleStyle} onClick={() => setRubroOpen(v => !v)}>
+            <span style={secLabelStyle}>
+              Categoría{rubrosSelec.length > 0 ? ` (${rubrosSelec.length})` : ''}
+            </span>
+            <span style={{ fontSize: 10, color: C.gris }}>{rubroOpen ? '▲' : '▼'}</span>
+          </div>
+          {rubroOpen && (
+            <div style={{ marginTop: 8, maxHeight: filtros.rubros.length > 5 ? 150 : 'none', overflowY: filtros.rubros.length > 5 ? 'auto' : 'visible' }}>
+              {filtros.rubros.map(r => (
+                <label key={r} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 7, cursor: 'pointer', fontSize: 13, color: C.texto }}>
+                  <input type="checkbox" checked={rubrosSelec.includes(r)} onChange={() => toggleRubro(r)}
+                    style={{ accentColor: C.acento, width: 15, height: 15, flexShrink: 0 }} />
+                  <span style={{ lineHeight: 1.3 }}>{r}</span>
+                </label>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
+      {/* Marca */}
       {filtros.marcas.length > 0 && (
-        <div style={{ marginBottom: 20 }}>
-          <p style={{ fontSize: 12, fontWeight: 700, color: C.gris, textTransform: 'uppercase', letterSpacing: '0.5px', margin: '0 0 8px' }}>Marca</p>
-          {filtros.marcas.map(m => (
-            <label key={m} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, cursor: 'pointer', fontSize: 13, color: C.texto }}>
-              <input type="checkbox" checked={marcasSelec.includes(m)} onChange={() => toggleMarca(m)} />
-              {m}
-            </label>
-          ))}
+        <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: `1px solid ${C.borde}` }}>
+          <div style={secTitleStyle} onClick={() => setMarcaOpen(v => !v)}>
+            <span style={secLabelStyle}>
+              Marca{marcasSelec.length > 0 ? ` (${marcasSelec.length})` : ''}
+            </span>
+            <span style={{ fontSize: 10, color: C.gris }}>{marcaOpen ? '▲' : '▼'}</span>
+          </div>
+          {marcaOpen && (
+            <div style={{ marginTop: 8, maxHeight: filtros.marcas.length > 5 ? 150 : 'none', overflowY: filtros.marcas.length > 5 ? 'auto' : 'visible' }}>
+              {filtros.marcas.map(m => (
+                <label key={m} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 7, cursor: 'pointer', fontSize: 13, color: C.texto }}>
+                  <input type="checkbox" checked={marcasSelec.includes(m)} onChange={() => toggleMarca(m)}
+                    style={{ accentColor: C.acento, width: 15, height: 15, flexShrink: 0 }} />
+                  <span style={{ lineHeight: 1.3 }}>{m}</span>
+                </label>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
-      <div style={{ marginBottom: 20 }}>
-        <p style={{ fontSize: 12, fontWeight: 700, color: C.gris, textTransform: 'uppercase', letterSpacing: '0.5px', margin: '0 0 8px' }}>Precio</p>
-        <div style={{ display: 'flex', gap: 8 }}>
+      {/* Precio */}
+      <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: `1px solid ${C.borde}` }}>
+        <p style={{ ...secLabelStyle, margin: '0 0 8px' }}>Precio</p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <input type="number" placeholder="Mín" value={precioMin} onChange={e => setPrecioMin(e.target.value)}
-            style={{ width: '50%', border: `1px solid ${C.borde}`, borderRadius: 6, padding: '6px 8px', fontSize: 13 }} />
+            style={{ width: '50%', border: `1px solid ${C.borde}`, borderRadius: 6, padding: '6px 8px', fontSize: 13, outline: 'none' }} />
+          <span style={{ fontSize: 11, color: C.gris, flexShrink: 0 }}>—</span>
           <input type="number" placeholder="Máx" value={precioMax} onChange={e => setPrecioMax(e.target.value)}
-            style={{ width: '50%', border: `1px solid ${C.borde}`, borderRadius: 6, padding: '6px 8px', fontSize: 13 }} />
+            style={{ width: '50%', border: `1px solid ${C.borde}`, borderRadius: 6, padding: '6px 8px', fontSize: 13, outline: 'none' }} />
         </div>
       </div>
 
+      {/* Solo disponibles */}
       <div>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, color: C.texto }}>
-          <input type="checkbox" checked={soloDisponible} onChange={e => setSoloDisponible(e.target.checked)} />
+          <input type="checkbox" checked={soloDisponible} onChange={e => setSoloDisponible(e.target.checked)}
+            style={{ accentColor: C.acento, width: 15, height: 15 }} />
           Solo disponibles
         </label>
       </div>
@@ -790,6 +842,7 @@ export default function CatalogoPublico() {
           .cat-layout { flex-direction: column !important; }
           .cat-sidebar-inline { display: none !important; }
           .cat-hero { height: 180px !important; }
+          .cat-sidebar-mobile { display: flex !important; }
         }
         @media (min-width: 769px) and (max-width: 1100px) {
           .cat-grid { grid-template-columns: repeat(2,1fr) !important; }
@@ -880,8 +933,8 @@ export default function CatalogoPublico() {
           </div>
         )}
 
-        {/* ── DESTACADOS ──────────────────────────────────── */}
-        {!hayFiltros && destacados.length > 0 && (
+        {/* ── DESTACADOS (solo en modo 'destacados_primero') ── */}
+        {!hayFiltros && destacados.length > 0 && (config?.modo_catalogo || 'todos') === 'destacados_primero' && (
           <div style={{ marginBottom: 24 }}>
             <h2 style={{ fontSize: 16, fontWeight: 700, color: C.texto, margin: '0 0 12px' }}>⭐ Destacados</h2>
             <div style={{

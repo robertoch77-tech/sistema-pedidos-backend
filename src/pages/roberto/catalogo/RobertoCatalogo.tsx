@@ -29,6 +29,7 @@ interface CatConfig {
   banners:           string[];
   texto_bienvenida:  string;
   mensaje_cierre:    string;
+  modo_catalogo:     string;
 }
 
 interface Pedido {
@@ -566,6 +567,32 @@ function TabConfig({
               </div>
             </div>
 
+            {/* Mostrar productos */}
+            <div style={{ gridColumn: '1/-1' }}>
+              <label style={{ fontSize: 12, fontWeight: 600, color: '#4A5568', display: 'block', marginBottom: 8 }}>
+                Mostrar productos en catálogo
+              </label>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {([
+                  { value: 'todos',              label: 'Todos los productos' },
+                  { value: 'destacados_primero', label: 'Destacados primero + resto' },
+                  { value: 'solo_destacados',    label: 'Solo productos destacados' },
+                ] as const).map(op => (
+                  <label key={op.value} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, color: TEXT }}>
+                    <input
+                      type="radio"
+                      name="modo_catalogo"
+                      value={op.value}
+                      checked={(cfg.modo_catalogo || 'todos') === op.value}
+                      onChange={() => setCfg(p => ({ ...p, modo_catalogo: op.value }))}
+                      style={{ accentColor: BLUE }}
+                    />
+                    {op.label}
+                  </label>
+                ))}
+              </div>
+            </div>
+
             {/* Mensaje al confirmar pedido */}
             <div style={{ gridColumn: '1/-1' }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: '#4A5568', display: 'block', marginBottom: 4 }}>
@@ -835,7 +862,7 @@ export default function RobertoCatalogo() {
               configInicial={config || {
                 cliente_id: clienteId, tipo: 'productos', activo: false,
                 mostrar_stock: 'disponibilidad', whatsapp: '', banners: [],
-                texto_bienvenida: '', mensaje_cierre: '',
+                texto_bienvenida: '', mensaje_cierre: '', modo_catalogo: 'todos',
               }}
               onConfigGuardada={setConfig}
             />
