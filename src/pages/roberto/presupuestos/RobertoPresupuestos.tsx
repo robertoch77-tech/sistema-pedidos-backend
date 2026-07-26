@@ -581,10 +581,10 @@ function RobertoPresupuestos() {
       tempId: nextTid(), producto_id: p.id, codigo: p.codigo || '',
       descripcion: p.descripcion, es_libre: false,
       cantidad: 1, precio: listaPrecio === 'pv1'
-        ? (parseFloat(p.precio_venta_1) || parseFloat(p.precio_venta_final) || parseFloat(p.precio_costo) || 0)
+        ? (parseFloat(String(p.precio_venta_1)) || parseFloat(String(p.precio_venta_final)) || parseFloat(String(p.precio_costo)) || 0)
         : listaPrecio === 'pv2'
-        ? (parseFloat(p.precio_venta_2) || parseFloat(p.precio_venta_1) || parseFloat(p.precio_venta_final) || parseFloat(p.precio_costo) || 0)
-        : (parseFloat(p.precio_venta_3) || parseFloat(p.precio_venta_2) || parseFloat(p.precio_venta_1) || parseFloat(p.precio_venta_final) || parseFloat(p.precio_costo) || 0),
+        ? (parseFloat(String(p.precio_venta_2)) || parseFloat(String(p.precio_venta_1)) || parseFloat(String(p.precio_venta_final)) || parseFloat(String(p.precio_costo)) || 0)
+        : (parseFloat(String(p.precio_venta_3)) || parseFloat(String(p.precio_venta_2)) || parseFloat(String(p.precio_venta_1)) || parseFloat(String(p.precio_venta_final)) || parseFloat(String(p.precio_costo)) || 0),
       dto: 0, alicuota: parseFloat(String(p.alicuota_iva)) || 21,
       stock_actual: parseFloat(String(p.stock_actual)) || 0,
     }]);
@@ -999,10 +999,10 @@ function RobertoPresupuestos() {
                               <span style={{ fontWeight: 500 }}>{p.descripcion}</span>
                               <span style={{ fontWeight: 700, color: GREEN }}>{fmt(
                                 listaPrecio === 'pv1'
-                                  ? (parseFloat(p.precio_venta_1) || parseFloat(p.precio_venta_final) || parseFloat(p.precio_costo) || 0)
+                                  ? (parseFloat(String(p.precio_venta_1)) || parseFloat(String(p.precio_venta_final)) || parseFloat(String(p.precio_costo)) || 0)
                                   : listaPrecio === 'pv2'
-                                  ? (parseFloat(p.precio_venta_2) || parseFloat(p.precio_venta_1) || parseFloat(p.precio_venta_final) || parseFloat(p.precio_costo) || 0)
-                                  : (parseFloat(p.precio_venta_3) || parseFloat(p.precio_venta_2) || parseFloat(p.precio_venta_1) || parseFloat(p.precio_venta_final) || parseFloat(p.precio_costo) || 0)
+                                  ? (parseFloat(String(p.precio_venta_2)) || parseFloat(String(p.precio_venta_1)) || parseFloat(String(p.precio_venta_final)) || parseFloat(String(p.precio_costo)) || 0)
+                                  : (parseFloat(String(p.precio_venta_3)) || parseFloat(String(p.precio_venta_2)) || parseFloat(String(p.precio_venta_1)) || parseFloat(String(p.precio_venta_final)) || parseFloat(String(p.precio_costo)) || 0)
                               )}</span>
                               <span style={{ fontWeight: 700, color: (p.stock_actual || 0) <= 0 ? RED : TEXT }}>{p.stock_actual ?? 0}</span>
                             </div>
