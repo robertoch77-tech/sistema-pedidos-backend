@@ -91,9 +91,10 @@ router.get('/:cid/config', async (req, res) => {
         mostrar_stock: 'disponibilidad',
         whatsapp:      '',
         banners:       [],
+        modo_catalogo: 'todos',
       });
     }
-    res.json(r.rows[0]);
+    res.json({ ...r.rows[0], modo_catalogo: r.rows[0].modo_catalogo || 'todos' });
   } catch (err) {
     console.error('superadmin/catalogo config GET error:', err.message);
     res.status(500).json({ error: 'Error del servidor' });
@@ -105,19 +106,20 @@ router.put('/:cid/config', async (req, res) => {
   try {
     const { cid } = req.params;
     const { tipo, activo, mostrar_stock, whatsapp, banners,
-            texto_bienvenida, mensaje_cierre } = req.body;
+            texto_bienvenida, mensaje_cierre, modo_catalogo } = req.body;
 
     await pool.query(`
       ALTER TABLE catalogo_config
         ADD COLUMN IF NOT EXISTS texto_bienvenida TEXT DEFAULT '',
-        ADD COLUMN IF NOT EXISTS mensaje_cierre   TEXT DEFAULT ''
+        ADD COLUMN IF NOT EXISTS mensaje_cierre   TEXT DEFAULT '',
+        ADD COLUMN IF NOT EXISTS modo_catalogo    TEXT DEFAULT 'todos'
     `);
 
     const r = await pool.query(
       `INSERT INTO catalogo_config
          (cliente_id, tipo, activo, mostrar_stock, whatsapp, banners,
-          texto_bienvenida, mensaje_cierre, modificado_en)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now())
+          texto_bienvenida, mensaje_cierre, modo_catalogo, modificado_en)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,now())
        ON CONFLICT (cliente_id) DO UPDATE SET
          tipo              = EXCLUDED.tipo,
          activo            = EXCLUDED.activo,
@@ -126,6 +128,7 @@ router.put('/:cid/config', async (req, res) => {
          banners           = EXCLUDED.banners,
          texto_bienvenida  = EXCLUDED.texto_bienvenida,
          mensaje_cierre    = EXCLUDED.mensaje_cierre,
+         modo_catalogo     = EXCLUDED.modo_catalogo,
          modificado_en     = now()
        RETURNING *`,
       [cid, tipo || 'productos', !!activo,
@@ -133,7 +136,8 @@ router.put('/:cid/config', async (req, res) => {
        whatsapp || '',
        JSON.stringify(banners || []),
        texto_bienvenida || '',
-       mensaje_cierre || '']
+       mensaje_cierre || '',
+       modo_catalogo || 'todos']
     );
     res.json({ ok: true, config: r.rows[0] });
   } catch (err) {

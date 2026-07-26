@@ -50,7 +50,7 @@ async function clienteYConfig(codigo) {
     `SELECT c.id AS cliente_id, c.nombre_comercial, c.codigo_acceso,
             m.config_habilitada,
             cc.activo, cc.tipo, cc.mostrar_stock, cc.whatsapp, cc.banners,
-            cc.texto_bienvenida, cc.mensaje_cierre
+            cc.texto_bienvenida, cc.mensaje_cierre, cc.modo_catalogo
      FROM clientes_roberto c
      LEFT JOIN mayoristas m       ON m.id = c.mayorista_id
      LEFT JOIN catalogo_config cc ON cc.cliente_id = c.id
@@ -77,6 +77,7 @@ router.get('/:codigo/config', async (req, res) => {
         banners:          [],
         texto_bienvenida: '',
         mensaje_cierre:   '',
+        modo_catalogo:    'todos',
       });
     }
 
@@ -109,6 +110,7 @@ router.get('/:codigo/config', async (req, res) => {
       color_primario,
       texto_bienvenida:  row.texto_bienvenida  || '',
       mensaje_cierre:    row.mensaje_cierre    || '',
+      modo_catalogo:     row.modo_catalogo     || 'todos',
     });
   } catch (err) {
     console.error('catalogo/config error:', err.message);
@@ -134,10 +136,20 @@ router.get('/:codigo/productos', async (req, res) => {
       params.push(`%${buscar}%`); i++;
     }
     if (rubro) {
-      where.push(`p.rubro = $${i}`); params.push(rubro); i++;
+      const rubros = Array.isArray(rubro) ? rubro : rubro.split(',').filter(Boolean);
+      if (rubros.length === 1) {
+        where.push(`p.rubro = $${i}`); params.push(rubros[0]); i++;
+      } else if (rubros.length > 1) {
+        where.push(`p.rubro = ANY($${i}::text[])`); params.push(rubros); i++;
+      }
     }
     if (marca) {
-      where.push(`p.marca = $${i}`); params.push(marca); i++;
+      const marcas = Array.isArray(marca) ? marca : marca.split(',').filter(Boolean);
+      if (marcas.length === 1) {
+        where.push(`p.marca = $${i}`); params.push(marcas[0]); i++;
+      } else if (marcas.length > 1) {
+        where.push(`p.marca = ANY($${i}::text[])`); params.push(marcas); i++;
+      }
     }
     if (precio_min) {
       where.push(`p.precio_venta_final >= $${i}`); params.push(Number(precio_min)); i++;
