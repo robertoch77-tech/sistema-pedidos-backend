@@ -1177,6 +1177,282 @@ function ModalEditarProducto({ producto, proveedores, clienteId, token, onCerrar
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// MODAL NUEVO PRODUCTO
+// ════════════════════════════════════════════════════════════════════════════
+
+interface ModalNuevoProps {
+  proveedores: { id: number; nombre: string }[];
+  clienteId: number | null;
+  token: string;
+  onCerrar: () => void;
+  onGuardado: () => void;
+}
+
+const FORM_VACIO = {
+  codigo: '', descripcion: '', descripcion_corta: '', marca: '', rubro: '',
+  proveedor_id: '' as string | number,
+  unidad_medida: '', ean: '', imagen_url: null as string | null,
+  precio_costo: 0, dto_1: 0, dto_2: 0, dto_3: 0,
+  imp_1: 0, imp_2: 0, alicuota_iva: 0,
+  utilidad_1: 0, utilidad_2: 0, utilidad_3: 0,
+  stock_actual: 0, stock_minimo: 0,
+  activo: true,
+};
+
+function ModalNuevoProducto({ proveedores, clienteId, token, onCerrar, onGuardado }: ModalNuevoProps) {
+  const [tab, setTab]       = useState<'datos' | 'precios' | 'stock'>('datos');
+  const [form, setForm]     = useState({ ...FORM_VACIO });
+  const [guardando, setGuardando] = useState(false);
+  const [error, setError]   = useState('');
+  const [pvActivo, setPvActivo] = useState<1 | 2 | 3>(1);
+  const [subiendoImg, setSubiendoImg] = useState(false);
+  const [modoUrl, setModoUrl] = useState(false);
+  const imgInputRef = useRef<HTMLInputElement>(null);
+
+  const subirImagenCloudinary = async (file: File) => {
+    if (!CLOUD_NAME || !UPLOAD_PRESET) { setModoUrl(true); return; }
+    setSubiendoImg(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('upload_preset', UPLOAD_PRESET);
+      const r = await fetch(`https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`, { method: 'POST', body: fd });
+      const d = await r.json();
+      if (d.secure_url) setForm(prev => ({ ...prev, imagen_url: d.secure_url }));
+      else throw new Error(JSON.stringify(d));
+    } catch (err) { console.error('Cloudinary error:', err); alert('Error al subir imagen. Usá "Pegar URL".'); }
+    finally { setSubiendoImg(false); }
+  };
+
+  const nv = (v: any) => parseFloat(String(v)) || 0;
+  const pcFinal = calcPcFinal(nv(form.precio_costo), nv(form.dto_1), nv(form.dto_2), nv(form.dto_3));
+  const pv1 = calcPv(pcFinal, nv(form.imp_1), nv(form.imp_2), nv(form.alicuota_iva), nv(form.utilidad_1));
+  const pv2 = calcPv(pcFinal, nv(form.imp_1), nv(form.imp_2), nv(form.alicuota_iva), nv(form.utilidad_2));
+  const pv3 = calcPv(pcFinal, nv(form.imp_1), nv(form.imp_2), nv(form.alicuota_iva), nv(form.utilidad_3));
+
+  const set = (campo: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
+    setForm(prev => ({ ...prev, [campo]: e.target.value }));
+
+  const guardar = async () => {
+    if (!form.descripcion.trim()) { setError('La descripción es obligatoria'); return; }
+    setError(''); setGuardando(true);
+    try {
+      const pvFinal = pvActivo === 1 ? pv1 : pvActivo === 2 ? pv2 : pv3;
+      const body = {
+        codigo:           form.codigo || null,
+        descripcion:      form.descripcion.trim(),
+        descripcion_corta: form.descripcion_corta || null,
+        marca:            form.marca || null,
+        rubro:            form.rubro || null,
+        proveedor_id:     form.proveedor_id || null,
+        unidad_medida:    form.unidad_medida || null,
+        ean:              form.ean || null,
+        imagen_url:       form.imagen_url || null,
+        precio_costo:     nv(form.precio_costo),
+        dto_1:            nv(form.dto_1), dto_2: nv(form.dto_2), dto_3: nv(form.dto_3),
+        precio_costo_final: pcFinal,
+        imp_1:            nv(form.imp_1), imp_2: nv(form.imp_2),
+        alicuota_iva:     nv(form.alicuota_iva),
+        utilidad_1:       nv(form.utilidad_1), utilidad_2: nv(form.utilidad_2),
+        precio_venta_1:   pv1, precio_venta_2: pv2, precio_venta_final: pvFinal,
+        stock:            nv(form.stock_actual),
+        stock_minimo:     nv(form.stock_minimo),
+        activo:           form.activo,
+      };
+      const r = await fetch(`${API}/api/superadmin/importador/productos/${clienteId}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-superadmin-token': token },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json();
+      if (!r.ok || !d.ok) throw new Error(d.mensaje || 'Error al crear producto');
+      onGuardado();
+    } catch (e: any) { setError(e.message); }
+    finally { setGuardando(false); }
+  };
+
+  const tabBtn = (t: 'datos' | 'precios' | 'stock', label: string) => (
+    <button onClick={() => setTab(t)} style={{ padding: '8px 16px', fontSize: 13, fontWeight: tab === t ? 700 : 400, color: tab === t ? BLUE : GRAY, background: tab === t ? '#EBF8FF' : 'transparent', border: 'none', borderBottom: `2px solid ${tab === t ? BLUE : 'transparent'}`, cursor: 'pointer' }}>{label}</button>
+  );
+
+  const numInput = (campo: string, label: string, suffix = '') => (
+    <div>
+      <label style={labelSt}>{label}</label>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <input type="number" step="any" style={{ ...inputSt, fontSize: 13, padding: '7px 10px' }} value={(form as any)[campo]} onChange={set(campo)} />
+        {suffix && <span style={{ fontSize: 12, color: GRAY }}>{suffix}</span>}
+      </div>
+    </div>
+  );
+
+  const calcRowN = (label: string, value: number, color = BLUE) => (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', backgroundColor: color === BLUE ? CALC_BG : CALC_BG2, borderRadius: 8, marginTop: 4 }}>
+      <span style={{ fontSize: 13, fontWeight: 600, color }}>{label}</span>
+      <span style={{ fontSize: 15, fontWeight: 700, color }}>${numFmt(value)}</span>
+    </div>
+  );
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}
+      onClick={e => { if (e.target === e.currentTarget) onCerrar(); }}>
+      <div style={{ backgroundColor: '#fff', borderRadius: 16, width: '100%', maxWidth: 640, maxHeight: '92vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+        <div style={{ backgroundColor: BLUE, borderRadius: '16px 16px 0 0', padding: '14px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: '#fff' }}>➕ Nuevo producto</div>
+          <button onClick={onCerrar} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: 8, color: '#fff', fontSize: 18, width: 32, height: 32, cursor: 'pointer', fontWeight: 700 }}>✕</button>
+        </div>
+        <div style={{ display: 'flex', borderBottom: '1px solid #E2E8F0' }}>
+          {tabBtn('datos', '📋 Datos')} {tabBtn('precios', '💰 Precios')} {tabBtn('stock', '📦 Stock')}
+        </div>
+        {error && <div style={{ backgroundColor: '#FFF5F5', borderLeft: `4px solid ${RED}`, padding: '8px 16px', color: RED, fontSize: 13, margin: '0 16px 0' }}>⚠️ {error}</div>}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px' }}>
+
+          {/* TAB DATOS */}
+          {tab === 'datos' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div>
+                  <label style={labelSt}>Código</label>
+                  <input style={{ ...inputSt, fontSize: 13, padding: '7px 10px' }} value={form.codigo} onChange={set('codigo')} />
+                </div>
+                <div>
+                  <label style={labelSt}>Unidad de medida</label>
+                  <input style={{ ...inputSt, fontSize: 13, padding: '7px 10px' }} value={form.unidad_medida} onChange={set('unidad_medida')} />
+                </div>
+              </div>
+              <div>
+                <label style={labelSt}>Descripción <span style={{ color: RED }}>*</span></label>
+                <textarea style={{ ...inputSt, fontSize: 13, padding: '7px 10px', minHeight: 64, resize: 'vertical' }} value={form.descripcion} onChange={set('descripcion')} />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div>
+                  <label style={labelSt}>Marca</label>
+                  <input style={{ ...inputSt, fontSize: 13, padding: '7px 10px' }} value={form.marca} onChange={set('marca')} />
+                </div>
+                <div>
+                  <label style={labelSt}>Rubro</label>
+                  <input style={{ ...inputSt, fontSize: 13, padding: '7px 10px' }} value={form.rubro} onChange={set('rubro')} />
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div>
+                  <label style={labelSt}>Proveedor</label>
+                  <select style={{ ...selectSt, fontSize: 13, padding: '7px 10px' }} value={form.proveedor_id} onChange={set('proveedor_id')}>
+                    <option value="">Sin proveedor</option>
+                    {proveedores.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={labelSt}>EAN / Código de barras</label>
+                  <input style={{ ...inputSt, fontSize: 13, padding: '7px 10px' }} value={form.ean} onChange={set('ean')} />
+                </div>
+              </div>
+              <div style={{ gridColumn: '1 / -1' }}>
+                <label style={labelSt}>Imagen del producto</label>
+                {form.imagen_url ? (
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 8 }}>
+                    <img src={form.imagen_url} alt="preview" style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 8, border: '1px solid #E2E8F0', flexShrink: 0 }} />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <button type="button" onClick={() => imgInputRef.current?.click()} disabled={subiendoImg}
+                        style={{ ...btnStyle(BLUE, '#fff', subiendoImg), fontSize: 12, padding: '5px 10px' }}>
+                        {subiendoImg ? '⏳ Subiendo...' : '📷 Cambiar foto'}
+                      </button>
+                      <button type="button" onClick={() => setForm(prev => ({ ...prev, imagen_url: null }))}
+                        style={{ ...btnStyle('#EDF2F7', RED), fontSize: 12, padding: '5px 10px' }}>
+                        ✕ Quitar imagen
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                    <button type="button" onClick={() => imgInputRef.current?.click()} disabled={subiendoImg}
+                      style={{ ...btnStyle(BLUE, '#fff', subiendoImg), fontSize: 12, padding: '7px 12px' }}>
+                      {subiendoImg ? '⏳ Subiendo...' : '📷 Subir foto'}
+                    </button>
+                    <button type="button" onClick={() => setModoUrl(v => !v)}
+                      style={{ ...btnStyle('#EDF2F7', GRAY), fontSize: 12, padding: '7px 12px' }}>
+                      🔗 Pegar URL
+                    </button>
+                  </div>
+                )}
+                <input ref={imgInputRef} type="file" accept="image/*" style={{ display: 'none' }}
+                  onChange={e => { const f = e.target.files?.[0]; if (f) subirImagenCloudinary(f); e.target.value = ''; }} />
+                {(modoUrl || (!form.imagen_url && CLOUD_NAME === '')) && (
+                  <input style={{ ...inputSt, fontSize: 13, padding: '7px 10px' }}
+                    placeholder="https://..."
+                    value={form.imagen_url || ''}
+                    onChange={e => setForm(prev => ({ ...prev, imagen_url: e.target.value || null }))} />
+                )}
+                {!CLOUD_NAME && (
+                  <div style={{ fontSize: 11, color: GRAY, marginTop: 4 }}>Requiere REACT_APP_CLOUDINARY_CLOUD_NAME</div>
+                )}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <label style={{ fontSize: 13, fontWeight: 600, color: TEXT, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={form.activo} onChange={e => setForm(prev => ({ ...prev, activo: e.target.checked }))} style={{ accentColor: GREEN }} />
+                  Producto activo
+                </label>
+              </div>
+            </div>
+          )}
+
+          {/* TAB PRECIOS */}
+          {tab === 'precios' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {numInput('precio_costo', 'PC Base (precio costo)', '$')}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+                {numInput('dto_1', 'Descuento 1%', '%')}
+                {numInput('dto_2', 'Descuento 2%', '%')}
+                {numInput('dto_3', 'Descuento 3%', '%')}
+              </div>
+              {calcRowN('PC Final', pcFinal)}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+                {numInput('imp_1', 'Impuesto 1%', '%')}
+                {numInput('imp_2', 'Impuesto 2%', '%')}
+                {numInput('alicuota_iva', 'IVA%', '%')}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+                {numInput('utilidad_1', 'Utilidad 1%', '%')}
+                {numInput('utilidad_2', 'Utilidad 2%', '%')}
+                {numInput('utilidad_3', 'Utilidad 3%', '%')}
+              </div>
+              {calcRowN('PV1', pv1, GREEN)}
+              {calcRowN('PV2', pv2, GREEN)}
+              {calcRowN('PV3', pv3, GREEN)}
+              <div style={{ marginTop: 8 }}>
+                <label style={labelSt}>PV activo (precio de venta principal):</label>
+                <div style={{ display: 'flex', gap: 10 }}>
+                  {([1, 2, 3] as const).map(n => (
+                    <label key={n} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13 }}>
+                      <input type="radio" name="pvActivoNuevo" checked={pvActivo === n} onChange={() => setPvActivo(n)} style={{ accentColor: GREEN }} />
+                      PV{n} (${numFmt(n === 1 ? pv1 : n === 2 ? pv2 : pv3)})
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB STOCK */}
+          {tab === 'stock' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                {numInput('stock_actual', 'Stock actual')}
+                {numInput('stock_minimo', 'Stock mínimo')}
+              </div>
+            </div>
+          )}
+        </div>
+        <div style={{ borderTop: '1px solid #E2E8F0', padding: '12px 20px', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button style={btnStyle('#EDF2F7', GRAY)} onClick={onCerrar}>Cancelar</button>
+          <button style={btnStyle(BLUE, '#fff', guardando)} disabled={guardando} onClick={guardar}>
+            {guardando ? '⏳ Guardando...' : '➕ Agregar producto'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // HOOK useDebounce
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -1315,6 +1591,7 @@ function RobertoProductos() {
   // Modals
   const [modalImportador, setModalImportador] = useState(false);
   const [modalEditar, setModalEditar]         = useState<ProductoReal | null>(null);
+  const [modalNuevo, setModalNuevo]           = useState(false);
 
   // ── Helpers edición ──────────────────────────────────────────
   const defEdit = (p: ProductoReal): EditState => ({
@@ -1676,6 +1953,9 @@ function RobertoProductos() {
       {modalEditar && <ModalEditarProducto producto={modalEditar} proveedores={filtrosOpts.proveedores} clienteId={clienteId} token={token}
         onCerrar={() => setModalEditar(null)}
         onGuardado={updated => { setProductos(prev => prev.map(p => p.id === updated.id ? updated : p)); setModalEditar(null); }} />}
+      {modalNuevo && <ModalNuevoProducto proveedores={filtrosOpts.proveedores} clienteId={clienteId} token={token}
+        onCerrar={() => setModalNuevo(false)}
+        onGuardado={() => { setModalNuevo(false); cargarProductos(1); cargarFiltros(); }} />}
 
       {/* HEADER */}
       <div style={{ backgroundColor: NAVY, padding: '14px 24px', display: 'flex', alignItems: 'center', gap: 12, position: 'sticky', top: 0, zIndex: 10 }}>
@@ -1705,6 +1985,7 @@ function RobertoProductos() {
             <button style={btnStyle(ORANGE)} onClick={() => { setModoEdit(true); setEdits({}); setMsgGuardar(''); }}>✏️ Editar precios</button>
           )}
           {msgGuardar && <span style={{ color: msgGuardar.startsWith('✅') ? '#9AE6B4' : '#FC8181', fontSize: 12, alignSelf: 'center' }}>{msgGuardar}</span>}
+          <button style={btnStyle(BLUE)} onClick={() => setModalNuevo(true)}>➕ Nuevo producto</button>
           <button style={btnStyle(BLUE)} onClick={() => setModalImportador(true)}>📥 Importar Excel</button>
           <button style={btnStyle('#2F855A', '#fff', exportando)} disabled={exportando} onClick={handleExportar}>
             {exportando ? '⏳' : '📤 Exportar'}
