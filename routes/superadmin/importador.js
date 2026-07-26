@@ -1611,16 +1611,16 @@ router.put('/actualizar-precios-v2', async (req, res) => {
              alicuota_iva=COALESCE($7,alicuota_iva),
              utilidad_1=COALESCE($8,utilidad_1), utilidad_2=COALESCE($9,utilidad_2), utilidad_3=COALESCE($10,utilidad_3),
              precio_venta_final=COALESCE($11,precio_venta_final),
-             precio_venta_2=COALESCE($12,precio_venta_2), precio_venta_3=COALESCE($13,precio_venta_3),
-             marca=COALESCE($14,marca), rubro=COALESCE($15,rubro),
-             unidad_medida=COALESCE($16,unidad_medida), stock_minimo=COALESCE($17,stock_minimo),
-             activo=COALESCE($18,activo), imagen_url=COALESCE($19,imagen_url),
+             precio_venta_1=COALESCE($12,precio_venta_1), precio_venta_2=COALESCE($13,precio_venta_2), precio_venta_3=COALESCE($14,precio_venta_3),
+             marca=COALESCE($15,marca), rubro=COALESCE($16,rubro),
+             unidad_medida=COALESCE($17,unidad_medida), stock_minimo=COALESCE($18,stock_minimo),
+             activo=COALESCE($19,activo), imagen_url=COALESCE($20,imagen_url),
              modificado_en=now()
-           WHERE id=$20 AND cliente_id=$21`,
+           WHERE id=$21 AND cliente_id=$22`,
           [p.precio_costo??null, p.descuento_1??null, p.descuento_2??null, p.descuento_3??null,
            p.impuesto_1??null, p.impuesto_2??null, p.iva??null,
            p.utilidad_1??null, p.utilidad_2??null, p.utilidad_3??null,
-           p.precio_venta_final??null, p.precio_venta_2??null, p.precio_venta_3??null,
+           p.precio_venta_final??null, p.precio_venta_1??null, p.precio_venta_2??null, p.precio_venta_3??null,
            p.marca??null, p.rubro??null, p.unidad_medida??null,
            p.stock_minimo??null, p.activo??null, p.imagen_url??null, p.id, cliente_id]
         );
