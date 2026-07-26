@@ -548,6 +548,13 @@ function RobertoVentas() {
 
   // ── Helpers de items ──────────────────────────────────────────
   const agregarProducto = (p: ProductoResult) => {
+    console.log('PRECIO DEBUG:', {
+      pv1: p.precio_venta_1,
+      pvf: p.precio_venta_final,
+      pc: p.precio_costo,
+      lista: listaPrecio,
+      resultado: p.precio_venta_1 || p.precio_venta_final || p.precio_costo
+    });
     setItems(prev => [...prev, {
       tempId:     nextId(),
       producto_id: p.id,
