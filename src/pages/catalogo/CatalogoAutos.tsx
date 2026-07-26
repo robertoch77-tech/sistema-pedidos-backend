@@ -25,6 +25,7 @@ interface CatConfig {
   activo:           boolean;
   mostrar_stock:    string;
   color_primario:   string;
+  modo_catalogo?:   string;
 }
 
 interface Auto {
@@ -496,14 +497,15 @@ function ModalConsulta({
 
 // ─── SIDEBAR FILTROS ──────────────────────────────────────────
 interface FiltrosAuto {
-  marca:     string;
-  modelo:    string;
-  anioDesde: string;
-  anioHasta: string;
-  kmMax:     string;
-  tipo:      string;
-  precioMin: string;
-  precioMax: string;
+  busquedaLibre: string;
+  marca:         string;
+  modelo:        string;
+  anioDesde:     string;
+  anioHasta:     string;
+  kmMax:         string;
+  tipo:          string;
+  precioMin:     string;
+  precioMax:     string;
 }
 
 const TIPOS_AUTO = ['auto', 'camioneta', 'moto', 'utilitario', 'camion'];
@@ -511,94 +513,178 @@ const TIPOS_AUTO = ['auto', 'camioneta', 'moto', 'utilitario', 'camion'];
 function SidebarFiltrosAutos({
   filtros, onChange, onLimpiar, marcas, hayFiltros,
 }: {
-  filtros:   FiltrosAuto;
-  onChange:  (f: Partial<FiltrosAuto>) => void;
-  onLimpiar: () => void;
-  marcas:    string[];
+  filtros:    FiltrosAuto;
+  onChange:   (f: Partial<FiltrosAuto>) => void;
+  onLimpiar:  () => void;
+  marcas:     string[];
   hayFiltros: boolean;
 }) {
+  const [marcaOpen,  setMarcaOpen]  = useState(true);
+  const [tipoOpen,   setTipoOpen]   = useState(true);
+  const [anioOpen,   setAnioOpen]   = useState(true);
+  const [kmOpen,     setKmOpen]     = useState(true);
+  const [precioOpen, setPrecioOpen] = useState(true);
+  const [modeloOpen, setModeloOpen] = useState(true);
+
   const inp: React.CSSProperties = {
     width: '100%', border: `1px solid ${C.borde}`, borderRadius: 6,
     padding: '7px 9px', fontSize: 13, color: C.texto, boxSizing: 'border-box',
+    backgroundColor: '#fff',
   };
-  const lbl: React.CSSProperties = {
-    fontSize: 12, fontWeight: 700, color: C.gris,
-    textTransform: 'uppercase', letterSpacing: '0.5px',
-    display: 'block', margin: '0 0 6px',
+  const secTitle: React.CSSProperties = {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    cursor: 'pointer', userSelect: 'none', padding: '6px 0',
+  };
+  const secLabel: React.CSSProperties = {
+    fontSize: 11, fontWeight: 700, color: C.gris,
+    textTransform: 'uppercase', letterSpacing: '0.6px',
+  };
+  const sep: React.CSSProperties = {
+    borderBottom: `1px solid ${C.borde}`, marginBottom: 12, paddingBottom: 12,
   };
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: C.texto }}>Filtrar</h3>
+      {/* Cabecera */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: C.texto }}>Filtros</span>
         {hayFiltros && (
-          <button onClick={onLimpiar} style={{ background: 'none', border: 'none', color: C.acento, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
-            Limpiar
+          <button onClick={onLimpiar} style={{ background: 'none', border: 'none', color: C.acento, fontSize: 12, fontWeight: 600, cursor: 'pointer', padding: 0 }}>
+            Limpiar todo
           </button>
         )}
       </div>
 
       {/* Marca */}
       {marcas.length > 0 && (
-        <div style={{ marginBottom: 18 }}>
-          <label style={lbl}>Marca</label>
-          <select value={filtros.marca} onChange={e => onChange({ marca: e.target.value, modelo: '' })}
-            style={{ ...inp, backgroundColor: '#fff' }}>
-            <option value="">Todas</option>
-            {marcas.map(m => <option key={m} value={m}>{m}</option>)}
-          </select>
+        <div style={sep}>
+          <div style={secTitle} onClick={() => setMarcaOpen(v => !v)}>
+            <span style={secLabel}>Marca{filtros.marca ? ' (1)' : ''}</span>
+            <span style={{ fontSize: 10, color: C.gris }}>{marcaOpen ? '▲' : '▼'}</span>
+          </div>
+          {marcaOpen && (
+            <div style={{ marginTop: 8, maxHeight: marcas.length > 5 ? 150 : 'none', overflowY: marcas.length > 5 ? 'auto' : 'visible' }}>
+              {marcas.map(m => (
+                <label key={m} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 7, cursor: 'pointer', fontSize: 13, color: C.texto }}>
+                  <input type="radio" name="marca" checked={filtros.marca === m}
+                    onChange={() => onChange({ marca: filtros.marca === m ? '' : m, modelo: '' })}
+                    style={{ accentColor: C.acento, width: 14, height: 14, flexShrink: 0 }} />
+                  <span style={{ lineHeight: 1.3 }}>{m}</span>
+                </label>
+              ))}
+              {filtros.marca && (
+                <button onClick={() => onChange({ marca: '', modelo: '' })}
+                  style={{ fontSize: 11, color: C.acento, background: 'none', border: 'none', cursor: 'pointer', padding: '2px 0' }}>
+                  ✕ Quitar selección
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
 
       {/* Modelo */}
-      <div style={{ marginBottom: 18 }}>
-        <label style={lbl}>Modelo</label>
-        <input type="text" value={filtros.modelo} onChange={e => onChange({ modelo: e.target.value })}
-          placeholder="Ej: Hilux, Focus..." style={inp} />
+      <div style={sep}>
+        <div style={secTitle} onClick={() => setModeloOpen(v => !v)}>
+          <span style={secLabel}>Modelo{filtros.modelo ? ' (1)' : ''}</span>
+          <span style={{ fontSize: 10, color: C.gris }}>{modeloOpen ? '▲' : '▼'}</span>
+        </div>
+        {modeloOpen && (
+          <div style={{ marginTop: 8 }}>
+            <input type="text" value={filtros.modelo} onChange={e => onChange({ modelo: e.target.value })}
+              placeholder="Ej: Hilux, Focus..." style={inp} />
+          </div>
+        )}
       </div>
 
       {/* Tipo */}
-      <div style={{ marginBottom: 18 }}>
-        <label style={lbl}>Tipo</label>
-        <select value={filtros.tipo} onChange={e => onChange({ tipo: e.target.value })}
-          style={{ ...inp, backgroundColor: '#fff' }}>
-          <option value="">Todos</option>
-          {TIPOS_AUTO.map(t => <option key={t} value={t}>{TIPO_LABELS[t] || t}</option>)}
-        </select>
+      <div style={sep}>
+        <div style={secTitle} onClick={() => setTipoOpen(v => !v)}>
+          <span style={secLabel}>Tipo{filtros.tipo ? ' (1)' : ''}</span>
+          <span style={{ fontSize: 10, color: C.gris }}>{tipoOpen ? '▲' : '▼'}</span>
+        </div>
+        {tipoOpen && (
+          <div style={{ marginTop: 8 }}>
+            {TIPOS_AUTO.map(t => (
+              <label key={t} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 7, cursor: 'pointer', fontSize: 13, color: C.texto }}>
+                <input type="radio" name="tipo" checked={filtros.tipo === t}
+                  onChange={() => onChange({ tipo: filtros.tipo === t ? '' : t })}
+                  style={{ accentColor: C.acento, width: 14, height: 14, flexShrink: 0 }} />
+                <span>{TIPO_LABELS[t] || t}</span>
+              </label>
+            ))}
+            {filtros.tipo && (
+              <button onClick={() => onChange({ tipo: '' })}
+                style={{ fontSize: 11, color: C.acento, background: 'none', border: 'none', cursor: 'pointer', padding: '2px 0' }}>
+                ✕ Quitar selección
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Año */}
-      <div style={{ marginBottom: 18 }}>
-        <label style={lbl}>Año</label>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <input type="number" placeholder="Desde" value={filtros.anioDesde}
-            onChange={e => onChange({ anioDesde: e.target.value })}
-            style={{ ...inp, width: '50%' }} />
-          <input type="number" placeholder="Hasta" value={filtros.anioHasta}
-            onChange={e => onChange({ anioHasta: e.target.value })}
-            style={{ ...inp, width: '50%' }} />
+      <div style={sep}>
+        <div style={secTitle} onClick={() => setAnioOpen(v => !v)}>
+          <span style={secLabel}>Año{(filtros.anioDesde || filtros.anioHasta) ? ' (1)' : ''}</span>
+          <span style={{ fontSize: 10, color: C.gris }}>{anioOpen ? '▲' : '▼'}</span>
         </div>
+        {anioOpen && (
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <input type="number" placeholder="Desde" value={filtros.anioDesde}
+              onChange={e => onChange({ anioDesde: e.target.value })}
+              style={{ ...inp, width: '50%' }} />
+            <input type="number" placeholder="Hasta" value={filtros.anioHasta}
+              onChange={e => onChange({ anioHasta: e.target.value })}
+              style={{ ...inp, width: '50%' }} />
+          </div>
+        )}
       </div>
 
       {/* Km */}
-      <div style={{ marginBottom: 18 }}>
-        <label style={lbl}>Km máximo</label>
-        <input type="number" placeholder="Ej: 100000" value={filtros.kmMax}
-          onChange={e => onChange({ kmMax: e.target.value })} style={inp} />
+      <div style={sep}>
+        <div style={secTitle} onClick={() => setKmOpen(v => !v)}>
+          <span style={secLabel}>Km máximo{filtros.kmMax ? ' (1)' : ''}</span>
+          <span style={{ fontSize: 10, color: C.gris }}>{kmOpen ? '▲' : '▼'}</span>
+        </div>
+        {kmOpen && (
+          <div style={{ marginTop: 8 }}>
+            <input type="number" placeholder="Ej: 100000" value={filtros.kmMax}
+              onChange={e => onChange({ kmMax: e.target.value })} style={inp} />
+          </div>
+        )}
       </div>
 
       {/* Precio */}
       <div style={{ marginBottom: 8 }}>
-        <label style={lbl}>Precio</label>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <input type="number" placeholder="Mín" value={filtros.precioMin}
-            onChange={e => onChange({ precioMin: e.target.value })}
-            style={{ ...inp, width: '50%' }} />
-          <input type="number" placeholder="Máx" value={filtros.precioMax}
-            onChange={e => onChange({ precioMax: e.target.value })}
-            style={{ ...inp, width: '50%' }} />
+        <div style={secTitle} onClick={() => setPrecioOpen(v => !v)}>
+          <span style={secLabel}>Precio{(filtros.precioMin || filtros.precioMax) ? ' (1)' : ''}</span>
+          <span style={{ fontSize: 10, color: C.gris }}>{precioOpen ? '▲' : '▼'}</span>
         </div>
+        {precioOpen && (
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <input type="number" placeholder="Mín" value={filtros.precioMin}
+              onChange={e => onChange({ precioMin: e.target.value })}
+              style={{ ...inp, width: '50%' }} />
+            <input type="number" placeholder="Máx" value={filtros.precioMax}
+              onChange={e => onChange({ precioMax: e.target.value })}
+              style={{ ...inp, width: '50%' }} />
+          </div>
+        )}
       </div>
+
+      {/* Limpiar al pie */}
+      {hayFiltros && (
+        <div style={{ marginTop: 16, borderTop: `1px solid ${C.borde}`, paddingTop: 12 }}>
+          <button onClick={onLimpiar} style={{
+            width: '100%', background: 'none', border: `1px solid ${C.borde}`,
+            borderRadius: 7, padding: '8px', fontSize: 13, fontWeight: 600,
+            color: C.gris, cursor: 'pointer',
+          }}>
+            Limpiar todos los filtros
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -616,7 +702,7 @@ export default function CatalogoAutos() {
   const [sidebarOpen,  setSidebarOpen]  = useState(false);
 
   const FILTROS_INIT: FiltrosAuto = {
-    marca: '', modelo: '', anioDesde: '', anioHasta: '',
+    busquedaLibre: '', marca: '', modelo: '', anioDesde: '', anioHasta: '',
     kmMax: '', tipo: '', precioMin: '', precioMax: '',
   };
   const [filtros, setFiltros] = useState<FiltrosAuto>(FILTROS_INIT);
@@ -681,6 +767,16 @@ export default function CatalogoAutos() {
 
   // ── FILTRADO LOCAL ────────────────────────────────────────────
   const autosFiltrados = autos.filter(a => {
+    if (filtrosDb.busquedaLibre) {
+      const q = filtrosDb.busquedaLibre.toLowerCase();
+      const coincide =
+        (a.marca   || '').toLowerCase().includes(q) ||
+        (a.modelo  || '').toLowerCase().includes(q) ||
+        (a.color   || '').toLowerCase().includes(q) ||
+        (a.version || '').toLowerCase().includes(q) ||
+        String(a.anio || '').includes(q);
+      if (!coincide) return false;
+    }
     if (filtrosDb.marca     && a.marca?.toLowerCase()  !== filtrosDb.marca.toLowerCase())  return false;
     if (filtrosDb.modelo    && !a.modelo?.toLowerCase().includes(filtrosDb.modelo.toLowerCase())) return false;
     if (filtrosDb.tipo      && a.tipo !== filtrosDb.tipo) return false;
@@ -693,6 +789,9 @@ export default function CatalogoAutos() {
   });
 
   const destacados = autosFiltrados.filter(a => a.destacado);
+  const autosMostrar = (config?.modo_catalogo === 'solo_destacados')
+    ? autosFiltrados.filter(a => a.destacado)
+    : autosFiltrados;
 
   const onChange = (partial: Partial<FiltrosAuto>) =>
     setFiltros(prev => ({ ...prev, ...partial }));
@@ -757,7 +856,23 @@ export default function CatalogoAutos() {
             </div>
           </div>
 
-          <div style={{ flex: 1 }} />
+          {/* Buscador */}
+          <div style={{ flex: 1, position: 'relative', maxWidth: 400 }}>
+            <input
+              type="text"
+              value={filtros.busquedaLibre}
+              onChange={e => onChange({ busquedaLibre: e.target.value })}
+              placeholder="Buscar por marca, modelo, color..."
+              style={{
+                width: '100%', border: `2px solid ${C.borde}`, borderRadius: 8,
+                padding: '9px 40px 9px 14px', fontSize: 14, color: C.texto,
+                outline: 'none', boxSizing: 'border-box', transition: 'border-color 0.2s',
+              }}
+              onFocus={e => { e.currentTarget.style.borderColor = C.acento; }}
+              onBlur={e  => { e.currentTarget.style.borderColor = C.borde; }}
+            />
+            <span style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', color: C.gris, fontSize: 16 }}>🔍</span>
+          </div>
 
           {config.whatsapp && (
             <a
@@ -778,7 +893,8 @@ export default function CatalogoAutos() {
       <div style={{ maxWidth: 1280, margin: '0 auto', padding: '20px 20px 40px' }}>
 
         {/* ── DESTACADOS ──────────────────────────────────── */}
-        {!hayFiltros && destacados.length > 0 && (
+        {!hayFiltros && destacados.length > 0
+          && (config?.modo_catalogo || 'todos') !== 'solo_destacados' && (
           <div style={{ marginBottom: 28 }}>
             <h2 style={{ fontSize: 16, fontWeight: 700, color: C.texto, margin: '0 0 14px' }}>⭐ Destacados</h2>
             <div style={{ display: 'flex', gap: 16, overflowX: 'auto', paddingBottom: 8, scrollbarWidth: 'thin' }}>
@@ -826,7 +942,7 @@ export default function CatalogoAutos() {
 
           {/* Grilla */}
           <div style={{ flex: 1, minWidth: 0 }}>
-            {autosFiltrados.length === 0 ? (
+            {autosMostrar.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '60px 0' }}>
                 <div style={{ fontSize: 52, marginBottom: 12 }}>🚗</div>
                 <p style={{ color: C.gris, fontSize: 15 }}>
@@ -844,7 +960,7 @@ export default function CatalogoAutos() {
               </div>
             ) : (
               <div className="aut-grid" style={{ display: 'grid', gap: 16 }}>
-                {autosFiltrados.map(a => (
+                {autosMostrar.map(a => (
                   <CardAuto key={a.id} auto={a} onDetalle={setDetalleAuto} />
                 ))}
               </div>
