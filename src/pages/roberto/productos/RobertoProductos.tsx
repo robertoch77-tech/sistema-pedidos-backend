@@ -1570,6 +1570,8 @@ function RobertoProductos() {
   const [campoMasivo, setCampoMasivo] = useState('');
   const [valorMasivo, setValorMasivo] = useState('');
   const [aplicandoMasivo, setAplicandoMasivo] = useState(false);
+  const [buscandoImagenes, setBuscandoImagenes] = useState(false);
+  const [progresoImagenes, setProgresoImagenes] = useState<{ actual: number; total: number; encontradas: number } | null>(null);
   const [eliminando,      setEliminando]       = useState(false);
 
   // Ajuste % precio
@@ -1846,6 +1848,46 @@ function RobertoProductos() {
     finally { setAjusteCargando(false); }
   };
 
+  // ── Buscar imágenes con IA ────────────────────────────────────
+  const handleBuscarImagenes = async () => {
+    const candidatos = modoAplicar === 'seleccionados'
+      ? productos.filter(p => seleccionados.has(p.id) && !p.imagen_url).slice(0, 50)
+      : productos.filter(p => !p.imagen_url).slice(0, 50);
+
+    if (candidatos.length === 0) { alert('Todos los productos seleccionados ya tienen imagen.'); return; }
+
+    setBuscandoImagenes(true);
+    setProgresoImagenes({ actual: 0, total: candidatos.length, encontradas: 0 });
+    let encontradas = 0;
+    try {
+      for (let i = 0; i < candidatos.length; i++) {
+        const p = candidatos[i];
+        setProgresoImagenes({ actual: i + 1, total: candidatos.length, encontradas });
+        try {
+          const r = await fetch(`${API}/api/superadmin/importador/buscar-imagen-producto`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-superadmin-token': token },
+            body: JSON.stringify({ descripcion: p.descripcion, codigo: p.codigo, marca: p.marca, cliente_id: clienteId }),
+          });
+          const d = await r.json();
+          if (d.ok && d.url) {
+            encontradas++;
+            await fetch(`${API}/api/superadmin/importador/actualizar-precios-v2`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json', 'x-superadmin-token': token },
+              body: JSON.stringify({ cliente_id: clienteId, productos: [{ id: p.id, imagen_url: d.url }] }),
+            });
+          }
+        } catch { /* continúa con el siguiente */ }
+      }
+      setProgresoImagenes({ actual: candidatos.length, total: candidatos.length, encontradas });
+      await cargarProductos(pagina);
+      setTimeout(() => setProgresoImagenes(null), 4000);
+    } finally {
+      setBuscandoImagenes(false);
+    }
+  };
+
   // ── Eliminar ──────────────────────────────────────────────────
   const handleEliminarSeleccionados = async () => {
     const n = seleccionados.size;
@@ -2041,8 +2083,22 @@ function RobertoProductos() {
                 {eliminando ? '⏳' : `🗑 Eliminar (${cantSel})`}
               </button>
             )}
+            <button
+              style={btnStyle(buscandoImagenes ? '#9F7AEA' : '#6B46C1', '#fff', buscandoImagenes)}
+              disabled={buscandoImagenes}
+              onClick={handleBuscarImagenes}
+            >
+              {buscandoImagenes && progresoImagenes
+                ? `Buscando ${progresoImagenes.actual}/${progresoImagenes.total}...`
+                : '🔍 Buscar imágenes (IA)'}
+            </button>
             <button style={btnStyle('#EDF2F7', GRAY)} onClick={() => { setSeleccionados(new Set()); resetAjuste(); setCampoMasivo(''); setValorMasivo(''); }}>✕ Limpiar</button>
           </div>
+          {progresoImagenes && progresoImagenes.actual === progresoImagenes.total && !buscandoImagenes && (
+            <div style={{ fontSize: 12, color: '#6B46C1', fontWeight: 600 }}>
+              ✅ Se encontraron {progresoImagenes.encontradas} imágenes de {progresoImagenes.total} productos
+            </div>
+          )}
 
           {/* Panel ajuste % */}
           {modoAjuste && (
