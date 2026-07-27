@@ -33,6 +33,7 @@ async function asegurarTablas() {
         consignante_telefono      TEXT DEFAULT '',
         fotos                     JSONB DEFAULT '[]',
         observaciones             TEXT DEFAULT '',
+        publicar_catalogo         BOOLEAN DEFAULT false,
         creado_en                 TIMESTAMPTZ DEFAULT now(),
         modificado_en             TIMESTAMPTZ DEFAULT now()
       )
@@ -89,6 +90,8 @@ async function asegurarTablas() {
         creado_en           TIMESTAMPTZ DEFAULT now()
       )
     `).catch(() => {});
+
+    await pool.query(`ALTER TABLE vehiculos ADD COLUMN IF NOT EXISTS publicar_catalogo BOOLEAN DEFAULT false`).catch(() => {});
 
   } catch (err) {
     console.error('autos: error asegurando tablas:', err.message);
@@ -273,7 +276,7 @@ router.put('/:cid/vehiculos/:id', async (req, res) => {
       tipo, precio_compra, precio_venta,
       precio_minimo_consignacion, valor_permuta,
       consignante_nombre, consignante_cuit, consignante_telefono,
-      fotos, observaciones,
+      fotos, observaciones, publicar_catalogo,
     } = req.body;
 
     const result = await pool.query(
@@ -296,6 +299,7 @@ router.put('/:cid/vehiculos/:id', async (req, res) => {
          consignante_telefono = COALESCE($18, consignante_telefono),
          fotos = COALESCE($19::jsonb, fotos),
          observaciones = COALESCE($20, observaciones),
+         publicar_catalogo = COALESCE($21, publicar_catalogo),
          modificado_en = now()
        WHERE id = $1 AND cliente_id = $2
        RETURNING *`,
@@ -312,6 +316,7 @@ router.put('/:cid/vehiculos/:id', async (req, res) => {
         consignante_telefono || null,
         fotos ? JSON.stringify(fotos) : null,
         observaciones || null,
+        publicar_catalogo != null ? publicar_catalogo : null,
       ]
     );
 

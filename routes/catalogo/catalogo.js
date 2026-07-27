@@ -216,7 +216,7 @@ router.get('/:codigo/autos', async (req, res) => {
       `SELECT id, marca, modelo, anio, version, color, patente, km, tipo,
               precio_venta, fotos, destacado, observaciones
        FROM vehiculos
-       WHERE cliente_id = $1 AND estado = 'disponible'
+       WHERE cliente_id = $1 AND estado = 'disponible' AND publicar_catalogo = true
        ORDER BY destacado DESC, creado_en DESC`,
       [row.cliente_id]
     );
