@@ -229,36 +229,33 @@ function numVal(fila, columna, encabezados) {
 
 // ── Middleware de auth (aplica a todas las rutas) ─────────────
 const verificarCualquierToken = (req, res, next) => {
-  const tokenSA = req.headers['x-superadmin-token'];
-  const tokenPortal = req.headers['x-roberto-token'];
+  const token = req.headers['x-superadmin-token'] || req.headers['x-roberto-token'];
 
-  if (tokenSA) {
-    verificarTokenSuperAdmin(req, res, next);
-    return;
-  }
+  if (!token) return res.status(401).json({ error: 'Token requerido' });
 
-  if (tokenPortal) {
-    pool.query(
-      'SELECT cliente_id, expira_en FROM sesiones_portal WHERE token = $1',
-      [tokenPortal]
-    ).then(sesion => {
-      if (sesion.rows.length === 0) {
+  pool.query('SELECT usuario_id, expira_en FROM sesiones_superadmin WHERE token = $1', [token])
+  .then(sa => {
+    if (sa.rows.length > 0) {
+      const expira = Number(sa.rows[0].expira_en);
+      if (expira < Date.now()) {
+        pool.query('DELETE FROM sesiones_superadmin WHERE token=$1', [token]).catch(() => {});
+        return res.status(401).json({ error: 'Sesión expirada' });
+      }
+      return next();
+    }
+    pool.query('SELECT cliente_id, expira_en FROM sesiones_portal WHERE token = $1', [token])
+    .then(portal => {
+      if (portal.rows.length === 0) {
         return res.status(401).json({ error: 'Sesión inválida' });
       }
-      const expira = Number(sesion.rows[0].expira_en);
+      const expira = Number(portal.rows[0].expira_en);
       if (expira < Date.now()) {
-        pool.query('DELETE FROM sesiones_portal WHERE token=$1', [tokenPortal])
-          .catch(() => {});
+        pool.query('DELETE FROM sesiones_portal WHERE token=$1', [token]).catch(() => {});
         return res.status(401).json({ error: 'Sesión expirada' });
       }
       next();
-    }).catch(() => {
-      res.status(500).json({ error: 'Error de autenticación' });
-    });
-    return;
-  }
-
-  res.status(401).json({ error: 'Token requerido' });
+    }).catch(() => res.status(500).json({ error: 'Error de autenticación' }));
+  }).catch(() => res.status(500).json({ error: 'Error de autenticación' }));
 };
 router.use(verificarCualquierToken);
 
