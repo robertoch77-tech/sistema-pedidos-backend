@@ -228,7 +228,38 @@ function numVal(fila, columna, encabezados) {
 }
 
 // ── Middleware de auth (aplica a todas las rutas) ─────────────
-router.use(verificarTokenSuperAdmin);
+const verificarCualquierToken = async (req, res, next) => {
+  const tokenSA = req.headers['x-superadmin-token'];
+  const tokenPortal = req.headers['x-roberto-token'];
+
+  if (tokenSA) {
+    return verificarTokenSuperAdmin(req, res, next);
+  }
+
+  if (tokenPortal) {
+    try {
+      const sesion = await pool.query(
+        'SELECT cliente_id, expira_en FROM sesiones_portal WHERE token = $1',
+        [tokenPortal]
+      );
+      if (sesion.rows.length === 0) {
+        return res.status(401).json({ error: 'Sesión inválida' });
+      }
+      if (sesion.rows[0].expira_en < Date.now()) {
+        await pool.query(
+          'DELETE FROM sesiones_portal WHERE token=$1', [tokenPortal]
+        );
+        return res.status(401).json({ error: 'Sesión expirada' });
+      }
+      next();
+    } catch (err) {
+      return res.status(500).json({ error: 'Error de autenticación' });
+    }
+  }
+
+  return res.status(401).json({ error: 'Token requerido' });
+};
+router.use(verificarCualquierToken);
 
 // ═══════════════════════════════════════════════════════════════
 // ENDPOINT 1 — POST /analizar
