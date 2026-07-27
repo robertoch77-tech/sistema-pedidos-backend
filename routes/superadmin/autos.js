@@ -527,6 +527,74 @@ router.post('/:cid/ventas', async (req, res) => {
       console.error('Error registrando venta auto en caja:', err.message);
     }
 
+    // ── Bloque CC clientes — fuera de la transacción ─────────
+    try {
+      const { medios_pago } = req.body;
+      const total_pagado = Array.isArray(medios_pago)
+        ? medios_pago.reduce((s, m) => s + (parseFloat(m.monto) || 0), 0)
+        : pv;
+      const saldo_pendiente = Math.max(0, pv - total_pagado);
+
+      // 1. Buscar o crear CC del comprador
+      let cc_id;
+      const ccExiste = await pool.query(
+        `SELECT id FROM cuentas_corrientes_clientes
+         WHERE cliente_id = $1 AND comprador_nombre = $2 LIMIT 1`,
+        [cid, comprador_nombre]
+      );
+      if (ccExiste.rows.length > 0) {
+        cc_id = ccExiste.rows[0].id;
+      } else {
+        const ccNueva = await pool.query(
+          `INSERT INTO cuentas_corrientes_clientes
+             (cliente_id, comprador_nombre, comprador_cuit, saldo, activo)
+           VALUES ($1, $2, $3, 0, true)
+           RETURNING id`,
+          [cid, comprador_nombre, comprador_cuit || '']
+        );
+        cc_id = ccNueva.rows[0].id;
+      }
+
+      // 2. Calcular saldo acumulado actual
+      const saldoRes = await pool.query(
+        `SELECT COALESCE(saldo, 0) AS saldo FROM cuentas_corrientes_clientes WHERE id = $1`,
+        [cc_id]
+      );
+      const saldo_anterior = parseFloat(saldoRes.rows[0].saldo) || 0;
+      const saldo_acumulado = saldo_anterior + saldo_pendiente;
+
+      // 3. Registrar movimiento
+      const descAuto = `${v.marca} ${v.modelo} ${v.anio || ''}`.trim();
+      await pool.query(
+        `INSERT INTO movimientos_cuentas_corrientes
+           (cuenta_corriente_id, cliente_id, tipo, descripcion,
+            debe, haber, saldo_acumulado, numero_comprobante, venta_id,
+            estado, creado_en)
+         VALUES ($1,$2,'venta_auto',$3, $4,$5,$6,$7,$8,
+                 $9, now())`,
+        [
+          cc_id, cid,
+          `Venta auto ${descAuto}`,
+          pv,
+          total_pagado,
+          saldo_acumulado,
+          `VAUT-${venta_id}`,
+          venta_id,
+          saldo_pendiente > 0 ? 'pendiente' : 'pagado',
+        ]
+      );
+
+      // 4. Actualizar saldo CC
+      await pool.query(
+        `UPDATE cuentas_corrientes_clientes
+         SET saldo = saldo + $1, modificado_en = now()
+         WHERE id = $2`,
+        [saldo_pendiente, cc_id]
+      );
+    } catch (err) {
+      console.error('Error registrando venta auto en CC:', err.message);
+    }
+
     res.json({ ok: true, venta_id });
 
   } catch (err) {
