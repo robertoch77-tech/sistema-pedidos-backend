@@ -1659,6 +1659,7 @@ function RobertoProductos() {
     if (!clienteId) return;
     setCargando(true);
     try {
+      console.log('TOKEN ENVIADO:', getToken());
       const params = buildParams({ page: String(pg), limit: String(porPagina) });
       const r = await fetch(`${API}/api/superadmin/importador/productos/${clienteId}?${params}`, { headers: { 'x-superadmin-token': token } });
       if (r.ok) { const d = await r.json(); setProductos(d.productos || []); setTotal(d.total || 0); setTotalPags(d.paginas || 1); }
