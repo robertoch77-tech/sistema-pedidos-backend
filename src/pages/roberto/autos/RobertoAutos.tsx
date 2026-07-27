@@ -498,14 +498,15 @@ function ModalVenta({ v, socios, clienteId, token, onVendido, onClose }: {
   const [form, setForm] = useState({
     comprador_nombre: '', comprador_cuit: '', comprador_telefono: '',
     precio_venta: String(v.precio_venta || ''),
-    forma_pago: 'efectivo',
-    monto_recibido: '',
     socio_id: '',
     comision_manual: '',
     tipo_comision: 'porcentaje',
     observaciones: '',
     fecha: hoy(),
   });
+  const [medios, setMedios] = useState([
+    { tipo: 'efectivo', monto: 0, referencia: '' },
+  ]);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState('');
 
@@ -536,9 +537,15 @@ function ModalVenta({ v, socios, clienteId, token, onVendido, onClose }: {
       : comManual;
   }
 
-  const vuelto = form.forma_pago === 'efectivo' && form.monto_recibido
-    ? (parseFloat(form.monto_recibido) || 0) - pv
-    : null;
+  const totalMedios = medios.reduce((s, m) => s + (m.monto || 0), 0);
+  const diferencia  = totalMedios - pv;
+
+  const setMedio = (i: number, field: string, val: string | number) =>
+    setMedios(prev => prev.map((m, idx) => idx === i ? { ...m, [field]: val } : m));
+  const agregarMedio = () =>
+    setMedios(prev => [...prev, { tipo: 'efectivo', monto: 0, referencia: '' }]);
+  const quitarMedio = (i: number) =>
+    setMedios(prev => prev.filter((_, idx) => idx !== i));
 
   const labelCosto = v.tipo === 'consignacion' ? 'Al consignante' : v.tipo === 'permuta' ? 'Valor entrada' : 'Precio compra';
 
@@ -557,7 +564,7 @@ function ModalVenta({ v, socios, clienteId, token, onVendido, onClose }: {
           comprador_cuit: form.comprador_cuit,
           comprador_telefono: form.comprador_telefono,
           precio_venta: pv,
-          forma_pago: form.forma_pago,
+          medios_pago: medios,
           socio_id: form.socio_id ? parseInt(form.socio_id) : null,
           comision_socio_manual: comManual || null,
           tipo_comision: form.tipo_comision,
@@ -583,15 +590,45 @@ function ModalVenta({ v, socios, clienteId, token, onVendido, onClose }: {
         <Campo label="CUIT"><input style={inputSt} value={form.comprador_cuit} onChange={e => set('comprador_cuit', e.target.value)} /></Campo>
         <Campo label="Teléfono"><input style={inputSt} value={form.comprador_telefono} onChange={e => set('comprador_telefono', e.target.value)} /></Campo>
         <Campo label="Precio de venta *"><input style={inputSt} type="number" value={form.precio_venta} onChange={e => set('precio_venta', e.target.value)} /></Campo>
-        <Campo label="Forma de pago">
-          <select style={selectSt} value={form.forma_pago} onChange={e => set('forma_pago', e.target.value)}>
-            {FORMAS_PAGO.map(f => <option key={f} value={f}>{fmtPago(f)}</option>)}
-          </select>
-        </Campo>
-        {form.forma_pago === 'efectivo' && (
-          <Campo label="Monto recibido"><input style={inputSt} type="number" value={form.monto_recibido} onChange={e => set('monto_recibido', e.target.value)} /></Campo>
-        )}
         <Campo label="Fecha"><input style={inputSt} type="date" value={form.fecha} onChange={e => set('fecha', e.target.value)} /></Campo>
+      </div>
+
+      {/* ── Medios de pago ───────────────────────────────────── */}
+      <div style={{ margin: '12px 0 4px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: GRIS, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Medios de pago</span>
+          <button type="button" onClick={agregarMedio}
+            style={{ background: 'none', border: `1px solid ${DORADO}`, borderRadius: 6, padding: '3px 10px', fontSize: 12, color: DORADO, cursor: 'pointer', fontWeight: 600 }}>
+            + Agregar medio
+          </button>
+        </div>
+
+        {medios.map((m, i) => (
+          <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: 8, marginBottom: 8, alignItems: 'center' }}>
+            <select value={m.tipo} onChange={e => setMedio(i, 'tipo', e.target.value)} style={selectSt}>
+              {FORMAS_PAGO.map(f => <option key={f} value={f}>{fmtPago(f)}</option>)}
+            </select>
+            <input type="number" placeholder="Monto" value={m.monto || ''} min={0} step="any"
+              onChange={e => setMedio(i, 'monto', parseFloat(e.target.value) || 0)}
+              style={inputSt} />
+            <input type="text" placeholder="Referencia (opcional)" value={m.referencia}
+              onChange={e => setMedio(i, 'referencia', e.target.value)}
+              style={inputSt} />
+            {medios.length > 1 && (
+              <button type="button" onClick={() => quitarMedio(i)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: ROJO, fontSize: 16, padding: '0 4px' }}>✕</button>
+            )}
+          </div>
+        ))}
+
+        {/* Diferencia */}
+        {pv > 0 && (
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginTop: 4,
+            color: diferencia === 0 ? VERDE : ROJO, fontWeight: 600 }}>
+            <span>Total medios: {fmt(totalMedios)}</span>
+            <span>{diferencia === 0 ? '✓ Coincide' : diferencia > 0 ? `Sobra ${fmt(diferencia)}` : `Falta ${fmt(-diferencia)}`}</span>
+          </div>
+        )}
       </div>
 
       {/* Resumen */}
@@ -612,12 +649,6 @@ function ModalVenta({ v, socios, clienteId, token, onVendido, onClose }: {
           <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
             <span style={{ color: GRIS }}>Dinero en tránsito</span>
             <span style={{ color: DORADO, fontWeight: 600 }}>{fmt(transito)}</span>
-          </div>
-        )}
-        {vuelto !== null && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
-            <span style={{ color: GRIS }}>Vuelto</span>
-            <span style={{ color: vuelto >= 0 ? VERDE : ROJO, fontWeight: 600 }}>{fmt(vuelto)}</span>
           </div>
         )}
         {comisionSocio > 0 && (
