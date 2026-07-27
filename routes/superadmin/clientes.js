@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const pool = require('../../db');
-const { verificarTokenSuperAdmin } = require('./auth');
+const { verificarCualquierToken } = require('./authMiddleware');
 
 async function asegurarColumnas() {
   try {
@@ -14,7 +14,7 @@ async function asegurarColumnas() {
 }
 asegurarColumnas();
 
-router.use(verificarTokenSuperAdmin);
+router.use(verificarCualquierToken);
 
 router.get('/', async (req, res) => {
   try {

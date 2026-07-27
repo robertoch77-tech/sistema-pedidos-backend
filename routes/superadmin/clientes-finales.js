@@ -1,7 +1,7 @@
 const express = require('express');
 const router  = express.Router();
 const pool    = require('../../db');
-const { verificarTokenSuperAdmin } = require('./auth');
+const { verificarCualquierToken } = require('./authMiddleware');
 
 async function asegurarTablas() {
   try {
@@ -84,7 +84,7 @@ async function asegurarTablas() {
 }
 asegurarTablas();
 
-router.use(verificarTokenSuperAdmin);
+router.use(verificarCualquierToken);
 
 // ─── DASHBOARD ────────────────────────────────────────────────
 router.get('/:cliente_id/dashboard', async (req, res) => {

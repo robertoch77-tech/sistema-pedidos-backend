@@ -1,7 +1,7 @@
 const express = require('express');
 const router  = express.Router();
 const pool    = require('../../db');
-const { verificarTokenSuperAdmin } = require('./auth');
+const { verificarCualquierToken } = require('./authMiddleware');
 const axios   = require('axios');
 const xml2js  = require('xml2js');
 const forge   = require('node-forge');
@@ -123,7 +123,7 @@ async function asegurarTablas() {
 }
 asegurarTablas();
 
-router.use(verificarTokenSuperAdmin);
+router.use(verificarCualquierToken);
 
 // ─── URLS ARCA ───────────────────────────────────────────────
 const WSAA_HOMO  = 'https://wsaahomo.afip.gov.ar/ws/services/LoginCms';

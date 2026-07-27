@@ -1,9 +1,9 @@
 const express = require('express');
 const router  = express.Router();
 const pool    = require('../../db');
-const { verificarTokenSuperAdmin } = require('./auth');
+const { verificarCualquierToken } = require('./authMiddleware');
 
-router.use(verificarTokenSuperAdmin);
+router.use(verificarCualquierToken);
 
 // ── helpers ───────────────────────────────────────────────────
 function n(v) { return parseFloat(v) || 0; }

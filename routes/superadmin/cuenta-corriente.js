@@ -1,7 +1,7 @@
 const express = require('express');
 const router  = express.Router();
 const pool    = require('../../db');
-const { verificarTokenSuperAdmin } = require('./auth');
+const { verificarCualquierToken } = require('./authMiddleware');
 
 // ─── TABLAS ───────────────────────────────────────────────────
 async function asegurarTablas() {
@@ -99,7 +99,7 @@ async function asegurarTablas() {
 }
 asegurarTablas();
 
-router.use(verificarTokenSuperAdmin);
+router.use(verificarCualquierToken);
 
 // ─── HELPER numérico ─────────────────────────────────────────
 function n(v) { return parseFloat(v) || 0; }

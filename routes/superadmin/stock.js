@@ -1,7 +1,7 @@
 const express = require('express');
 const router  = express.Router();
 const pool    = require('../../db');
-const { verificarTokenSuperAdmin } = require('./auth');
+const { verificarCualquierToken } = require('./authMiddleware');
 
 // ── Asegurar tablas ────────────────────────────────────────────
 async function asegurarTablas() {
@@ -85,7 +85,7 @@ async function asegurarTablas() {
 }
 asegurarTablas();
 
-router.use(verificarTokenSuperAdmin);
+router.use(verificarCualquierToken);
 
 // ═══════════════════════════════════════════════════════════════
 // GET /:cliente_id/dashboard — métricas
