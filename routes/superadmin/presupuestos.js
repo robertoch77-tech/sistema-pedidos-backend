@@ -330,7 +330,7 @@ router.post('/:cliente_id', async (req, res) => {
 
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
-    console.error('POST /presupuestos error:', err.message);
+    console.error('POST /presupuestos error:', err.message, err.stack);
     res.status(500).json({ mensaje: 'Error al crear presupuesto', detalle: err.message });
   } finally {
     client.release();
