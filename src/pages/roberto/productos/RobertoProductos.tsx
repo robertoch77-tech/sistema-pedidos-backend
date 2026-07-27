@@ -22,7 +22,12 @@ const UPLOAD_PRESET = process.env.REACT_APP_CLOUDINARY_UPLOAD_PRESET || '';
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 function getToken() {
-  try { const s = localStorage.getItem('superadmin_session'); return s ? JSON.parse(s).token : ''; } catch { return ''; }
+  try {
+    const sa = localStorage.getItem('superadmin_session');
+    if (sa) return JSON.parse(sa).token || '';
+    const portal = localStorage.getItem('roberto_portal_session');
+    return portal ? JSON.parse(portal).token : '';
+  } catch { return ''; }
 }
 function getClienteId() {
   try { const s = localStorage.getItem('roberto_portal_session'); return s ? JSON.parse(s).cliente?.id : null; } catch { return null; }
@@ -1260,7 +1265,7 @@ function ModalNuevoProducto({ proveedores, clienteId, token, onCerrar, onGuardad
         activo:           form.activo,
       };
       const r = await fetch(`${API}/api/superadmin/importador/productos/${clienteId}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-superadmin-token': token },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(localStorage.getItem('superadmin_session') ? { 'x-superadmin-token': token } : { 'x-roberto-token': token }) },
         body: JSON.stringify(body),
       });
       const d = await r.json();
