@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { API_BASE } from '../../../config/api';
+import { getToken } from '../../../utils/auth';
 
 const API   = API_BASE;
 const NAVY  = '#1B2A4A';
@@ -21,14 +22,6 @@ const UPLOAD_PRESET = process.env.REACT_APP_CLOUDINARY_UPLOAD_PRESET || '';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-function getToken() {
-  try {
-    const sa = localStorage.getItem('superadmin_session');
-    if (sa) return JSON.parse(sa).token || '';
-    const portal = localStorage.getItem('roberto_portal_session');
-    return portal ? JSON.parse(portal).token : '';
-  } catch { return ''; }
-}
 function getClienteId() {
   try { const s = localStorage.getItem('roberto_portal_session'); return s ? JSON.parse(s).cliente?.id : null; } catch { return null; }
 }

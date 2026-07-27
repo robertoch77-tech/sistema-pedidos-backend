@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { API_BASE } from '../../../config/api';
+import { getToken } from '../../../utils/auth';
 
 // ── Colores ───────────────────────────────────────────────────
 const NAVY   = '#1B2A4A';
@@ -22,10 +23,6 @@ const fmtFecha = (iso: string | null | undefined): string => {
   return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
 };
 
-function getToken(): string {
-  try { const s = localStorage.getItem('superadmin_session'); return s ? JSON.parse(s).token : ''; }
-  catch { return ''; }
-}
 function getClienteId(): number | null {
   try { const s = localStorage.getItem('roberto_portal_session'); return s ? JSON.parse(s).cliente?.id ?? null : null; }
   catch { return null; }
