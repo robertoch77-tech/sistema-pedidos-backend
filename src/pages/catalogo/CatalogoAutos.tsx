@@ -184,14 +184,6 @@ function CardAuto({
           }} />
         ) : <ImgPlaceholder ratio="16/9" />}
 
-        {/* Badge tipo */}
-        {auto.tipo && (
-          <span style={{
-            position: 'absolute', bottom: 8, left: 8,
-            backgroundColor: 'rgba(0,0,0,0.6)', color: '#fff',
-            fontSize: 11, fontWeight: 600, borderRadius: 10, padding: '2px 8px',
-          }}>{TIPO_LABELS[auto.tipo] || auto.tipo}</span>
-        )}
       </div>
 
       <div style={{ padding: '12px 14px 14px', flex: 1, display: 'flex', flexDirection: 'column' }}>
@@ -264,12 +256,6 @@ function ModalAuto({
 
         {/* Info */}
         <div style={{ padding: '20px 24px 24px' }}>
-          {auto.tipo && (
-            <span style={{
-              fontSize: 11, fontWeight: 700, color: C.acento,
-              textTransform: 'uppercase', letterSpacing: '0.5px',
-            }}>{TIPO_LABELS[auto.tipo] || auto.tipo}</span>
-          )}
           <h2 style={{ fontSize: 22, fontWeight: 700, color: C.texto, margin: '4px 0 12px', lineHeight: 1.3 }}>
             {titulo}
           </h2>

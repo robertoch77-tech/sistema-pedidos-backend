@@ -33,6 +33,7 @@ interface Vehiculo {
   precio_minimo_consignacion: number; valor_permuta: number;
   consignante_nombre: string; consignante_cuit: string; consignante_telefono: string;
   fotos: string[]; observaciones: string;
+  publicar_catalogo: boolean;
   creado_en: string;
 }
 
@@ -424,6 +425,7 @@ function ModalEditarVehiculo({ v, clienteId, token, onGuardado, onClose }: {
     consignante_telefono: v.consignante_telefono,
   });
   const [fotos, setFotos] = useState<string[]>(Array.isArray(v.fotos) ? v.fotos : []);
+  const [publicarCatalogo, setPublicarCatalogo] = useState<boolean>(!!v.publicar_catalogo);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState('');
   const set = (k: string, val: string) => setForm(f => ({ ...f, [k]: val }));
@@ -435,7 +437,7 @@ function ModalEditarVehiculo({ v, clienteId, token, onGuardado, onClose }: {
       const res = await fetch(`${API_BASE}/api/superadmin/autos/${clienteId}/vehiculos/${v.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', 'x-superadmin-token': token },
-        body: JSON.stringify({ ...form, km: parseInt(form.km) || 0, fotos }),
+        body: JSON.stringify({ ...form, km: parseInt(form.km) || 0, fotos, publicar_catalogo: publicarCatalogo }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.mensaje || 'Error al guardar');
@@ -479,6 +481,29 @@ function ModalEditarVehiculo({ v, clienteId, token, onGuardado, onClose }: {
         <Campo label="Observaciones" full><textarea style={{ ...inputSt, resize: 'vertical', minHeight: '60px' }} value={form.observaciones} onChange={e => set('observaciones', e.target.value)} /></Campo>
         <Campo label="Fotos del vehículo" full>
           <GaleriaFotosEditor fotos={fotos} onChange={setFotos} />
+        </Campo>
+        <Campo label="Catálogo público" full>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', paddingTop: '4px' }}>
+            <button
+              type="button"
+              onClick={() => setPublicarCatalogo(p => !p)}
+              style={{
+                width: '44px', height: '24px', borderRadius: '12px', border: 'none',
+                cursor: 'pointer', position: 'relative', flexShrink: 0,
+                background: publicarCatalogo ? VERDE : GRIS, transition: 'background 0.2s',
+              }}
+            >
+              <span style={{
+                position: 'absolute', top: '3px',
+                left: publicarCatalogo ? '23px' : '3px',
+                width: '18px', height: '18px', borderRadius: '50%',
+                background: '#fff', transition: 'left 0.2s',
+              }} />
+            </button>
+            <span style={{ fontSize: '13px', color: TEXTO }}>
+              {publicarCatalogo ? 'Visible en el catálogo público' : 'Oculto en el catálogo público'}
+            </span>
+          </div>
         </Campo>
       </div>
       {error && <p style={{ color: ROJO, fontSize: '12px', margin: '8px 0' }}>{error}</p>}
