@@ -218,12 +218,9 @@ router.post('/:cliente_id', async (req, res) => {
   const recargoPct = parseFloat(recargo_global)   || 0;
   const conIva     = precio_con_iva !== false;
 
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-
     // 1. Número correlativo por cliente
-    const numRes = await client.query(
+    const numRes = await pool.query(
       `SELECT COALESCE(MAX(numero), 0) + 1 AS siguiente
        FROM presupuestos WHERE cliente_id = $1`,
       [cliente_id]
@@ -248,9 +245,9 @@ router.post('/:cliente_id', async (req, res) => {
       return { ...it, cantidad, precio, dto_pct, iva_pct, orden: idx + 1 };
     });
 
-    const base          = sumaSubtotales * (1 - descPct / 100);
+    const base           = sumaSubtotales * (1 - descPct / 100);
     const baseConRecargo = base * (1 + recargoPct / 100);
-    const factor        = sumaSubtotales > 0 ? baseConRecargo / sumaSubtotales : 1;
+    const factor         = sumaSubtotales > 0 ? baseConRecargo / sumaSubtotales : 1;
 
     let iva_total = 0;
     for (const { iva_pct, subtotalItem } of itemsNeto) {
@@ -265,80 +262,37 @@ router.post('/:cliente_id', async (req, res) => {
     fechaVenc.setDate(fechaVenc.getDate() + diasInt);
     const fechaVencStr = fechaVenc.toISOString().slice(0, 10);
 
-    // 4. INSERT presupuesto
-    const presRes = await client.query(
+    // 4. INSERT directo sin transacción (debug)
+    console.log('DEBUG INSERT params:', { cliente_id, numero, numero_completo, estado });
+    const presRes = await pool.query(
       `INSERT INTO presupuestos
          (cliente_id, numero, numero_completo,
-          comprador_nombre, comprador_cuit, lista_precio_id,
+          comprador_nombre, comprador_cuit,
           dias_validez, fecha_vencimiento,
           condiciones, observaciones,
-          subtotal, iva_monto, total, descuento_global, recargo_global, precio_con_iva, estado,
+          subtotal, iva_monto, total,
+          descuento_global, recargo_global,
+          precio_con_iva, estado,
           fecha, creado_en, modificado_en)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,now(),now(),now())
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,now(),now(),now())
        RETURNING id`,
       [
         cliente_id, numero, numero_completo,
-        comprador_nombre, comprador_cuit, lista_precio_id,
+        comprador_nombre, comprador_cuit,
         diasInt, fechaVencStr,
         condiciones, observaciones,
         sumaSubtotales.toFixed(4), iva_total.toFixed(4), total_pres.toFixed(4),
         descPct.toFixed(4), recargoPct.toFixed(4), conIva, estado,
       ]
     );
+    console.log('PRESUPUESTO DIRECTO ID:', presRes.rows[0]?.id);
     const presupuesto_id = presRes.rows[0].id;
 
-    // 5. INSERT items
-    for (let i = 0; i < itemsCalc.length; i++) {
-      const it   = itemsCalc[i];
-      const neto = itemsNeto[i];
-      const dto_monto  = neto.precioNeto * neto.cantidad * (neto.dto_pct / 100);
-      const neto_item  = neto.subtotalItem * factor;
-      const iva_item   = neto.subtotalItem * factor * (neto.iva_pct / 100);
-      const total_item = neto_item + iva_item;
-
-      await client.query(
-        `INSERT INTO presupuestos_items
-           (presupuesto_id, cliente_id, producto_id, es_libre,
-            descripcion_libre, descripcion,
-            cantidad, precio_unitario, descuento_porcentaje, descuento_monto,
-            alicuota_iva, iva_monto, subtotal, total, orden, creado_en)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,now())`,
-        [
-          presupuesto_id, cliente_id,
-          it.es_libre ? null : (it.producto_id || null),
-          !!it.es_libre,
-          it.descripcion_libre || null,
-          it.descripcion || '',
-          it.cantidad, it.precio,
-          it.dto_pct, dto_monto.toFixed(4),
-          it.iva_pct, iva_item.toFixed(4),
-          neto_item.toFixed(4), total_item.toFixed(4),
-          it.orden,
-        ]
-      );
-    }
-
-    // 6. Analytics (silencioso)
-    await client.query(
-      `INSERT INTO analytics_eventos (cliente_id, tipo, referencia_id, datos)
-       VALUES ($1,'presupuesto_creado',$2,$3)`,
-      [cliente_id, presupuesto_id, JSON.stringify({ numero_completo, total: total_pres })]
-    ).catch(() => {});
-
-    await client.query('COMMIT');
-    const verificar = await pool.query(
-      'SELECT id FROM presupuestos WHERE id = $1',
-      [presupuesto_id]
-    );
-    console.log('VERIFICACION POST-COMMIT:', JSON.stringify(verificar.rows));
     res.json({ ok: true, presupuesto_id, numero_completo, fecha_vencimiento: fechaVencStr });
 
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
     console.error('POST /presupuestos error:', err.message, err.stack);
     res.status(500).json({ mensaje: 'Error al crear presupuesto', detalle: err.message });
-  } finally {
-    client.release();
   }
 });
 
