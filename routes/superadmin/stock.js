@@ -316,29 +316,23 @@ router.post('/:cliente_id/ajuste', async (req, res) => {
   const cant = parseFloat(cantidad);
   const delta = tipo === 'ajuste_positivo' ? cant : -cant;
 
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-
-    const prodRes = await client.query(
+    const prodRes = await pool.query(
       `SELECT stock_actual FROM productos_propios WHERE id=$1 AND cliente_id=$2`,
       [producto_id, cliente_id]
     );
-    if (!prodRes.rows[0]) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ mensaje: 'Producto no encontrado' });
-    }
+    if (!prodRes.rows[0]) return res.status(404).json({ mensaje: 'Producto no encontrado' });
 
     const stock_anterior  = parseFloat(prodRes.rows[0].stock_actual) || 0;
     const stock_posterior = Math.max(0, stock_anterior + delta);
 
-    await client.query(
+    await pool.query(
       `UPDATE productos_propios SET stock_actual=$1, modificado_en=now()
        WHERE id=$2 AND cliente_id=$3`,
       [stock_posterior, producto_id, cliente_id]
     );
 
-    await client.query(
+    await pool.query(
       `INSERT INTO stock_movimientos
          (cliente_id, producto_id, variante_id, sucursal_id,
           tipo, cantidad, stock_anterior, stock_posterior,
@@ -351,21 +345,17 @@ router.post('/:cliente_id/ajuste', async (req, res) => {
       ]
     );
 
-    await client.query(
+    await pool.query(
       `INSERT INTO analytics_eventos (cliente_id, tipo, referencia_id, datos)
        VALUES ($1,'stock_ajuste',$2,$3)`,
       [cliente_id, producto_id, JSON.stringify({ tipo, cantidad: cant, motivo })]
     ).catch(() => {});
 
-    await client.query('COMMIT');
     res.json({ ok: true, stock_actual: stock_posterior, stock_anterior });
 
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
     console.error('POST /stock/ajuste error:', err.message);
     res.status(500).json({ mensaje: 'Error al aplicar ajuste', detalle: err.message });
-  } finally {
-    client.release();
   }
 });
 
@@ -383,11 +373,8 @@ router.post('/:cliente_id/transferencia', async (req, res) => {
 
   if (!items.length) return res.status(400).json({ mensaje: 'Debe incluir al menos un producto' });
 
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-
-    const transferRes = await client.query(
+    const transferRes = await pool.query(
       `INSERT INTO stock_transferencias
          (cliente_id, sucursal_origen_id, sucursal_destino_id, estado, observaciones, creado_en)
        VALUES ($1,$2,$3,'completada',$4,now())
@@ -400,7 +387,7 @@ router.post('/:cliente_id/transferencia', async (req, res) => {
       const cant = parseFloat(it.cantidad_solicitada) || 0;
       if (cant <= 0) continue;
 
-      await client.query(
+      await pool.query(
         `INSERT INTO stock_transferencias_items
            (transferencia_id, cliente_id, producto_id, variante_id, cantidad, creado_en)
          VALUES ($1,$2,$3,$4,$5,now())`,
@@ -408,7 +395,7 @@ router.post('/:cliente_id/transferencia', async (req, res) => {
       );
 
       // Stock actual del producto
-      const stRes = await client.query(
+      const stRes = await pool.query(
         `SELECT stock_actual FROM productos_propios WHERE id=$1 AND cliente_id=$2`,
         [it.producto_id, cliente_id]
       );
@@ -416,14 +403,14 @@ router.post('/:cliente_id/transferencia', async (req, res) => {
 
       // Restar del origen (el stock global del producto)
       const stock_post = Math.max(0, stock_actual - cant);
-      await client.query(
+      await pool.query(
         `UPDATE productos_propios SET stock_actual=$1, modificado_en=now()
          WHERE id=$2 AND cliente_id=$3`,
         [stock_post, it.producto_id, cliente_id]
       );
 
       // Movimiento salida origen
-      await client.query(
+      await pool.query(
         `INSERT INTO stock_movimientos
            (cliente_id, producto_id, sucursal_id, tipo, cantidad,
             stock_anterior, stock_posterior, motivo, referencia_tipo, referencia_id, creado_en)
@@ -432,7 +419,7 @@ router.post('/:cliente_id/transferencia', async (req, res) => {
       );
 
       // Movimiento entrada destino
-      await client.query(
+      await pool.query(
         `INSERT INTO stock_movimientos
            (cliente_id, producto_id, sucursal_id, tipo, cantidad,
             stock_anterior, stock_posterior, motivo, referencia_tipo, referencia_id, creado_en)
@@ -441,15 +428,11 @@ router.post('/:cliente_id/transferencia', async (req, res) => {
       );
     }
 
-    await client.query('COMMIT');
     res.json({ ok: true, transferencia_id });
 
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
     console.error('POST /stock/transferencia error:', err.message);
     res.status(500).json({ mensaje: 'Error en transferencia', detalle: err.message });
-  } finally {
-    client.release();
   }
 });
 

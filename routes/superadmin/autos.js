@@ -375,13 +375,10 @@ router.post('/:cid/ventas', async (req, res) => {
   if (!vehiculo_id) return res.status(400).json({ mensaje: 'vehiculo_id requerido' });
   if (!n(precio_venta)) return res.status(400).json({ mensaje: 'precio_venta requerido' });
 
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-
     // 1. Obtener datos del vehículo
-    const vRes = await client.query(
-      `SELECT * FROM vehiculos WHERE id = $1 AND cliente_id = $2 FOR UPDATE`,
+    const vRes = await pool.query(
+      `SELECT * FROM vehiculos WHERE id = $1 AND cliente_id = $2`,
       [vehiculo_id, cid]
     );
     if (!vRes.rows[0]) throw new Error('Vehículo no encontrado');
@@ -419,7 +416,7 @@ router.post('/:cid/ventas', async (req, res) => {
     }
 
     // 4. INSERT venta
-    const ventaRes = await client.query(
+    const ventaRes = await pool.query(
       `INSERT INTO ventas_autos
          (cliente_id, vehiculo_id, comprador_nombre, comprador_cuit,
           comprador_telefono, precio_venta, precio_costo, ganancia,
@@ -443,14 +440,14 @@ router.post('/:cid/ventas', async (req, res) => {
     const venta_id = ventaRes.rows[0].id;
 
     // 5. Marcar vehículo como vendido
-    await client.query(
+    await pool.query(
       `UPDATE vehiculos SET estado = 'vendido', modificado_en = now() WHERE id = $1`,
       [vehiculo_id]
     );
 
     // 6. Si consignacion: crear liquidacion pendiente
     if (v.tipo === 'consignacion') {
-      await client.query(
+      await pool.query(
         `INSERT INTO liquidaciones_consignacion
            (cliente_id, vehiculo_id, venta_auto_id, consignante_nombre,
             precio_venta, precio_consignante, comision, estado, fecha, creado_en)
@@ -466,9 +463,7 @@ router.post('/:cid/ventas', async (req, res) => {
       );
     }
 
-    await client.query('COMMIT');
-
-    // 7. Bloque caja — fuera de la transacción
+    // 7. Bloque caja
     try {
       const cajaRes = await pool.query(
         `SELECT id FROM cajas WHERE cliente_id = $1 AND estado = 'abierta' LIMIT 1`,
@@ -603,11 +598,8 @@ router.post('/:cid/ventas', async (req, res) => {
     res.json({ ok: true, venta_id });
 
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
     console.error('POST /autos/ventas error:', err.message);
     res.status(500).json({ mensaje: 'Error al registrar venta', detalle: err.message });
-  } finally {
-    client.release();
   }
 });
 

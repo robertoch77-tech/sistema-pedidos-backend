@@ -135,12 +135,9 @@ router.post('/:cliente_id', async (req, res) => {
   const recargoPct = parseFloat(recargo_global)  || 0;
   const conIva    = precio_con_iva !== false;
 
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-
     // 1. Número correlativo por cliente
-    const numRes = await client.query(
+    const numRes = await pool.query(
       `SELECT COALESCE(MAX(numero), 0) + 1 AS siguiente
        FROM ventas WHERE cliente_id = $1`,
       [cliente_id]
@@ -180,7 +177,7 @@ router.post('/:cliente_id', async (req, res) => {
     const total_venta = conIva ? baseConRecargo : baseConRecargo + iva_total;
 
     // 3. INSERT venta
-    const ventaRes = await client.query(
+    const ventaRes = await pool.query(
       `INSERT INTO ventas
          (cliente_id, numero, numero_completo, prefijo, tipo_comprobante,
           comprador_nombre, comprador_cuit,
@@ -214,7 +211,7 @@ router.post('/:cliente_id', async (req, res) => {
       const iva_item   = neto.subtotalItem * factor * (neto.iva_pct / 100);
       const total_item = neto_item + iva_item;
 
-      await client.query(
+      await pool.query(
         `INSERT INTO ventas_items
            (venta_id, cliente_id, producto_id, es_libre, descripcion_libre,
             cantidad, precio_unitario, descuento_porcentaje, descuento_monto,
@@ -235,7 +232,7 @@ router.post('/:cliente_id', async (req, res) => {
 
       // Descontar stock si es producto real
       if (!it.es_libre && it.producto_id) {
-        await client.query(
+        await pool.query(
           `UPDATE productos_propios
            SET stock_actual = COALESCE(stock_actual, 0) - $1, modificado_en = now()
            WHERE id = $2 AND cliente_id = $3`,
@@ -248,7 +245,7 @@ router.post('/:cliente_id', async (req, res) => {
     if (va_a_cuenta_corriente) {
 
       // 1. Buscar registro en tabla nueva
-      let ccRes = await client.query(
+      let ccRes = await pool.query(
         `SELECT id, saldo, plazo_pago_dias
          FROM cuentas_corrientes_clientes
          WHERE cliente_id = $1
@@ -267,7 +264,7 @@ router.post('/:cliente_id', async (req, res) => {
 
       // 2. Si no existe, crear registro nuevo
       if (ccRes.rows.length === 0) {
-        const nuevaCC = await client.query(
+        const nuevaCC = await pool.query(
           `INSERT INTO cuentas_corrientes_clientes
              (cliente_id, comprador_nombre, comprador_cuit,
               saldo, activo)
@@ -285,7 +282,7 @@ router.post('/:cliente_id', async (req, res) => {
       const saldo_nuevo = saldo_anterior + total_venta;
 
       // 3. Insertar movimiento en tabla nueva
-      await client.query(
+      await pool.query(
         `INSERT INTO movimientos_cuentas_corrientes
            (cuenta_corriente_id, cliente_id, tipo,
             debe, haber, saldo_acumulado,
@@ -304,7 +301,7 @@ router.post('/:cliente_id', async (req, res) => {
       );
 
       // 4. Actualizar saldo en cabecera
-      await client.query(
+      await pool.query(
         `UPDATE cuentas_corrientes_clientes
          SET saldo = $1,
              ultima_compra = now()
@@ -313,11 +310,9 @@ router.post('/:cliente_id', async (req, res) => {
       );
     }
 
-    await client.query('COMMIT');
-
     // 6. Movimiento de caja (si hay caja abierta)
     try {
-      const cajaRes = await client.query(
+      const cajaRes = await pool.query(
         `SELECT id FROM cajas
          WHERE cliente_id = $1
          AND estado = 'abierta'
@@ -326,7 +321,7 @@ router.post('/:cliente_id', async (req, res) => {
       );
       if (cajaRes.rows.length > 0) {
         const caja_id = cajaRes.rows[0].id;
-        await client.query(
+        await pool.query(
           `INSERT INTO caja_movimientos
              (caja_id, cliente_id, tipo, tipo_operacion,
               monto, medio_pago, descripcion,
@@ -343,7 +338,7 @@ router.post('/:cliente_id', async (req, res) => {
             venta_id
           ]
         );
-        await client.query(
+        await pool.query(
           `UPDATE cajas
            SET total_ingresos = total_ingresos + $1,
                saldo_actual = saldo_actual + $1
@@ -353,17 +348,13 @@ router.post('/:cliente_id', async (req, res) => {
       }
     } catch (err) {
       console.error('Error registrando en caja:', err.message);
-      // No hacer rollback por esto — la venta se registra igual
     }
 
     res.json({ ok: true, venta_id, numero_completo });
 
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
     console.error('POST /ventas error:', err.message);
     res.status(500).json({ mensaje: 'Error al crear venta', detalle: err.message });
-  } finally {
-    client.release();
   }
 });
 

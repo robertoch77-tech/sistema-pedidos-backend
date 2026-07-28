@@ -385,36 +385,29 @@ router.put('/:cliente_id/:id/estado', async (req, res) => {
 router.put('/:cliente_id/:id/convertir', async (req, res) => {
   const { cliente_id, id } = req.params;
 
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-
     // 1. Obtener presupuesto + items
     const [presRes, itemsRes] = await Promise.all([
-      client.query(
+      pool.query(
         `SELECT * FROM presupuestos WHERE id=$1 AND cliente_id=$2`,
         [id, cliente_id]
       ),
-      client.query(
+      pool.query(
         `SELECT * FROM presupuestos_items WHERE presupuesto_id=$1 ORDER BY orden ASC`,
         [id]
       ),
     ]);
 
     const pres = presRes.rows[0];
-    if (!pres) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ mensaje: 'Presupuesto no encontrado' });
-    }
+    if (!pres) return res.status(404).json({ mensaje: 'Presupuesto no encontrado' });
     if (pres.convertido_a_venta) {
-      await client.query('ROLLBACK');
       return res.status(400).json({ mensaje: 'Este presupuesto ya fue convertido a venta', venta_id: pres.venta_id });
     }
 
     const items = itemsRes.rows;
 
     // 2. Número de venta correlativo
-    const numRes = await client.query(
+    const numRes = await pool.query(
       `SELECT COALESCE(MAX(numero), 0) + 1 AS siguiente FROM ventas WHERE cliente_id=$1`,
       [cliente_id]
     );
@@ -422,7 +415,7 @@ router.put('/:cliente_id/:id/convertir', async (req, res) => {
     const numero_completo_v = `V-${String(numero_v).padStart(5, '0')}`;
 
     // 3. INSERT venta
-    const ventaRes = await client.query(
+    const ventaRes = await pool.query(
       `INSERT INTO ventas
          (cliente_id, numero, numero_completo, prefijo, tipo_comprobante,
           comprador_nombre, comprador_cuit,
@@ -443,7 +436,7 @@ router.put('/:cliente_id/:id/convertir', async (req, res) => {
 
     // 4. INSERT ventas_items + descontar stock
     for (const it of items) {
-      await client.query(
+      await pool.query(
         `INSERT INTO ventas_items
            (venta_id, cliente_id, producto_id, es_libre, descripcion_libre,
             cantidad, precio_unitario, descuento_porcentaje, descuento_monto,
@@ -463,7 +456,7 @@ router.put('/:cliente_id/:id/convertir', async (req, res) => {
       );
 
       if (!it.es_libre && it.producto_id) {
-        await client.query(
+        await pool.query(
           `UPDATE productos_propios
            SET stock_actual = COALESCE(stock_actual, 0) - $1, modificado_en=now()
            WHERE id=$2 AND cliente_id=$3`,
@@ -474,7 +467,7 @@ router.put('/:cliente_id/:id/convertir', async (req, res) => {
 
     // 5. Movimiento cuenta corriente (si corresponde)
     if (pres.va_a_cuenta_corriente) {
-      let ccRes = await client.query(
+      let ccRes = await pool.query(
         `SELECT id, saldo
          FROM cuentas_corrientes_clientes
          WHERE cliente_id = $1
@@ -489,7 +482,7 @@ router.put('/:cliente_id/:id/convertir', async (req, res) => {
 
       let cc_id, saldo_anterior;
       if (ccRes.rows.length === 0) {
-        const nuevaCC = await client.query(
+        const nuevaCC = await pool.query(
           `INSERT INTO cuentas_corrientes_clientes
              (cliente_id, comprador_nombre, comprador_cuit, saldo, activo)
            VALUES ($1,$2,$3,0,true)
@@ -505,7 +498,7 @@ router.put('/:cliente_id/:id/convertir', async (req, res) => {
 
       const saldo_nuevo = saldo_anterior + parseFloat(pres.total);
 
-      await client.query(
+      await pool.query(
         `INSERT INTO movimientos_cuentas_corrientes
            (cuenta_corriente_id, cliente_id, tipo,
             debe, haber, saldo_acumulado,
@@ -522,7 +515,7 @@ router.put('/:cliente_id/:id/convertir', async (req, res) => {
         ]
       );
 
-      await client.query(
+      await pool.query(
         `UPDATE cuentas_corrientes_clientes
          SET saldo = $1, ultima_compra = now()
          WHERE id = $2`,
@@ -531,16 +524,14 @@ router.put('/:cliente_id/:id/convertir', async (req, res) => {
     }
 
     // 6. Marcar presupuesto como convertido
-    await client.query(
+    await pool.query(
       `UPDATE presupuestos
        SET estado='convertido', convertido_a_venta=true, venta_id=$1, modificado_en=now()
        WHERE id=$2 AND cliente_id=$3`,
       [venta_id, id, cliente_id]
     );
 
-    await client.query('COMMIT');
-
-    // 7. Movimiento de caja (si hay caja abierta) — fuera de la transacción
+    // 7. Movimiento de caja (si hay caja abierta)
     try {
       const cajaRes = await pool.query(
         `SELECT id FROM cajas
@@ -583,11 +574,8 @@ router.put('/:cliente_id/:id/convertir', async (req, res) => {
     res.json({ ok: true, venta_id, numero_completo: numero_completo_v });
 
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
     console.error('PUT /presupuestos/:id/convertir error:', err.message);
     res.status(500).json({ mensaje: 'Error al convertir presupuesto', detalle: err.message });
-  } finally {
-    client.release();
   }
 });
 
@@ -607,19 +595,13 @@ router.put('/:cliente_id/:id', async (req, res) => {
     return res.status(400).json({ mensaje: 'El presupuesto debe tener al menos un ítem' });
   }
 
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-
     // Verificar que existe
-    const check = await client.query(
+    const check = await pool.query(
       `SELECT id FROM presupuestos WHERE id=$1 AND cliente_id=$2`,
       [id, cliente_id]
     );
-    if (!check.rows[0]) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ mensaje: 'Presupuesto no encontrado' });
-    }
+    if (!check.rows[0]) return res.status(404).json({ mensaje: 'Presupuesto no encontrado' });
 
     // Recalcular totales
     let subtotal_total = 0, iva_total = 0;
@@ -641,7 +623,7 @@ router.put('/:cliente_id/:id', async (req, res) => {
     const fechaVenc   = new Date(); fechaVenc.setDate(fechaVenc.getDate() + diasInt);
     const fechaVencStr = fechaVenc.toISOString().slice(0, 10);
 
-    await client.query(
+    await pool.query(
       `UPDATE presupuestos SET
          comprador_nombre=$1, comprador_cuit=$2, lista_precio_id=$3,
          dias_validez=$4, fecha_vencimiento=$5,
@@ -658,9 +640,9 @@ router.put('/:cliente_id/:id', async (req, res) => {
     );
 
     // Reemplazar items
-    await client.query(`DELETE FROM presupuestos_items WHERE presupuesto_id=$1`, [id]);
+    await pool.query(`DELETE FROM presupuestos_items WHERE presupuesto_id=$1`, [id]);
     for (const it of itemsCalc) {
-      await client.query(
+      await pool.query(
         `INSERT INTO presupuestos_items
            (presupuesto_id, cliente_id, producto_id, es_libre,
             descripcion_libre, descripcion,
@@ -682,15 +664,11 @@ router.put('/:cliente_id/:id', async (req, res) => {
       );
     }
 
-    await client.query('COMMIT');
     res.json({ ok: true, presupuesto_id: id, fecha_vencimiento: fechaVencStr });
 
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
     console.error('PUT /presupuestos/:id error:', err.message);
     res.status(500).json({ mensaje: 'Error al actualizar presupuesto', detalle: err.message });
-  } finally {
-    client.release();
   }
 });
 

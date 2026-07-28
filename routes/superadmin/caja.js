@@ -142,52 +142,43 @@ router.get('/:cliente_id/desglose/:caja_id', async (req, res) => {
 
 // ─── POST /:cliente_id/abrir ──────────────────────────────────
 router.post('/:cliente_id/abrir', async (req, res) => {
-  const client = await pool.connect();
   try {
     const { cliente_id } = req.params;
     const { sucursal_id, saldo_inicial = 0, turno = 'Único', observaciones } = req.body;
 
-    await client.query('BEGIN');
-
     // Verificar no haya caja abierta
-    const existente = await client.query(
+    const existente = await pool.query(
       `SELECT id FROM cajas WHERE cliente_id=$1 AND estado='abierta' LIMIT 1`,
       [cliente_id]
     );
     if (existente.rows.length > 0) {
-      await client.query('ROLLBACK');
       return res.status(400).json({ error: 'Ya hay una caja abierta', caja_id: existente.rows[0].id });
     }
 
     const saldoIni = n(saldo_inicial);
 
-    const cajaRes = await client.query(
+    const cajaRes = await pool.query(
       `INSERT INTO cajas (cliente_id, sucursal_id, estado, turno, saldo_inicial, saldo_actual, observaciones)
        VALUES ($1,$2,'abierta',$3,$4,$5,$6) RETURNING id`,
       [cliente_id, sucursal_id || null, turno, saldoIni, saldoIni, observaciones || '']
     );
     const caja_id = cajaRes.rows[0].id;
 
-    await client.query(
+    await pool.query(
       `INSERT INTO caja_movimientos (caja_id, cliente_id, tipo, tipo_operacion, monto, descripcion, medio_pago)
        VALUES ($1,$2,'apertura','ingreso',$3,'Saldo inicial apertura de caja','efectivo')`,
       [caja_id, cliente_id, saldoIni]
     );
 
-    await client.query('COMMIT');
     res.json({ ok: true, caja_id });
   } catch (err) {
-    await client.query('ROLLBACK');
     console.error('caja abrir:', err.message);
     res.status(500).json({ error: err.message });
-  } finally {
-    client.release();
   }
 });
 
 // ─── POST /:cliente_id/movimiento ─────────────────────────────
 router.post('/:cliente_id/movimiento', async (req, res) => {
-  const client = await pool.connect();
   try {
     const { cliente_id } = req.params;
     const {
@@ -198,9 +189,7 @@ router.post('/:cliente_id/movimiento', async (req, res) => {
 
     if (!caja_id || !monto) return res.status(400).json({ error: 'Faltan datos requeridos' });
 
-    await client.query('BEGIN');
-
-    await client.query(
+    await pool.query(
       `INSERT INTO caja_movimientos
          (caja_id, cliente_id, tipo, tipo_operacion, monto, medio_pago,
           descripcion, observaciones, numero_comprobante, venta_id, compra_id)
@@ -225,17 +214,13 @@ router.post('/:cliente_id/movimiento', async (req, res) => {
             creado_en     = creado_en
         WHERE id=$2 RETURNING saldo_actual`;
     }
-    const upd = await client.query(updateSQL, [n(monto), caja_id]);
+    const upd = await pool.query(updateSQL, [n(monto), caja_id]);
     const saldo_actual = n(upd.rows[0]?.saldo_actual ?? 0);
 
-    await client.query('COMMIT');
     res.json({ ok: true, saldo_actual });
   } catch (err) {
-    await client.query('ROLLBACK');
     console.error('caja movimiento:', err.message);
     res.status(500).json({ error: err.message });
-  } finally {
-    client.release();
   }
 });
 
@@ -274,21 +259,17 @@ router.get('/:cliente_id/:caja_id/movimientos', async (req, res) => {
 
 // ─── POST /:cliente_id/cerrar ─────────────────────────────────
 router.post('/:cliente_id/cerrar', async (req, res) => {
-  const client = await pool.connect();
   try {
     const { cliente_id } = req.params;
     const { caja_id, saldo_final_real, motivo_diferencia, observaciones } = req.body;
 
     if (!caja_id) return res.status(400).json({ error: 'Falta caja_id' });
 
-    await client.query('BEGIN');
-
-    const cajaRes = await client.query(
-      `SELECT * FROM cajas WHERE id=$1 AND cliente_id=$2 AND estado='abierta' FOR UPDATE`,
+    const cajaRes = await pool.query(
+      `SELECT * FROM cajas WHERE id=$1 AND cliente_id=$2 AND estado='abierta'`,
       [caja_id, cliente_id]
     );
     if (cajaRes.rows.length === 0) {
-      await client.query('ROLLBACK');
       return res.status(400).json({ error: 'Caja no encontrada o ya cerrada' });
     }
     const caja = cajaRes.rows[0];
@@ -296,7 +277,7 @@ router.post('/:cliente_id/cerrar', async (req, res) => {
     const saldoReal    = n(saldo_final_real ?? saldoSistema);
     const diferencia   = saldoReal - saldoSistema;
 
-    await client.query(
+    await pool.query(
       `UPDATE cajas SET
          estado='cerrada',
          fecha_cierre=now(),
@@ -308,7 +289,7 @@ router.post('/:cliente_id/cerrar', async (req, res) => {
       [saldoSistema, saldoReal, diferencia, motivo_diferencia || '', caja_id]
     );
 
-    await client.query(
+    await pool.query(
       `INSERT INTO caja_movimientos
          (caja_id, cliente_id, tipo, tipo_operacion, monto, descripcion, medio_pago)
        VALUES ($1,$2,'cierre','egreso',0,$3,'efectivo')`,
@@ -317,7 +298,7 @@ router.post('/:cliente_id/cerrar', async (req, res) => {
     );
 
     // Analytics resumen diario (best-effort)
-    await client.query(
+    await pool.query(
       `INSERT INTO analytics_resumen_diario
          (cliente_id, fecha, tipo, valor, metadata)
        VALUES ($1, CURRENT_DATE, 'cierre_caja', $2, $3)`,
@@ -329,7 +310,6 @@ router.post('/:cliente_id/cerrar', async (req, res) => {
       })]
     ).catch(() => {});
 
-    await client.query('COMMIT');
     res.json({
       ok: true,
       diferencia,
@@ -342,11 +322,8 @@ router.post('/:cliente_id/cerrar', async (req, res) => {
       total_egresos:  n(caja.total_egresos),
     });
   } catch (err) {
-    await client.query('ROLLBACK');
     console.error('caja cerrar:', err.message);
     res.status(500).json({ error: err.message });
-  } finally {
-    client.release();
   }
 });
 

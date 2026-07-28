@@ -341,32 +341,35 @@ router.get('/proveedores/:cliente_id/:proveedor_id/movimientos', async (req, res
 
 // ─── POST /clientes/:cliente_id/cobro ─────────────────────────
 router.post('/clientes/:cliente_id/cobro', async (req, res) => {
-  const client = await pool.connect();
   try {
     const { cliente_id } = req.params;
     const { cuenta_corriente_id, monto_total, fecha, medios_pago = [], cancela = [], observaciones } = req.body;
 
     if (!cuenta_corriente_id || !monto_total) return res.status(400).json({ error: 'Faltan datos requeridos' });
 
-    await client.query('BEGIN');
-
     // Número de cobranza
-    const numRes = await client.query(
+    const numRes = await pool.query(
       `SELECT COUNT(*)+1 AS num FROM cobranzas WHERE cliente_id=$1`, [cliente_id]
     );
     const numero = `COB-${String(numRes.rows[0].num).padStart(6, '0')}`;
 
     // INSERT cobranza
-    const cobRes = await client.query(
+    const cobRes = await pool.query(
       `INSERT INTO cobranzas (cliente_id, cuenta_corriente_id, numero, fecha, total_cobrado, observaciones)
        VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
       [cliente_id, cuenta_corriente_id, numero, fecha || new Date().toISOString().slice(0,10), n(monto_total), observaciones || '']
     );
     const cobranza_id = cobRes.rows[0].id;
 
+    // Obtener nombre del comprador una sola vez para los cheques
+    const compradorNombreRes = await pool.query(
+      `SELECT comprador_nombre FROM cuentas_corrientes_clientes WHERE id=$1`, [cuenta_corriente_id]
+    );
+    const compradorNombreCC = compradorNombreRes.rows[0]?.comprador_nombre || '';
+
     // INSERT items
     for (const item of medios_pago) {
-      await client.query(
+      await pool.query(
         `INSERT INTO cobranzas_items (cobranza_id, tipo, monto, referencia, medio_pago_id, cheque_datos)
          VALUES ($1,$2,$3,$4,$5,$6)`,
         [cobranza_id, item.tipo, n(item.monto), item.referencia || '', item.medio_pago_id || null,
@@ -376,28 +379,27 @@ router.post('/clientes/:cliente_id/cobro', async (req, res) => {
       // Si es cheque → registrar en tabla cheques
       if ((item.tipo === 'cheque_propio' || item.tipo === 'cheque_tercero' || item.tipo === 'echeq') && item.cheque_datos) {
         const ch = item.cheque_datos;
-        await client.query(
+        await pool.query(
           `INSERT INTO cheques (cliente_id, numero, banco, titular_nombre, titular_cuit, monto, fecha_cobro,
             tipo, estado, origen, origen_id, cliente_proveedor)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'en_cartera','cobranza',$9,$10)`,
           [cliente_id, ch.numero || '', ch.banco || '', ch.titular || '', ch.cuit_titular || '',
            n(item.monto), ch.fecha_cobro || null,
            item.tipo === 'cheque_propio' ? 'propio' : item.tipo === 'echeq' ? 'echeq' : 'tercero',
-           cobranza_id,
-           (await client.query(`SELECT comprador_nombre FROM cuentas_corrientes_clientes WHERE id=$1`, [cuenta_corriente_id])).rows[0]?.comprador_nombre || '']
+           cobranza_id, compradorNombreCC]
         );
       }
     }
 
     // Saldo actual antes del cobro
-    const ccRes = await client.query(
-      `SELECT saldo FROM cuentas_corrientes_clientes WHERE id=$1 FOR UPDATE`, [cuenta_corriente_id]
+    const ccRes = await pool.query(
+      `SELECT saldo FROM cuentas_corrientes_clientes WHERE id=$1`, [cuenta_corriente_id]
     );
     const saldoAnterior = n(ccRes.rows[0]?.saldo ?? 0);
     const saldoNuevo    = saldoAnterior - n(monto_total);
 
     // INSERT movimiento tipo=cobro
-    await client.query(
+    await pool.query(
       `INSERT INTO movimientos_cuentas_corrientes
          (cuenta_corriente_id, cliente_id, tipo, haber, saldo_acumulado, descripcion, numero_comprobante)
        VALUES ($1,$2,'cobro',$3,$4,$5,$6)`,
@@ -406,7 +408,7 @@ router.post('/clientes/:cliente_id/cobro', async (req, res) => {
     );
 
     // Recalcular saldo_vencido
-    const vencRes = await client.query(
+    const vencRes = await pool.query(
       `SELECT COALESCE(SUM(debe - haber), 0) AS sv
        FROM movimientos_cuentas_corrientes
        WHERE cuenta_corriente_id=$1 AND estado='pendiente'
@@ -416,7 +418,7 @@ router.post('/clientes/:cliente_id/cobro', async (req, res) => {
     const saldoVencido = Math.max(0, n(vencRes.rows[0].sv));
 
     // UPDATE saldo CC
-    await client.query(
+    await pool.query(
       `UPDATE cuentas_corrientes_clientes
        SET saldo=$1, saldo_vencido=$2, modificado_en=now()
        WHERE id=$3`,
@@ -424,13 +426,11 @@ router.post('/clientes/:cliente_id/cobro', async (req, res) => {
     );
 
     // Analytics (best-effort)
-    await client.query(
+    await pool.query(
       `INSERT INTO analytics_eventos (cliente_id, tipo, valor, metadata)
        VALUES ($1,'cobro',$2,$3)`,
       [cliente_id, n(monto_total), JSON.stringify({ cobranza_id, cuenta_corriente_id })]
     ).catch(() => {});
-
-    await client.query('COMMIT');
 
     // Movimiento de caja (si hay caja abierta)
     try {
@@ -468,42 +468,36 @@ router.post('/clientes/:cliente_id/cobro', async (req, res) => {
 
     res.json({ ok: true, cobranza_id, numero_completo: numero, saldo_nuevo: saldoNuevo });
   } catch (err) {
-    await client.query('ROLLBACK');
     console.error('CC cobro:', err.message);
     res.status(500).json({ error: err.message });
-  } finally {
-    client.release();
   }
 });
 
 // ─── POST /proveedores/:cliente_id/pago ───────────────────────
 router.post('/proveedores/:cliente_id/pago', async (req, res) => {
-  const client = await pool.connect();
   try {
     const { cliente_id } = req.params;
     const { proveedor_id, monto_total, fecha, medios_pago = [], cancela = [], observaciones } = req.body;
 
     if (!proveedor_id || !monto_total) return res.status(400).json({ error: 'Faltan datos requeridos' });
 
-    await client.query('BEGIN');
-
-    const numRes = await client.query(
+    const numRes = await pool.query(
       `SELECT COUNT(*)+1 AS num FROM cartas_pago WHERE cliente_id=$1`, [cliente_id]
     );
     const numero = `CP-${String(numRes.rows[0].num).padStart(6, '0')}`;
 
-    const cpRes = await client.query(
+    const cpRes = await pool.query(
       `INSERT INTO cartas_pago (cliente_id, proveedor_id, numero, fecha, total_pagado, observaciones)
        VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
       [cliente_id, proveedor_id, numero, fecha || new Date().toISOString().slice(0,10), n(monto_total), observaciones || '']
     );
     const carta_pago_id = cpRes.rows[0].id;
 
-    const provNombreRes = await client.query(`SELECT nombre FROM proveedores WHERE id=$1`, [proveedor_id]);
+    const provNombreRes = await pool.query(`SELECT nombre FROM proveedores WHERE id=$1`, [proveedor_id]);
     const provNombre = provNombreRes.rows[0]?.nombre || '';
 
     for (const item of medios_pago) {
-      await client.query(
+      await pool.query(
         `INSERT INTO cartas_pago_items (carta_pago_id, tipo, monto, referencia, medio_pago_id, cheque_datos)
          VALUES ($1,$2,$3,$4,$5,$6)`,
         [carta_pago_id, item.tipo, n(item.monto), item.referencia || '', item.medio_pago_id || null,
@@ -512,7 +506,7 @@ router.post('/proveedores/:cliente_id/pago', async (req, res) => {
 
       if ((item.tipo === 'cheque_propio' || item.tipo === 'cheque_tercero' || item.tipo === 'echeq') && item.cheque_datos) {
         const ch = item.cheque_datos;
-        await client.query(
+        await pool.query(
           `INSERT INTO cheques (cliente_id, numero, banco, titular_nombre, titular_cuit, monto, fecha_cobro,
             tipo, estado, origen, origen_id, cliente_proveedor)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'entregado','carta_pago',$9,$10)`,
@@ -525,14 +519,14 @@ router.post('/proveedores/:cliente_id/pago', async (req, res) => {
     }
 
     // Saldo proveedor
-    const provRes = await client.query(
-      `SELECT saldo_actual FROM proveedores WHERE id=$1 FOR UPDATE`, [proveedor_id]
+    const provRes = await pool.query(
+      `SELECT saldo_actual FROM proveedores WHERE id=$1`, [proveedor_id]
     );
     const saldoAnterior = n(provRes.rows[0]?.saldo_actual ?? 0);
     const saldoNuevo    = saldoAnterior - n(monto_total);
 
     // INSERT movimiento
-    await client.query(
+    await pool.query(
       `INSERT INTO cuentas_corrientes_proveedores_movimientos
          (proveedor_id, cliente_id, tipo, haber, saldo_acumulado, descripcion, numero_comprobante)
        VALUES ($1,$2,'pago',$3,$4,$5,$6)`,
@@ -541,7 +535,7 @@ router.post('/proveedores/:cliente_id/pago', async (req, res) => {
     );
 
     // Recalc saldo_vencido
-    const vencRes = await client.query(
+    const vencRes = await pool.query(
       `SELECT COALESCE(SUM(debe - haber), 0) AS sv
        FROM cuentas_corrientes_proveedores_movimientos
        WHERE proveedor_id=$1 AND estado='pendiente'
@@ -550,95 +544,79 @@ router.post('/proveedores/:cliente_id/pago', async (req, res) => {
     );
     const saldoVencido = Math.max(0, n(vencRes.rows[0].sv));
 
-    await client.query(
+    await pool.query(
       `UPDATE proveedores SET saldo_actual=$1, saldo_vencido=$2, modificado_en=now() WHERE id=$3`,
       [saldoNuevo, saldoVencido, proveedor_id]
     );
 
-    await client.query(
+    await pool.query(
       `INSERT INTO analytics_eventos (cliente_id, tipo, valor, metadata)
        VALUES ($1,'pago_proveedor',$2,$3)`,
       [cliente_id, n(monto_total), JSON.stringify({ carta_pago_id, proveedor_id })]
     ).catch(() => {});
 
-    await client.query('COMMIT');
     res.json({ ok: true, carta_pago_id, numero_completo: numero, saldo_nuevo: saldoNuevo });
   } catch (err) {
-    await client.query('ROLLBACK');
     console.error('CC pago:', err.message);
     res.status(500).json({ error: err.message });
-  } finally {
-    client.release();
   }
 });
 
 // ─── POST /clientes/:cliente_id/nota-credito ──────────────────
 router.post('/clientes/:cliente_id/nota-credito', async (req, res) => {
-  const client = await pool.connect();
   try {
     const { cliente_id } = req.params;
     const { cuenta_corriente_id, monto, descripcion, numero_comprobante } = req.body;
     if (!cuenta_corriente_id || !monto) return res.status(400).json({ error: 'Faltan datos' });
 
-    await client.query('BEGIN');
-    const ccRes = await client.query(
-      `SELECT saldo FROM cuentas_corrientes_clientes WHERE id=$1 FOR UPDATE`, [cuenta_corriente_id]
+    const ccRes = await pool.query(
+      `SELECT saldo FROM cuentas_corrientes_clientes WHERE id=$1`, [cuenta_corriente_id]
     );
     const saldoNuevo = n(ccRes.rows[0]?.saldo ?? 0) - n(monto);
 
-    await client.query(
+    await pool.query(
       `INSERT INTO movimientos_cuentas_corrientes
          (cuenta_corriente_id, cliente_id, tipo, haber, saldo_acumulado, descripcion, numero_comprobante)
        VALUES ($1,$2,'nota_credito',$3,$4,$5,$6)`,
       [cuenta_corriente_id, cliente_id, n(monto), saldoNuevo, descripcion || 'Nota de crédito', numero_comprobante || '']
     );
-    await client.query(
+    await pool.query(
       `UPDATE cuentas_corrientes_clientes SET saldo=$1, modificado_en=now() WHERE id=$2`,
       [saldoNuevo, cuenta_corriente_id]
     );
-    await client.query('COMMIT');
     res.json({ ok: true, saldo_nuevo: saldoNuevo });
   } catch (err) {
-    await client.query('ROLLBACK');
     console.error('CC NC:', err.message);
     res.status(500).json({ error: err.message });
-  } finally {
-    client.release();
   }
 });
 
 // ─── POST /clientes/:cliente_id/nota-debito ───────────────────
 router.post('/clientes/:cliente_id/nota-debito', async (req, res) => {
-  const client = await pool.connect();
   try {
     const { cliente_id } = req.params;
     const { cuenta_corriente_id, monto, descripcion, numero_comprobante } = req.body;
     if (!cuenta_corriente_id || !monto) return res.status(400).json({ error: 'Faltan datos' });
 
-    await client.query('BEGIN');
-    const ccRes = await client.query(
-      `SELECT saldo FROM cuentas_corrientes_clientes WHERE id=$1 FOR UPDATE`, [cuenta_corriente_id]
+    const ccRes = await pool.query(
+      `SELECT saldo FROM cuentas_corrientes_clientes WHERE id=$1`, [cuenta_corriente_id]
     );
     const saldoNuevo = n(ccRes.rows[0]?.saldo ?? 0) + n(monto);
 
-    await client.query(
+    await pool.query(
       `INSERT INTO movimientos_cuentas_corrientes
          (cuenta_corriente_id, cliente_id, tipo, debe, saldo_acumulado, descripcion, numero_comprobante)
        VALUES ($1,$2,'nota_debito',$3,$4,$5,$6)`,
       [cuenta_corriente_id, cliente_id, n(monto), saldoNuevo, descripcion || 'Nota de débito', numero_comprobante || '']
     );
-    await client.query(
+    await pool.query(
       `UPDATE cuentas_corrientes_clientes SET saldo=$1, modificado_en=now() WHERE id=$2`,
       [saldoNuevo, cuenta_corriente_id]
     );
-    await client.query('COMMIT');
     res.json({ ok: true, saldo_nuevo: saldoNuevo });
   } catch (err) {
-    await client.query('ROLLBACK');
     console.error('CC ND:', err.message);
     res.status(500).json({ error: err.message });
-  } finally {
-    client.release();
   }
 });
 

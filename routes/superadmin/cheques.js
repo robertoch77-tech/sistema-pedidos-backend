@@ -215,7 +215,6 @@ router.post('/:cliente_id', async (req, res) => {
 
 // ─── PUT /:cliente_id/:id/estado ──────────────────────────────
 router.put('/:cliente_id/:id/estado', async (req, res) => {
-  const client = await pool.connect();
   try {
     const { cliente_id, id } = req.params;
     const {
@@ -224,9 +223,7 @@ router.put('/:cliente_id/:id/estado', async (req, res) => {
       registrar_cargo_cc, monto_cargo,
     } = req.body;
 
-    await client.query('BEGIN');
-
-    await client.query(
+    await pool.query(
       `UPDATE cheques SET
          estado=$1,
          fecha_deposito   = COALESCE($2::date, fecha_deposito),
@@ -248,7 +245,7 @@ router.put('/:cliente_id/:id/estado', async (req, res) => {
 
     // Si rechazado y se pidió registrar cargo en CC cliente
     if (estado === 'rechazado' && registrar_cargo_cc && monto_cargo) {
-      await client.query(
+      await pool.query(
         `INSERT INTO cuentas_corrientes_clientes_movimientos
            (cuenta_id, tipo, monto, descripcion, creado_en)
          SELECT cc.id, 'debito', $1, 'Cheque rechazado nro ' || c.numero, now()
@@ -260,14 +257,10 @@ router.put('/:cliente_id/:id/estado', async (req, res) => {
       ).catch(() => {});
     }
 
-    await client.query('COMMIT');
     res.json({ ok: true });
   } catch (err) {
-    await client.query('ROLLBACK');
     console.error('cheques estado:', err.message);
     res.status(500).json({ error: err.message });
-  } finally {
-    client.release();
   }
 });
 

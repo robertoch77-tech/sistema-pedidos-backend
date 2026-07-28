@@ -218,18 +218,15 @@ router.post('/:cliente_id', async (req, res) => {
     return res.status(400).json({ mensaje: 'El remito debe tener al menos un ítem' });
   }
 
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-
-    const numRes = await client.query(
+    const numRes = await pool.query(
       `SELECT COALESCE(MAX(numero), 0) + 1 AS siguiente FROM remitos WHERE cliente_id=$1`,
       [cliente_id]
     );
     const numero          = parseInt(numRes.rows[0].siguiente, 10);
     const numero_completo = `R-${String(numero).padStart(5, '0')}`;
 
-    const remitoRes = await client.query(
+    const remitoRes = await pool.query(
       `INSERT INTO remitos
          (cliente_id, numero, numero_completo, tipo, contraparte_tipo,
           comprador_nombre, comprador_cuit, proveedor_id, sucursal_destino_id,
@@ -251,7 +248,7 @@ router.post('/:cliente_id', async (req, res) => {
 
     for (let idx = 0; idx < items.length; idx++) {
       const it = items[idx];
-      await client.query(
+      await pool.query(
         `INSERT INTO remitos_items
            (remito_id, cliente_id, producto_id, variante_id, es_libre,
             descripcion_libre, descripcion, codigo,
@@ -275,21 +272,17 @@ router.post('/:cliente_id', async (req, res) => {
       );
     }
 
-    await client.query(
+    await pool.query(
       `INSERT INTO analytics_eventos (cliente_id, tipo, referencia_id, datos)
        VALUES ($1,'remito_creado',$2,$3)`,
       [cliente_id, remito_id, JSON.stringify({ numero_completo, tipo })]
     ).catch(() => {});
 
-    await client.query('COMMIT');
     res.json({ ok: true, remito_id, numero_completo });
 
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
     console.error('POST /remitos error:', err.message);
     res.status(500).json({ mensaje: 'Error al crear remito', detalle: err.message });
-  } finally {
-    client.release();
   }
 });
 
@@ -368,21 +361,15 @@ router.put('/:cliente_id/:id/confirmar-entrega', async (req, res) => {
     cantidades_entregadas = [],
   } = req.body;
 
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-
-    const remRes = await client.query(
+    const remRes = await pool.query(
       `SELECT * FROM remitos WHERE id=$1 AND cliente_id=$2`,
       [id, cliente_id]
     );
     const remito = remRes.rows[0];
-    if (!remito) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ mensaje: 'Remito no encontrado' });
-    }
+    if (!remito) return res.status(404).json({ mensaje: 'Remito no encontrado' });
 
-    const itemsRes = await client.query(
+    const itemsRes = await pool.query(
       `SELECT * FROM remitos_items WHERE remito_id=$1 ORDER BY orden ASC`,
       [id]
     );
@@ -397,21 +384,21 @@ router.put('/:cliente_id/:id/confirmar-entrega', async (req, res) => {
       const remitida  = parseFloat(item.cantidad_remitida) || 0;
       if (entregada < remitida) esParcial = true;
 
-      await client.query(
+      await pool.query(
         `UPDATE remitos_items SET cantidad_entregada=$1, motivo_diferencia=$2 WHERE id=$3`,
         [entregada, ce.motivo_diferencia || null, item.id]
       );
 
       // Actualizar stock según tipo de remito
       if (!remito.stock_actualizado && remito.tipo === 'salida' && !item.es_libre && item.producto_id) {
-        await client.query(
+        await pool.query(
           `UPDATE productos_propios
            SET stock_actual = COALESCE(stock_actual, 0) - $1, modificado_en=now()
            WHERE id=$2 AND cliente_id=$3`,
           [entregada, item.producto_id, cliente_id]
         ).catch(() => {});
       } else if (!remito.stock_actualizado && remito.tipo === 'entrada' && !item.es_libre && item.producto_id) {
-        await client.query(
+        await pool.query(
           `UPDATE productos_propios
            SET stock_actual = COALESCE(stock_actual, 0) + $1,
                modificado_en = now()
@@ -423,22 +410,18 @@ router.put('/:cliente_id/:id/confirmar-entrega', async (req, res) => {
 
     const nuevoEstado = esParcial ? 'parcial' : 'entregado';
 
-    await client.query(
+    await pool.query(
       `UPDATE remitos SET estado=$1, firma_receptor=$2, aclaracion_receptor=$3,
        stock_actualizado=true, modificado_en=now()
        WHERE id=$4 AND cliente_id=$5`,
       [nuevoEstado, firma_receptor, aclaracion_receptor, id, cliente_id]
     );
 
-    await client.query('COMMIT');
     res.json({ ok: true, estado: nuevoEstado });
 
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
     console.error('PUT /remitos/:id/confirmar-entrega error:', err.message);
     res.status(500).json({ mensaje: 'Error al confirmar entrega', detalle: err.message });
-  } finally {
-    client.release();
   }
 });
 
@@ -448,41 +431,34 @@ router.put('/:cliente_id/:id/confirmar-entrega', async (req, res) => {
 router.put('/:cliente_id/:id/convertir-factura', async (req, res) => {
   const { cliente_id, id } = req.params;
 
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-
-    const remRes = await client.query(
+    const remRes = await pool.query(
       `SELECT * FROM remitos WHERE id=$1 AND cliente_id=$2`,
       [id, cliente_id]
     );
     const remito = remRes.rows[0];
-    if (!remito) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ mensaje: 'Remito no encontrado' });
-    }
+    if (!remito) return res.status(404).json({ mensaje: 'Remito no encontrado' });
     if (remito.convertido_a_factura) {
-      await client.query('ROLLBACK');
       return res.status(400).json({ mensaje: 'Ya fue convertido a factura', venta_id: remito.factura_venta_id });
     }
 
     let venta_id = remito.venta_id;
 
     if (!venta_id) {
-      const itemsRes = await client.query(
+      const itemsRes = await pool.query(
         `SELECT * FROM remitos_items WHERE remito_id=$1 ORDER BY orden ASC`,
         [id]
       );
       const items = itemsRes.rows;
 
-      const numRes = await client.query(
+      const numRes = await pool.query(
         `SELECT COALESCE(MAX(numero), 0) + 1 AS siguiente FROM ventas WHERE cliente_id=$1`,
         [cliente_id]
       );
       const numero_v          = parseInt(numRes.rows[0].siguiente, 10);
       const numero_completo_v = `V-${String(numero_v).padStart(5, '0')}`;
 
-      const ventaRes = await client.query(
+      const ventaRes = await pool.query(
         `INSERT INTO ventas
            (cliente_id, numero, numero_completo, prefijo, tipo_comprobante,
             comprador_nombre, comprador_cuit,
@@ -501,7 +477,7 @@ router.put('/:cliente_id/:id/convertir-factura', async (req, res) => {
 
       for (let idx = 0; idx < items.length; idx++) {
         const it = items[idx];
-        await client.query(
+        await pool.query(
           `INSERT INTO ventas_items
              (venta_id, cliente_id, producto_id, es_libre, descripcion_libre,
               cantidad, precio_unitario, descuento_porcentaje, descuento_monto,
@@ -522,7 +498,7 @@ router.put('/:cliente_id/:id/convertir-factura', async (req, res) => {
       if (!remito.stock_actualizado && remito.tipo === 'salida') {
         for (const it of items) {
           if (!it.es_libre && it.producto_id) {
-            await client.query(
+            await pool.query(
               `UPDATE productos_propios
                SET stock_actual = COALESCE(stock_actual, 0) - $1, modificado_en=now()
                WHERE id=$2 AND cliente_id=$3`,
@@ -530,28 +506,24 @@ router.put('/:cliente_id/:id/convertir-factura', async (req, res) => {
             ).catch(() => {});
           }
         }
-        await client.query(
+        await pool.query(
           `UPDATE remitos SET stock_actualizado=true WHERE id=$1`,
           [id]
         );
       }
     }
 
-    await client.query(
+    await pool.query(
       `UPDATE remitos SET convertido_a_factura=true, factura_venta_id=$1, modificado_en=now()
        WHERE id=$2 AND cliente_id=$3`,
       [venta_id, id, cliente_id]
     );
 
-    await client.query('COMMIT');
     res.json({ ok: true, venta_id });
 
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
     console.error('PUT /remitos/:id/convertir-factura error:', err.message);
     res.status(500).json({ mensaje: 'Error al convertir en factura', detalle: err.message });
-  } finally {
-    client.release();
   }
 });
 

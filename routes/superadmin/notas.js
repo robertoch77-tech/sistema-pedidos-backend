@@ -247,7 +247,6 @@ router.get('/:cliente_id/:tipo_nota/:id', async (req, res) => {
 
 // ─── POST /:cliente_id/credito ────────────────────────────────
 router.post('/:cliente_id/credito', async (req, res) => {
-  const client = await pool.connect();
   try {
     const { cliente_id } = req.params;
     const {
@@ -257,9 +256,7 @@ router.post('/:cliente_id/credito', async (req, res) => {
       afecta_cuenta_corriente = false, observaciones, estado = 'emitida',
     } = req.body;
 
-    await client.query('BEGIN');
-
-    const numRes = await client.query(
+    const numRes = await pool.query(
       `SELECT COALESCE(MAX(numero),0)+1 AS siguiente FROM notas_credito WHERE cliente_id=$1`,
       [cliente_id]
     );
@@ -268,7 +265,7 @@ router.post('/:cliente_id/credito', async (req, res) => {
 
     const totales = calcTotales(items);
 
-    const notaRes = await client.query(
+    const notaRes = await pool.query(
       `INSERT INTO notas_credito
          (cliente_id, numero, numero_completo, tipo, estado,
           comprador_nombre, comprador_cuit, proveedor_id,
@@ -288,7 +285,7 @@ router.post('/:cliente_id/credito', async (req, res) => {
     const nota_id = notaRes.rows[0].id;
 
     for (const it of items) {
-      await client.query(
+      await pool.query(
         `INSERT INTO notas_credito_items
            (nota_id, producto_id, variante_id, es_libre, descripcion,
             cantidad, precio_unitario, descuento_pct, alicuota_iva, subtotal, total_item)
@@ -302,7 +299,7 @@ router.post('/:cliente_id/credito', async (req, res) => {
     // CC: haber en cliente (emitida) o proveedor (recibida)
     if (afecta_cuenta_corriente) {
       if (tipo === 'emitida') {
-        await client.query(
+        await pool.query(
           `INSERT INTO cuentas_corrientes_clientes_movimientos
              (cuenta_id, tipo, monto, descripcion, creado_en)
            SELECT cc.id, 'haber', $1, $2, now()
@@ -310,7 +307,7 @@ router.post('/:cliente_id/credito', async (req, res) => {
           [totales.total, `NC ${numero_completo} - ${motivo}`, cliente_id]
         ).catch(() => {});
       } else if (tipo === 'recibida' && proveedor_id) {
-        await client.query(
+        await pool.query(
           `UPDATE proveedores SET saldo = saldo - $1 WHERE id=$2`,
           [totales.total, proveedor_id]
         ).catch(() => {});
@@ -321,7 +318,7 @@ router.post('/:cliente_id/credito', async (req, res) => {
     if (afecta_stock) {
       for (const it of items) {
         if (it.producto_id) {
-          await client.query(
+          await pool.query(
             `UPDATE productos SET stock = stock + $1 WHERE id=$2`,
             [n(it.cantidad), it.producto_id]
           ).catch(() => {});
@@ -330,26 +327,21 @@ router.post('/:cliente_id/credito', async (req, res) => {
     }
 
     // Analytics
-    await client.query(
+    await pool.query(
       `INSERT INTO analytics_eventos (cliente_id, tipo, valor, metadata, creado_en)
        VALUES ($1,'nc_emitida',$2,$3,now())`,
       [cliente_id, totales.total, JSON.stringify({ nota_id, numero_completo, tipo })]
     ).catch(() => {});
 
-    await client.query('COMMIT');
     res.json({ ok: true, nota_id, numero_completo });
   } catch (err) {
-    await client.query('ROLLBACK');
     console.error('notas credito crear:', err.message);
     res.status(500).json({ error: err.message });
-  } finally {
-    client.release();
   }
 });
 
 // ─── POST /:cliente_id/debito ─────────────────────────────────
 router.post('/:cliente_id/debito', async (req, res) => {
-  const client = await pool.connect();
   try {
     const { cliente_id } = req.params;
     const {
@@ -359,9 +351,7 @@ router.post('/:cliente_id/debito', async (req, res) => {
       afecta_cuenta_corriente = false, observaciones, estado = 'emitida',
     } = req.body;
 
-    await client.query('BEGIN');
-
-    const numRes = await client.query(
+    const numRes = await pool.query(
       `SELECT COALESCE(MAX(numero),0)+1 AS siguiente FROM notas_debito WHERE cliente_id=$1`,
       [cliente_id]
     );
@@ -370,7 +360,7 @@ router.post('/:cliente_id/debito', async (req, res) => {
 
     const totales = calcTotales(items);
 
-    const notaRes = await client.query(
+    const notaRes = await pool.query(
       `INSERT INTO notas_debito
          (cliente_id, numero, numero_completo, tipo, estado,
           comprador_nombre, comprador_cuit, proveedor_id,
@@ -390,7 +380,7 @@ router.post('/:cliente_id/debito', async (req, res) => {
     const nota_id = notaRes.rows[0].id;
 
     for (const it of items) {
-      await client.query(
+      await pool.query(
         `INSERT INTO notas_debito_items
            (nota_id, producto_id, variante_id, es_libre, descripcion,
             cantidad, precio_unitario, descuento_pct, alicuota_iva, subtotal, total_item)
@@ -404,7 +394,7 @@ router.post('/:cliente_id/debito', async (req, res) => {
     // CC: debe en cliente (emitida) o proveedor (recibida)
     if (afecta_cuenta_corriente) {
       if (tipo === 'emitida') {
-        await client.query(
+        await pool.query(
           `INSERT INTO cuentas_corrientes_clientes_movimientos
              (cuenta_id, tipo, monto, descripcion, creado_en)
            SELECT cc.id, 'debito', $1, $2, now()
@@ -412,27 +402,23 @@ router.post('/:cliente_id/debito', async (req, res) => {
           [totales.total, `ND ${numero_completo} - ${motivo}`, cliente_id]
         ).catch(() => {});
       } else if (tipo === 'recibida' && proveedor_id) {
-        await client.query(
+        await pool.query(
           `UPDATE proveedores SET saldo = saldo + $1 WHERE id=$2`,
           [totales.total, proveedor_id]
         ).catch(() => {});
       }
     }
 
-    await client.query(
+    await pool.query(
       `INSERT INTO analytics_eventos (cliente_id, tipo, valor, metadata, creado_en)
        VALUES ($1,'nd_emitida',$2,$3,now())`,
       [cliente_id, totales.total, JSON.stringify({ nota_id, numero_completo, tipo })]
     ).catch(() => {});
 
-    await client.query('COMMIT');
     res.json({ ok: true, nota_id, numero_completo });
   } catch (err) {
-    await client.query('ROLLBACK');
     console.error('notas debito crear:', err.message);
     res.status(500).json({ error: err.message });
-  } finally {
-    client.release();
   }
 });
 
@@ -455,24 +441,18 @@ router.put('/:cliente_id/:tipo_nota/:id/estado', async (req, res) => {
 
 // ─── PUT /:cliente_id/:tipo_nota/:id/anular ───────────────────
 router.put('/:cliente_id/:tipo_nota/:id/anular', async (req, res) => {
-  const client = await pool.connect();
   try {
     const { cliente_id, tipo_nota, id } = req.params;
     const { motivo_anulacion } = req.body;
     const tabla      = tipo_nota === 'debito' ? 'notas_debito'      : 'notas_credito';
 
-    await client.query('BEGIN');
-
-    const notaRes = await client.query(
+    const notaRes = await pool.query(
       `SELECT * FROM ${tabla} WHERE id=$1 AND cliente_id=$2`, [id, cliente_id]
     );
-    if (notaRes.rows.length === 0) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ error: 'No encontrada' });
-    }
+    if (notaRes.rows.length === 0) return res.status(404).json({ error: 'No encontrada' });
     const nota = notaRes.rows[0];
 
-    await client.query(
+    await pool.query(
       `UPDATE ${tabla} SET anulada=true, estado='anulada', motivo_anulacion=$1, actualizado_en=now()
        WHERE id=$2`,
       [motivo_anulacion || '', id]
@@ -481,7 +461,7 @@ router.put('/:cliente_id/:tipo_nota/:id/anular', async (req, res) => {
     // Revertir movimiento CC si había
     if (nota.afecta_cuenta_corriente) {
       if (tipo_nota === 'credito' && nota.tipo === 'emitida') {
-        await client.query(
+        await pool.query(
           `INSERT INTO cuentas_corrientes_clientes_movimientos
              (cuenta_id, tipo, monto, descripcion, creado_en)
            SELECT cc.id, 'debito', $1, $2, now()
@@ -489,7 +469,7 @@ router.put('/:cliente_id/:tipo_nota/:id/anular', async (req, res) => {
           [n(nota.total), `Anulación ${nota.numero_completo}`, cliente_id]
         ).catch(() => {});
       } else if (tipo_nota === 'debito' && nota.tipo === 'emitida') {
-        await client.query(
+        await pool.query(
           `INSERT INTO cuentas_corrientes_clientes_movimientos
              (cuenta_id, tipo, monto, descripcion, creado_en)
            SELECT cc.id, 'haber', $1, $2, now()
@@ -501,7 +481,7 @@ router.put('/:cliente_id/:tipo_nota/:id/anular', async (req, res) => {
 
     // Revertir stock si NC con stock
     if (tipo_nota === 'credito' && nota.afecta_stock) {
-      await client.query(
+      await pool.query(
         `UPDATE productos p SET stock = stock - nci.cantidad
          FROM notas_credito_items nci
          WHERE nci.nota_id=$1 AND nci.producto_id IS NOT NULL AND p.id=nci.producto_id`,
@@ -509,14 +489,10 @@ router.put('/:cliente_id/:tipo_nota/:id/anular', async (req, res) => {
       ).catch(() => {});
     }
 
-    await client.query('COMMIT');
     res.json({ ok: true });
   } catch (err) {
-    await client.query('ROLLBACK');
     console.error('notas anular:', err.message);
     res.status(500).json({ error: err.message });
-  } finally {
-    client.release();
   }
 });
 

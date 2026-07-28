@@ -344,7 +344,6 @@ router.get('/:cliente_id/:id/movimientos', async (req, res) => {
 
 // ─── POST MOVIMIENTO ──────────────────────────────────────────
 router.post('/:cliente_id/:id/movimiento', async (req, res) => {
-  const client = await pool.connect();
   try {
     const { cliente_id, id } = req.params;
     const {
@@ -361,20 +360,18 @@ router.post('/:cliente_id/:id/movimiento', async (req, res) => {
       observaciones      = '',
     } = req.body;
 
-    await client.query('BEGIN');
-
-    const ccRes = await client.query(
-      `SELECT saldo FROM cuentas_corrientes_clientes WHERE id=$1 AND cliente_id=$2 FOR UPDATE`,
+    const ccRes = await pool.query(
+      `SELECT saldo FROM cuentas_corrientes_clientes WHERE id=$1 AND cliente_id=$2`,
       [id, cliente_id]
     );
-    if (!ccRes.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ mensaje: 'Cliente no encontrado' }); }
+    if (!ccRes.rows.length) return res.status(404).json({ mensaje: 'Cliente no encontrado' });
 
     const saldoAnterior = parseFloat(ccRes.rows[0].saldo) || 0;
     const debeNum       = parseFloat(debe)  || 0;
     const haberNum      = parseFloat(haber) || 0;
     const saldoActual   = saldoAnterior + debeNum - haberNum;
 
-    await client.query(
+    await pool.query(
       `INSERT INTO movimientos_cuentas_corrientes
          (cuenta_corriente_id, cliente_id, tipo, debe, haber, saldo_acumulado,
           descripcion, numero_comprobante, fecha_vencimiento, venta_id,
@@ -386,7 +383,7 @@ router.post('/:cliente_id/:id/movimiento', async (req, res) => {
     );
 
     // Recalcular saldo_vencido
-    const vencidoRes = await client.query(
+    const vencidoRes = await pool.query(
       `SELECT COALESCE(SUM(debe - haber), 0) AS vencido
        FROM movimientos_cuentas_corrientes
        WHERE cuenta_corriente_id=$1 AND estado='pendiente'
@@ -395,21 +392,17 @@ router.post('/:cliente_id/:id/movimiento', async (req, res) => {
     );
     const saldoVencido = parseFloat(vencidoRes.rows[0].vencido) || 0;
 
-    await client.query(
+    await pool.query(
       `UPDATE cuentas_corrientes_clientes
        SET saldo=$1, saldo_vencido=$2, modificado_en=now()
        WHERE id=$3`,
       [saldoActual, Math.max(0, saldoVencido), id]
     );
 
-    await client.query('COMMIT');
     res.json({ ok: true, saldo_actual: saldoActual });
   } catch (err) {
-    await client.query('ROLLBACK');
     console.error('POST movimiento CC error:', err.message);
     res.status(500).json({ mensaje: 'Error al registrar movimiento', detalle: err.message });
-  } finally {
-    client.release();
   }
 });
 

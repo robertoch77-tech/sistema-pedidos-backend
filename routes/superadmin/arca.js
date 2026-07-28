@@ -320,7 +320,6 @@ router.post('/config/:cliente_id/test', async (req, res) => {
 
 // ─── POST /facturar/:cliente_id ───────────────────────────────
 router.post('/facturar/:cliente_id', async (req, res) => {
-  const client = await pool.connect();
   const { cliente_id } = req.params;
   try {
     const {
@@ -329,10 +328,8 @@ router.post('/facturar/:cliente_id', async (req, res) => {
       receptor_condicion_iva = '5',
     } = req.body;
 
-    await client.query('BEGIN');
-
     // Leer config
-    const cfgRes = await client.query(`SELECT * FROM arca_configuracion WHERE cliente_id=$1`, [cliente_id]);
+    const cfgRes = await pool.query(`SELECT * FROM arca_configuracion WHERE cliente_id=$1`, [cliente_id]);
     if (cfgRes.rows.length === 0) throw new Error('Sin configuración ARCA');
     const config = cfgRes.rows[0];
 
@@ -345,7 +342,7 @@ router.post('/facturar/:cliente_id', async (req, res) => {
     }
 
     // Guardar token actualizado
-    await client.query(
+    await pool.query(
       `UPDATE arca_configuracion SET token_wsaa=$1, sign_wsaa=$2, token_expira=$3 WHERE cliente_id=$4`,
       [tokenData.token, tokenData.sign, tokenData.expira ?? (config.token_expira), cliente_id]
     );
@@ -357,7 +354,7 @@ router.post('/facturar/:cliente_id', async (req, res) => {
 
     if (venta_id) {
       try {
-        const ventaRes = await client.query(`SELECT * FROM ventas WHERE id=$1`, [venta_id]);
+        const ventaRes = await pool.query(`SELECT * FROM ventas WHERE id=$1`, [venta_id]);
         if (ventaRes.rows.length > 0) {
           const venta = ventaRes.rows[0];
           importe_total = n(venta.total ?? venta.monto_total ?? 0);
@@ -457,7 +454,7 @@ router.post('/facturar/:cliente_id', async (req, res) => {
     const numero_completo = `${prefijo}-${String(pventa).padStart(4,'0')}-${String(nuevoNum).padStart(8,'0')}`;
 
     // INSERT arca_comprobantes
-    const compRes = await client.query(
+    const compRes = await pool.query(
       `INSERT INTO arca_comprobantes
          (cliente_id, venta_id, tipo_comprobante, numero_completo, punto_venta, numero,
           receptor_cuit, receptor_nombre, receptor_cond_iva,
@@ -473,7 +470,7 @@ router.post('/facturar/:cliente_id', async (req, res) => {
 
     // UPDATE ventas
     if (venta_id) {
-      await client.query(
+      await pool.query(
         `UPDATE ventas SET cae=$1, cae_vencimiento=$2, tipo_factura=$3, numero_arca=$4, facturado=true
          WHERE id=$5`,
         [cae, cae_vencimiento, String(cbteTipo), numero_completo, venta_id]
@@ -481,7 +478,7 @@ router.post('/facturar/:cliente_id', async (req, res) => {
     }
 
     // INSERT libros_iva_ventas
-    await client.query(
+    await pool.query(
       `INSERT INTO libros_iva_ventas
          (cliente_id, comprobante_id, venta_id, tipo_comprobante, numero_completo,
           cuit_receptor, nombre_receptor, importe_neto, importe_iva_21, importe_total, cae)
@@ -490,15 +487,11 @@ router.post('/facturar/:cliente_id', async (req, res) => {
        receptor_cuit, receptor_nombre, importe_neto, importe_iva, importe_total, cae]
     );
 
-    await client.query('COMMIT');
     res.json({ ok: true, cae, numero_completo, tipo_factura: String(cbteTipo), vencimiento_cae: cae_vencimiento });
   } catch (err) {
-    await client.query('ROLLBACK');
     console.error('arca facturar:', err.message);
     await logARCA(cliente_id, 'facturar', false, '', '', err.message);
     res.status(500).json({ error: err.message });
-  } finally {
-    client.release();
   }
 });
 

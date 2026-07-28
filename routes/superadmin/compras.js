@@ -80,12 +80,9 @@ router.post('/:cliente_id', async (req, res) => {
     return res.status(400).json({ mensaje: 'El total de la compra es requerido' });
   }
 
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-
     // 1. INSERT compra
-    const compraRes = await client.query(
+    const compraRes = await pool.query(
       `INSERT INTO compras
          (cliente_id, proveedor_id, proveedor_nombre, numero_factura,
           tipo, fecha, subtotal, iva_monto, total, estado, observaciones,
@@ -117,7 +114,7 @@ router.post('/:cliente_id', async (req, res) => {
         const subtotal_item = precio * cantidad;
         const total_item    = subtotal_item + iva_item;
 
-        await client.query(
+        await pool.query(
           `INSERT INTO compras_items
              (compra_id, cliente_id, producto_id, es_libre,
               descripcion, cantidad, precio_unitario,
@@ -137,7 +134,7 @@ router.post('/:cliente_id', async (req, res) => {
 
         // Sumar stock si es producto real
         if (!it.es_libre && it.producto_id) {
-          await client.query(
+          await pool.query(
             `UPDATE productos_propios
              SET stock_actual = COALESCE(stock_actual, 0) + $1,
                  modificado_en = now()
@@ -150,15 +147,15 @@ router.post('/:cliente_id', async (req, res) => {
 
     // 3. Movimiento CC proveedor (si hay proveedor_id)
     if (proveedor_id) {
-      const provRes = await client.query(
-        `SELECT saldo FROM proveedores WHERE id = $1 AND cliente_id = $2 FOR UPDATE`,
+      const provRes = await pool.query(
+        `SELECT saldo FROM proveedores WHERE id = $1 AND cliente_id = $2`,
         [proveedor_id, cliente_id]
       );
       if (provRes.rows.length > 0) {
         const saldo_anterior = n(provRes.rows[0].saldo);
         const saldo_nuevo    = saldo_anterior + n(total);
 
-        await client.query(
+        await pool.query(
           `INSERT INTO cuentas_corrientes_proveedores_movimientos
              (proveedor_id, cliente_id, tipo, debe, haber,
               saldo_acumulado, descripcion, numero_comprobante,
@@ -174,7 +171,7 @@ router.post('/:cliente_id', async (req, res) => {
           ]
         );
 
-        await client.query(
+        await pool.query(
           `UPDATE proveedores
            SET saldo = $1, ultima_compra = now(), modificado_en = now()
            WHERE id = $2`,
@@ -183,9 +180,7 @@ router.post('/:cliente_id', async (req, res) => {
       }
     }
 
-    await client.query('COMMIT');
-
-    // 4. Movimiento caja (egreso) — fuera de la transacción
+    // 4. Movimiento caja (egreso)
     try {
       const cajaRes = await pool.query(
         `SELECT id FROM cajas
@@ -222,11 +217,8 @@ router.post('/:cliente_id', async (req, res) => {
     res.json({ ok: true, compra_id });
 
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
     console.error('POST /compras error:', err.message);
     res.status(500).json({ mensaje: 'Error al registrar compra', detalle: err.message });
-  } finally {
-    client.release();
   }
 });
 

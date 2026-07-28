@@ -157,29 +157,22 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ mensaje: 'Faltan campos obligatorios' });
   }
 
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-
     // 1. Verificar CUIT único
-    const cuitCheck = await client.query(
+    const cuitCheck = await pool.query(
       'SELECT id FROM clientes_roberto WHERE cuit=$1',
       [cuit.trim()]
     );
     if (cuitCheck.rows.length > 0) {
-      await client.query('ROLLBACK');
-      client.release();
       return res.status(400).json({ mensaje: 'CUIT ya registrado' });
     }
 
     // 2. Verificar código único
-    const codigoCheck = await client.query(
+    const codigoCheck = await pool.query(
       'SELECT id FROM clientes_roberto WHERE codigo_acceso=$1',
       [codigo_acceso.trim()]
     );
     if (codigoCheck.rows.length > 0) {
-      await client.query('ROLLBACK');
-      client.release();
       return res.status(400).json({ mensaje: 'Código ya en uso' });
     }
 
@@ -187,7 +180,7 @@ router.post('/', async (req, res) => {
     const password_hash = bcrypt.hashSync(clave_inicial, 10);
 
     // 4. Insertar en mayoristas (para que el sistema lo reconozca)
-    const mayoristaRes = await client.query(
+    const mayoristaRes = await pool.query(
       `INSERT INTO mayoristas (
         nombre, email, password, codigo, config_habilitada, activo, tipo_fuente,
         habilitar_mensajes, habilitar_notificaciones, habilitar_banners,
@@ -210,7 +203,7 @@ router.post('/', async (req, res) => {
     const mayorista_id = mayoristaRes.rows[0].id;
 
     // 5 + 6. Insertar en clientes_roberto con mayorista_id
-    const clienteRes = await client.query(
+    const clienteRes = await pool.query(
       `INSERT INTO clientes_roberto (
         nombre_comercial, razon_social, cuit, condicion_iva, rubro,
         email, whatsapp, telefono,
@@ -245,10 +238,6 @@ router.post('/', async (req, res) => {
     );
     const cliente_id = clienteRes.rows[0].id;
 
-    await client.query('COMMIT');
-    client.release();
-
-    // 7. Respuesta
     res.json({
       ok: true,
       cliente_id,
@@ -258,8 +247,6 @@ router.post('/', async (req, res) => {
     });
 
   } catch (error) {
-    await client.query('ROLLBACK').catch(() => {});
-    client.release();
     console.error('SuperAdmin crear cliente error:', error.message);
     res.status(500).json({ mensaje: 'Error del servidor', detalle: error.message });
   }
@@ -267,41 +254,28 @@ router.post('/', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   const { id } = req.params;
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-
-    const clienteRes = await client.query(
+    const clienteRes = await pool.query(
       `SELECT c.mayorista_id, m.tipo_fuente
        FROM clientes_roberto c
        LEFT JOIN mayoristas m ON m.id = c.mayorista_id
        WHERE c.id = $1`,
       [id]
     );
-    if (!clienteRes.rows[0]) {
-      await client.query('ROLLBACK');
-      client.release();
-      return res.status(404).json({ mensaje: 'Cliente no encontrado' });
-    }
+    if (!clienteRes.rows[0]) return res.status(404).json({ mensaje: 'Cliente no encontrado' });
 
     const { mayorista_id, tipo_fuente } = clienteRes.rows[0];
     if (tipo_fuente !== 'roberto') {
-      await client.query('ROLLBACK');
-      client.release();
       return res.status(403).json({ mensaje: 'Este cliente pertenece al sistema Ivan y no puede eliminarse desde aquí' });
     }
 
-    await client.query('DELETE FROM clientes_roberto WHERE id=$1', [id]);
+    await pool.query('DELETE FROM clientes_roberto WHERE id=$1', [id]);
     if (mayorista_id) {
-      await client.query('DELETE FROM mayoristas WHERE id=$1', [mayorista_id]);
+      await pool.query('DELETE FROM mayoristas WHERE id=$1', [mayorista_id]);
     }
 
-    await client.query('COMMIT');
-    client.release();
     res.json({ ok: true });
   } catch (error) {
-    await client.query('ROLLBACK').catch(() => {});
-    client.release();
     console.error('SuperAdmin DELETE cliente error:', error.message);
     res.status(500).json({ mensaje: 'Error del servidor' });
   }

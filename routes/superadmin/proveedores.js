@@ -342,7 +342,6 @@ router.get('/:cliente_id/:id/cuenta-corriente', async (req, res) => {
 
 // ─── POST MOVIMIENTO ──────────────────────────────────────────
 router.post('/:cliente_id/:id/movimiento', async (req, res) => {
-  const client = await pool.connect();
   try {
     const { cliente_id, id } = req.params;
     const {
@@ -364,16 +363,11 @@ router.post('/:cliente_id/:id/movimiento', async (req, res) => {
       observaciones      = '',
     } = req.body;
 
-    await client.query('BEGIN');
-
-    const provRes = await client.query(
-      `SELECT saldo FROM proveedores WHERE id=$1 AND cliente_id=$2 FOR UPDATE`,
+    const provRes = await pool.query(
+      `SELECT saldo FROM proveedores WHERE id=$1 AND cliente_id=$2`,
       [id, cliente_id]
     );
-    if (!provRes.rows.length) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ mensaje: 'Proveedor no encontrado' });
-    }
+    if (!provRes.rows.length) return res.status(404).json({ mensaje: 'Proveedor no encontrado' });
 
     const saldoAnt  = parseFloat(provRes.rows[0].saldo) || 0;
     const debeNum   = parseFloat(debe)  || 0;
@@ -381,7 +375,7 @@ router.post('/:cliente_id/:id/movimiento', async (req, res) => {
     // Para proveedores: compras aumentan deuda (debe), pagos la reducen (haber)
     const saldoAct  = saldoAnt + debeNum - haberNum;
 
-    await client.query(
+    await pool.query(
       `INSERT INTO cuentas_corrientes_proveedores_movimientos
          (proveedor_id, cliente_id, tipo, debe, haber, saldo_acumulado,
           descripcion, numero_comprobante, fecha_comprobante, fecha_vencimiento,
@@ -398,7 +392,7 @@ router.post('/:cliente_id/:id/movimiento', async (req, res) => {
     );
 
     // Recalcular saldo vencido
-    const vencRes = await client.query(
+    const vencRes = await pool.query(
       `SELECT COALESCE(SUM(debe-haber),0) AS vencido
        FROM cuentas_corrientes_proveedores_movimientos
        WHERE proveedor_id=$1 AND estado='pendiente'
@@ -407,20 +401,16 @@ router.post('/:cliente_id/:id/movimiento', async (req, res) => {
     );
     const saldoVenc = Math.max(0, parseFloat(vencRes.rows[0].vencido) || 0);
 
-    await client.query(
+    await pool.query(
       `UPDATE proveedores SET saldo=$1, saldo_vencido=$2, modificado_en=now()
        WHERE id=$3`,
       [saldoAct, saldoVenc, id]
     );
 
-    await client.query('COMMIT');
     res.json({ ok: true, saldo_actual: saldoAct });
   } catch (err) {
-    await client.query('ROLLBACK');
     console.error('POST movimiento proveedor error:', err.message);
     res.status(500).json({ mensaje: 'Error al registrar movimiento', detalle: err.message });
-  } finally {
-    client.release();
   }
 });
 
