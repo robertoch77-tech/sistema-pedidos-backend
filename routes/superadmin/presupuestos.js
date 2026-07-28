@@ -262,8 +262,7 @@ router.post('/:cliente_id', async (req, res) => {
     fechaVenc.setDate(fechaVenc.getDate() + diasInt);
     const fechaVencStr = fechaVenc.toISOString().slice(0, 10);
 
-    // 4. INSERT directo sin transacción (debug)
-    console.log('DEBUG INSERT params:', { cliente_id, numero, numero_completo, estado });
+    // 4. INSERT presupuesto
     const presRes = await pool.query(
       `INSERT INTO presupuestos
          (cliente_id, numero, numero_completo,
@@ -285,8 +284,32 @@ router.post('/:cliente_id', async (req, res) => {
         descPct.toFixed(4), recargoPct.toFixed(4), conIva, estado,
       ]
     );
-    console.log('PRESUPUESTO DIRECTO ID:', presRes.rows[0]?.id);
     const presupuesto_id = presRes.rows[0].id;
+
+    // 5. INSERT items
+    for (const item of items) {
+      await pool.query(
+        `INSERT INTO presupuestos_items
+           (presupuesto_id, cliente_id, producto_id,
+            es_libre, descripcion, cantidad,
+            precio_unitario, descuento_porcentaje,
+            alicuota_iva, subtotal, total)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        [
+          presupuesto_id,
+          cliente_id,
+          item.producto_id || null,
+          item.es_libre || false,
+          item.descripcion || item.descripcion_libre || '',
+          item.cantidad,
+          item.precio_unitario,
+          item.descuento_porcentaje || 0,
+          item.alicuota_iva || 21,
+          (item.cantidad * item.precio_unitario).toFixed(4),
+          (item.cantidad * item.precio_unitario).toFixed(4),
+        ]
+      );
+    }
 
     res.json({ ok: true, presupuesto_id, numero_completo, fecha_vencimiento: fechaVencStr });
 
