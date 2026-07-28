@@ -291,6 +291,9 @@ function PantallaResultado({
   onCerrar: () => void;
 }) {
   const generarHTML = (size: 'A4' | 'A5') => {
+    const cfgRaw = localStorage.getItem(`roberto_config_${cid}`);
+    const cfg = cfgRaw ? JSON.parse(cfgRaw) : {};
+    const nombreNegocio = cfg.nombre_comercial || 'Mi Negocio';
     const filas = r.items.map(it =>
       `<tr><td>${it.codigo || '—'}</td><td>${it.descripcion}</td><td style="text-align:center">${it.cantidad_remitida}</td><td>${it.unidad_medida}</td></tr>`
     ).join('');
@@ -311,7 +314,7 @@ function PantallaResultado({
   .footer { margin-top:16px; font-size:10px; color:#718096; border-top:1px solid #eee; padding-top:8px; }
 </style></head><body>
 <div class="header">
-  <div><div class="negocio">MI NEGOCIO</div><div style="color:#718096">REMITO DE ${tipoLabel.toUpperCase()}</div></div>
+  <div><div class="negocio">${nombreNegocio}</div><div style="color:#718096">REMITO DE ${tipoLabel.toUpperCase()}</div></div>
   <div style="text-align:right">
     <div style="font-size:20px;font-weight:700;color:#1B2A4A">${r.numero_completo}</div>
     <div style="color:#718096">Fecha: ${new Date().toLocaleDateString('es-AR')}</div>
@@ -777,12 +780,15 @@ export default function RobertoRemitos() {
 
   // ── Imprimir desde lista ─────────────────────────────────────
   const imprimirDesde = (r: RemitoRow) => {
+    const cfgRaw = localStorage.getItem(`roberto_config_${cid}`);
+    const cfg = cfgRaw ? JSON.parse(cfgRaw) : {};
+    const nombreNegocioDesde = cfg.nombre_comercial || 'Mi Negocio';
     const w = window.open('', '_blank');
     if (!w) return;
     const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${r.numero_completo}</title>
 <style>@page{size:A4;margin:12mm}body{font-family:Arial,sans-serif;font-size:12px}.header{border-bottom:2px solid #1B2A4A;padding-bottom:10px;margin-bottom:14px;display:flex;justify-content:space-between}.negocio{font-size:20px;font-weight:700;color:#1B2A4A}.firma{margin-top:60px;border-top:1px solid #ccc;padding-top:12px}.firma-linea{display:flex;gap:40px}.firma-campo{flex:1;border-bottom:1px solid #999;min-height:40px;margin-top:8px}</style>
 </head><body>
-<div class="header"><div><div class="negocio">MI NEGOCIO</div><div>REMITO</div></div><div><div style="font-size:20px;font-weight:700">${r.numero_completo}</div><div>Fecha: ${fmtFecha(r.fecha)}</div></div></div>
+<div class="header"><div><div class="negocio">${nombreNegocioDesde}</div><div>REMITO</div></div><div><div style="font-size:20px;font-weight:700">${r.numero_completo}</div><div>Fecha: ${fmtFecha(r.fecha)}</div></div></div>
 <div>Cliente/Proveedor: <strong>${r.comprador_nombre || '—'}</strong></div>
 ${r.fecha_entrega ? `<div>Fecha entrega: <strong>${fmtFecha(r.fecha_entrega)}</strong></div>` : ''}
 <p style="color:#718096;font-size:11px;margin-top:16px">Ver detalle completo en el sistema.</p>
