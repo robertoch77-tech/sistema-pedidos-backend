@@ -699,6 +699,19 @@ function PantallaCuentaCorriente({ clienteId, token, proveedor: provInicial, onV
       </tr>`;
     }).join('');
     const saldoColor = saldo > 0 ? '#E53E3E' : '#38A169';
+    const cfgPro = (() => { try { return JSON.parse(localStorage.getItem(`roberto_config_${getClienteId()}`) || '{}'); } catch { return {}; } })();
+    const logoUrlPro = cfgPro.logo_url         || '';
+    const negNomPro  = cfgPro.nombre_comercial || '';
+    const negDirPro  = cfgPro.direccion        || '';
+    const negCuitPro = cfgPro.cuit             || '';
+    const logoBlockPro = `<div style="display:flex;align-items:center;gap:16px;margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid #e2e8f0">
+      ${logoUrlPro ? `<img src="${logoUrlPro}" alt="" style="max-width:120px;max-height:50px;object-fit:contain;flex-shrink:0">` : ''}
+      <div>
+        ${negNomPro  ? `<div style="font-size:14px;font-weight:700">${negNomPro}</div>`   : ''}
+        ${negDirPro  ? `<div style="font-size:10px;color:#666">${negDirPro}</div>`        : ''}
+        ${negCuitPro ? `<div style="font-size:10px;color:#666">CUIT: ${negCuitPro}</div>` : ''}
+      </div>
+    </div>`;
     w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>CC ${provInicial.nombre}</title>
 <style>@page{size:A4 landscape;margin:10mm}body{font-family:Arial,sans-serif;font-size:10px}
 h2{color:#1B2A4A;margin:0 0 4px}.saldo{font-size:22px;font-weight:800;color:${saldoColor};margin-bottom:12px}
@@ -706,6 +719,7 @@ table{width:100%;border-collapse:collapse}
 th{background:#1B2A4A;color:#fff;padding:5px 8px;text-align:left;font-size:9px}
 td{padding:4px 8px;border-bottom:1px solid #eee;font-size:9px}</style>
 </head><body>
+${logoBlockPro}
 <h2>CC Proveedor — ${provInicial.nombre}</h2>
 ${provInicial.cuit ? `<p style="font-size:10px;color:#718096">CUIT: ${provInicial.cuit}</p>` : ''}
 <div class="saldo">Saldo: ${fmt(Math.abs(saldo))}${saldo > 0 ? ' (deuda)' : ' (a favor)'}</div>

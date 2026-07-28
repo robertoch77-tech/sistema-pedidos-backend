@@ -112,6 +112,19 @@ function calcTotalesItems(items: NotaItem[]) {
 function generarPDFNota(nota: Nota & { items?: NotaItem[] }, tipoNota: 'credito' | 'debito') {
   const prefijo = tipoNota === 'credito' ? 'NC' : 'ND';
   const color   = tipoNota === 'credito' ? BLUE : ORANGE;
+  const cfg = (() => { try { return JSON.parse(localStorage.getItem(`roberto_config_${getClienteId()}`) || '{}'); } catch { return {}; } })();
+  const logoUrl  = cfg.logo_url         || '';
+  const negNom   = cfg.nombre_comercial || '';
+  const negDir   = cfg.direccion        || '';
+  const negCuit  = cfg.cuit             || '';
+  const logoBlock = `<div style="display:flex;align-items:center;gap:16px;margin-bottom:20px;padding-bottom:12px;border-bottom:2px solid #e2e8f0">
+    ${logoUrl ? `<img src="${logoUrl}" alt="" style="max-width:150px;max-height:70px;object-fit:contain;flex-shrink:0">` : ''}
+    <div>
+      ${negNom  ? `<div style="font-size:18px;font-weight:700">${negNom}</div>`   : ''}
+      ${negDir  ? `<div style="font-size:12px;color:#666">${negDir}</div>`        : ''}
+      ${negCuit ? `<div style="font-size:12px;color:#666">CUIT: ${negCuit}</div>` : ''}
+    </div>
+  </div>`;
   const w = window.open('', '_blank');
   if (!w) return;
 
@@ -131,6 +144,7 @@ function generarPDFNota(nota: Nota & { items?: NotaItem[] }, tipoNota: 'credito'
     <style>body{font-family:Arial,sans-serif;padding:32px;color:#2D3748;font-size:13px}
     table{width:100%;border-collapse:collapse}th{background:#F7FAFC;padding:8px 10px;text-align:left;font-size:11px;color:#718096;border-bottom:2px solid ${color}}</style>
   </head><body>
+    ${logoBlock}
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px">
       <div>
         <h1 style="color:${color};font-size:26px;margin:0">${prefijo === 'NC' ? 'NOTA DE CRÉDITO' : 'NOTA DE DÉBITO'}</h1>

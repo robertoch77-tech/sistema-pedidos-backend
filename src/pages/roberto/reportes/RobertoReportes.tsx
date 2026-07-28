@@ -159,6 +159,19 @@ function exportarExcel(nombre: string, encabezados: string[], filas: any[][]) {
 function exportarPDF(titulo: string, encabezados: string[], filas: any[][]) {
   const w = window.open('', '_blank');
   if (!w) return;
+  const cfg = (() => { try { return JSON.parse(localStorage.getItem(`roberto_config_${getClienteId()}`) || '{}'); } catch { return {}; } })();
+  const logoUrl  = cfg.logo_url         || '';
+  const negNom   = cfg.nombre_comercial || '';
+  const negDir   = cfg.direccion        || '';
+  const negCuit  = cfg.cuit             || '';
+  const logoBlock = `<div style="display:flex;align-items:center;gap:16px;margin-bottom:20px;padding-bottom:12px;border-bottom:2px solid #e2e8f0">
+    ${logoUrl ? `<img src="${logoUrl}" alt="" style="max-width:150px;max-height:70px;object-fit:contain;flex-shrink:0">` : ''}
+    <div>
+      ${negNom  ? `<div style="font-size:18px;font-weight:700">${negNom}</div>`   : ''}
+      ${negDir  ? `<div style="font-size:12px;color:#666">${negDir}</div>`        : ''}
+      ${negCuit ? `<div style="font-size:12px;color:#666">CUIT: ${negCuit}</div>` : ''}
+    </div>
+  </div>`;
   const filaHtml = (celdas: any[], tag = 'td') =>
     `<tr>${celdas.map(c => `<${tag}>${c}</${tag}>`).join('')}</tr>`;
   w.document.write(`<!DOCTYPE html><html><head><title>${titulo}</title>
@@ -168,6 +181,7 @@ function exportarPDF(titulo: string, encabezados: string[], filas: any[][]) {
     th{background:#F7FAFC;padding:8px;text-align:left;border-bottom:2px solid #63B3ED;font-size:11px;color:#718096}
     td{padding:8px;border-bottom:1px solid #EDF2F7}
     tr:nth-child(even){background:#F7FAFC}</style></head><body>
+    ${logoBlock}
     <h1>${titulo}</h1>
     <table><thead>${filaHtml(encabezados, 'th')}</thead>
     <tbody>${filas.map(f => filaHtml(f)).join('')}</tbody></table>

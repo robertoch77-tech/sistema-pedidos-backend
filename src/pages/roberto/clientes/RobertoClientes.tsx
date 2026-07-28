@@ -730,6 +730,19 @@ function PantallaCuentaCorriente({ clienteId, token, cliente: clienteInicial, on
       </tr>`;
     }).join('');
     const saldoColor = Number(cliente.saldo) > 0 ? '#E53E3E' : '#38A169';
+    const cfgCli = (() => { try { return JSON.parse(localStorage.getItem(`roberto_config_${getClienteId()}`) || '{}'); } catch { return {}; } })();
+    const logoUrlCli = cfgCli.logo_url         || '';
+    const negNomCli  = cfgCli.nombre_comercial || '';
+    const negDirCli  = cfgCli.direccion        || '';
+    const negCuitCli = cfgCli.cuit             || '';
+    const logoBlockCli = `<div style="display:flex;align-items:center;gap:16px;margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid #e2e8f0">
+      ${logoUrlCli ? `<img src="${logoUrlCli}" alt="" style="max-width:120px;max-height:50px;object-fit:contain;flex-shrink:0">` : ''}
+      <div>
+        ${negNomCli  ? `<div style="font-size:14px;font-weight:700">${negNomCli}</div>`   : ''}
+        ${negDirCli  ? `<div style="font-size:10px;color:#666">${negDirCli}</div>`        : ''}
+        ${negCuitCli ? `<div style="font-size:10px;color:#666">CUIT: ${negCuitCli}</div>` : ''}
+      </div>
+    </div>`;
     w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>CC ${cliente.comprador_nombre}</title>
 <style>@page{size:A4 landscape;margin:10mm}body{font-family:Arial,sans-serif;font-size:10px}
 h2{color:#1B2A4A;margin:0 0 4px}p{margin:2px 0;color:#718096;font-size:11px}
@@ -738,6 +751,7 @@ table{width:100%;border-collapse:collapse}
 th{background:#1B2A4A;color:#fff;padding:5px 8px;text-align:left;font-size:9px}
 td{padding:4px 8px;border-bottom:1px solid #eee;font-size:9px}</style>
 </head><body>
+${logoBlockCli}
 <h2>Cuenta Corriente — ${cliente.comprador_nombre}</h2>
 <p>${cliente.comprador_cuit ? `CUIT: ${cliente.comprador_cuit}` : ''} ${cliente.comprador_telefono ? `| Tel: ${cliente.comprador_telefono}` : ''}</p>
 <div class="saldo">Saldo: ${fmt(Number(cliente.saldo))}</div>

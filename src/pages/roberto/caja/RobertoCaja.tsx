@@ -100,6 +100,19 @@ const TURNOS = ['Mañana', 'Tarde', 'Noche', 'Único'];
 function generarPDFCierre(res: ResumenCierre, desglose: Desglose) {
   const w = window.open('', '_blank');
   if (!w) return;
+  const cfg = (() => { try { return JSON.parse(localStorage.getItem(`roberto_config_${getClienteId()}`) || '{}'); } catch { return {}; } })();
+  const logoUrl  = cfg.logo_url         || '';
+  const negNom   = cfg.nombre_comercial || '';
+  const negDir   = cfg.direccion        || '';
+  const negCuit  = cfg.cuit             || '';
+  const logoBlock = `<div style="display:flex;align-items:center;gap:16px;margin-bottom:20px;padding-bottom:12px;border-bottom:2px solid #e2e8f0">
+    ${logoUrl ? `<img src="${logoUrl}" alt="" style="max-width:150px;max-height:70px;object-fit:contain;flex-shrink:0">` : ''}
+    <div>
+      ${negNom  ? `<div style="font-size:18px;font-weight:700">${negNom}</div>`   : ''}
+      ${negDir  ? `<div style="font-size:12px;color:#666">${negDir}</div>`        : ''}
+      ${negCuit ? `<div style="font-size:12px;color:#666">CUIT: ${negCuit}</div>` : ''}
+    </div>
+  </div>`;
   const diff = res.diferencia;
   const diffColor = Math.abs(diff) < 0.01 ? GREEN : RED;
   w.document.write(`<!DOCTYPE html><html><head><title>Cierre de Caja</title>
@@ -112,6 +125,7 @@ function generarPDFCierre(res: ResumenCierre, desglose: Desglose) {
       td{padding:10px;border-bottom:1px solid #EDF2F7}
       .total{font-size:20px;font-weight:700}
     </style></head><body>
+    ${logoBlock}
     <h1>🏦 CIERRE DE CAJA</h1>
     <p class="sub">Turno: ${res.turno} | Apertura: ${fmtFechaHora(res.fecha_apertura)} | Cierre: ${fmtFechaHora(new Date().toISOString())}</p>
     <table>
@@ -513,9 +527,23 @@ function TabHistorial({ cid }: { cid: number }) {
     const diff = c.diferencia;
     const w = window.open('', '_blank');
     if (!w) return;
+    const cfgH = (() => { try { return JSON.parse(localStorage.getItem(`roberto_config_${cid}`) || '{}'); } catch { return {}; } })();
+    const logoUrlH  = cfgH.logo_url         || '';
+    const negNomH   = cfgH.nombre_comercial || '';
+    const negDirH   = cfgH.direccion        || '';
+    const negCuitH  = cfgH.cuit             || '';
+    const logoBlockH = `<div style="display:flex;align-items:center;gap:16px;margin-bottom:20px;padding-bottom:12px;border-bottom:2px solid #e2e8f0">
+      ${logoUrlH ? `<img src="${logoUrlH}" alt="" style="max-width:150px;max-height:70px;object-fit:contain;flex-shrink:0">` : ''}
+      <div>
+        ${negNomH  ? `<div style="font-size:18px;font-weight:700">${negNomH}</div>`   : ''}
+        ${negDirH  ? `<div style="font-size:12px;color:#666">${negDirH}</div>`        : ''}
+        ${negCuitH ? `<div style="font-size:12px;color:#666">CUIT: ${negCuitH}</div>` : ''}
+      </div>
+    </div>`;
     w.document.write(`<!DOCTYPE html><html><head><title>Caja ${fmtFecha(c.fecha_apertura)}</title>
       <style>body{font-family:Arial,sans-serif;padding:32px;color:#2D3748;font-size:13px}
       h1{color:#1B2A4A}</style></head><body>
+      ${logoBlockH}
       <h1>🏦 CIERRE DE CAJA — ${c.turno}</h1>
       <p>Apertura: ${fmtFechaHora(c.fecha_apertura)}</p>
       <p>Cierre: ${fmtFechaHora(c.fecha_cierre)}</p>
