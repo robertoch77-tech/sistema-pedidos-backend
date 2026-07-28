@@ -455,7 +455,28 @@ router.post('/aplicar', async (req, res) => {
           } else if (prod.tipo === 'subio' || prod.tipo === 'bajo') {
             await client.query(
               `UPDATE productos_propios
-               SET precio_costo=$1, precio_costo_anterior=$2, modificado_en=now()
+               SET precio_costo=$1, precio_costo_anterior=$2,
+                   precio_costo_final = $1::numeric
+                     * (1 - COALESCE(dto_1,0)/100)
+                     * (1 - COALESCE(dto_2,0)/100)
+                     * (1 - COALESCE(dto_3,0)/100),
+                   precio_venta_final = $1::numeric
+                     * (1 - COALESCE(dto_1,0)/100) * (1 - COALESCE(dto_2,0)/100) * (1 - COALESCE(dto_3,0)/100)
+                     * (1 + COALESCE(imp_1,0)/100) * (1 + COALESCE(imp_2,0)/100)
+                     * CASE WHEN COALESCE(utilidad_1,0) > 0 THEN (1 + utilidad_1/100) ELSE 1 END,
+                   precio_venta_1 = $1::numeric
+                     * (1 - COALESCE(dto_1,0)/100) * (1 - COALESCE(dto_2,0)/100) * (1 - COALESCE(dto_3,0)/100)
+                     * (1 + COALESCE(imp_1,0)/100) * (1 + COALESCE(imp_2,0)/100)
+                     * CASE WHEN COALESCE(utilidad_1,0) > 0 THEN (1 + utilidad_1/100) ELSE 1 END,
+                   precio_venta_2 = $1::numeric
+                     * (1 - COALESCE(dto_1,0)/100) * (1 - COALESCE(dto_2,0)/100) * (1 - COALESCE(dto_3,0)/100)
+                     * (1 + COALESCE(imp_1,0)/100) * (1 + COALESCE(imp_2,0)/100)
+                     * CASE WHEN COALESCE(utilidad_2,0) > 0 THEN (1 + utilidad_2/100) ELSE 1 END,
+                   precio_venta_3 = $1::numeric
+                     * (1 - COALESCE(dto_1,0)/100) * (1 - COALESCE(dto_2,0)/100) * (1 - COALESCE(dto_3,0)/100)
+                     * (1 + COALESCE(imp_1,0)/100) * (1 + COALESCE(imp_2,0)/100)
+                     * CASE WHEN COALESCE(utilidad_3,0) > 0 THEN (1 + utilidad_3/100) ELSE 1 END,
+                   modificado_en=now()
                WHERE cliente_id=$3 AND proveedor_id=$4 AND codigo=$5`,
               [prod.precio_nuevo, prod.precio_actual, cliente_id, proveedor_id, prod.codigo]
             );
@@ -904,6 +925,11 @@ function toNum(str) {
   return isNaN(n) ? null : n;
 }
 
+function calcPCF(pc, d1, d2, d3) {
+  const n = v => parseFloat(v) || 0;
+  return n(pc) * (1 - n(d1)/100) * (1 - n(d2)/100) * (1 - n(d3)/100);
+}
+
 async function getOrCreateProveedor(cliente_id, nombre) {
   const row = await pool.query(
     'SELECT id FROM proveedores WHERE cliente_id=$1 AND LOWER(nombre)=LOWER($2) LIMIT 1',
@@ -1042,6 +1068,8 @@ router.post('/aplicar-libre', (req, res, next) => { req.setTimeout(300000); next
           if (!descripcion && !codigo) continue;
           const key = codigo.toUpperCase();
           try {
+            const lPCF = calcPCF(toNum(prod.precio_costo), toNum(prod.descuento_1), toNum(prod.descuento_2), toNum(prod.descuento_3));
+            const lPVF = toNum(prod.precio_venta_1) || lPCF || 0;
             if (existMap.has(key)) {
               await client.query(
                 `UPDATE productos_propios SET
@@ -1049,19 +1077,22 @@ router.post('/aplicar-libre', (req, res, next) => { req.setTimeout(300000); next
                    precio_costo=COALESCE($2, precio_costo),
                    precio_venta_1=COALESCE($3, precio_venta_1),
                    precio_venta_2=COALESCE($4, precio_venta_2),
-                   precio_venta_final=COALESCE($5, precio_venta_final),
-                   marca=COALESCE(NULLIF($6,''), marca),
-                   rubro=COALESCE(NULLIF($7,''), rubro),
-                   unidad_medida=COALESCE(NULLIF($8,''), unidad_medida),
-                   ean=COALESCE(NULLIF($9,''), ean),
-                   dto_1=COALESCE($10, dto_1), dto_2=COALESCE($11, dto_2), dto_3=COALESCE($12, dto_3),
-                   alicuota_iva=COALESCE($13, alicuota_iva),
-                   proveedor_id=COALESCE($14, proveedor_id), modificado_en=now()
-                 WHERE id=$15`,
+                   precio_venta_3=COALESCE($5, precio_venta_3),
+                   precio_costo_final=COALESCE($6, precio_costo_final),
+                   precio_venta_final=COALESCE($7, precio_venta_final),
+                   marca=COALESCE(NULLIF($8,''), marca),
+                   rubro=COALESCE(NULLIF($9,''), rubro),
+                   unidad_medida=COALESCE(NULLIF($10,''), unidad_medida),
+                   ean=COALESCE(NULLIF($11,''), ean),
+                   dto_1=COALESCE($12, dto_1), dto_2=COALESCE($13, dto_2), dto_3=COALESCE($14, dto_3),
+                   alicuota_iva=COALESCE($15, alicuota_iva),
+                   proveedor_id=COALESCE($16, proveedor_id), modificado_en=now()
+                 WHERE id=$17`,
                 [
                   descripcion,
                   toNum(prod.precio_costo), toNum(prod.precio_venta_1), toNum(prod.precio_venta_2),
                   toNum(prod.precio_venta_3),
+                  lPCF||null, lPVF||null,
                   prod.marca, prod.rubro, prod.unidad_medida, prod.ean,
                   toNum(prod.descuento_1), toNum(prod.descuento_2), toNum(prod.descuento_3),
                   toNum(prod.iva), proveedor_id, existMap.get(key),
@@ -1072,13 +1103,14 @@ router.post('/aplicar-libre', (req, res, next) => { req.setTimeout(300000); next
               await client.query(
                 `INSERT INTO productos_propios
                    (cliente_id, proveedor_id, codigo, descripcion, precio_costo, precio_venta_1,
-                    precio_venta_2, precio_venta_final, marca, rubro, unidad_medida, ean,
-                    dto_1, dto_2, dto_3, alicuota_iva, activo)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,true)`,
+                    precio_venta_2, precio_venta_3, precio_costo_final, precio_venta_final,
+                    marca, rubro, unidad_medida, ean, dto_1, dto_2, dto_3, alicuota_iva, activo)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,true)`,
                 [
                   cliente_id, proveedor_id, codigo || null, descripcion,
                   toNum(prod.precio_costo) ?? 0, toNum(prod.precio_venta_1) ?? 0,
                   toNum(prod.precio_venta_2) ?? 0, toNum(prod.precio_venta_3) ?? 0,
+                  lPCF||0, lPVF||0,
                   prod.marca || null, prod.rubro || null, prod.unidad_medida || null, prod.ean || null,
                   toNum(prod.descuento_1) ?? 0, toNum(prod.descuento_2) ?? 0,
                   toNum(prod.descuento_3) ?? 0, toNum(prod.iva) ?? 0,
@@ -1484,6 +1516,8 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
               stock_actual:   numVal(fila, mapeo.stock, enc),
               stock_minimo:   numVal(fila, mapeo.stock_minimo, enc),
             };
+            const pcf = calcPCF(campos.precio_costo, campos.dto_1, campos.dto_2, campos.dto_3);
+            const pvFinal = campos.precio_venta_1 || pcf || 0;
             if (key && existMap.has(key)) {
               const existing = existMap.get(key);
               const mismoProv = proveedor_id === null ||
@@ -1501,11 +1535,15 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
                    dto_1=COALESCE($11,dto_1),dto_2=COALESCE($12,dto_2),dto_3=COALESCE($13,dto_3),
                    alicuota_iva=COALESCE($14,alicuota_iva),
                    stock_actual=COALESCE($15,stock_actual),stock_minimo=COALESCE($16,stock_minimo),
-                   modificado_en=now() WHERE id=$17 AND cliente_id=$18`,
+                   precio_costo_final=COALESCE($17,precio_costo_final),
+                   precio_venta_final=COALESCE($18,precio_venta_final),
+                   modificado_en=now() WHERE id=$19 AND cliente_id=$20`,
                   [descripcion,proveedor_id,campos.precio_costo,campos.precio_venta_1,campos.precio_venta_2,
                    campos.precio_venta_3,campos.marca,campos.rubro,campos.unidad_medida,campos.ean,
                    campos.dto_1,campos.dto_2,campos.dto_3,campos.alicuota_iva,
-                   campos.stock_actual,campos.stock_minimo,existing.id,cliente_id]
+                   campos.stock_actual,campos.stock_minimo,
+                   pcf||null, pvFinal||null,
+                   existing.id,cliente_id]
                 );
                 actualizados++;
               } else {
@@ -1515,13 +1553,14 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
                   `INSERT INTO productos_propios
                    (cliente_id,proveedor_id,codigo,descripcion,precio_costo,precio_venta_1,precio_venta_2,
                     precio_venta_3,marca,rubro,unidad_medida,ean,dto_1,dto_2,dto_3,alicuota_iva,
-                    stock_actual,stock_minimo,activo)
-                   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,true) RETURNING id`,
+                    stock_actual,stock_minimo,precio_costo_final,precio_venta_final,activo)
+                   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,true) RETURNING id`,
                   [cliente_id,proveedor_id,codigoPrefijado,descripcion,
                    campos.precio_costo||0,campos.precio_venta_1||0,campos.precio_venta_2||0,campos.precio_venta_3||0,
                    campos.marca,campos.rubro,campos.unidad_medida,campos.ean,
                    campos.dto_1||0,campos.dto_2||0,campos.dto_3||0,campos.alicuota_iva||0,
-                   campos.stock_actual||0,campos.stock_minimo||0]
+                   campos.stock_actual||0,campos.stock_minimo||0,
+                   pcf||0, pvFinal||0]
                 );
                 const newKey = codigoPrefijado ? codigoPrefijado.trim().toUpperCase() : null;
                 if (newKey) existMap.set(newKey, { id: ins.rows[0].id, proveedor_id });
@@ -1533,13 +1572,14 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
                 `INSERT INTO productos_propios
                  (cliente_id,proveedor_id,codigo,descripcion,precio_costo,precio_venta_1,precio_venta_2,
                   precio_venta_3,marca,rubro,unidad_medida,ean,dto_1,dto_2,dto_3,alicuota_iva,
-                  stock_actual,stock_minimo,activo)
-                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,true) RETURNING id`,
+                  stock_actual,stock_minimo,precio_costo_final,precio_venta_final,activo)
+                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,true) RETURNING id`,
                 [cliente_id,proveedor_id,codigo,descripcion,
                  campos.precio_costo||0,campos.precio_venta_1||0,campos.precio_venta_2||0,campos.precio_venta_3||0,
                  campos.marca,campos.rubro,campos.unidad_medida,campos.ean,
                  campos.dto_1||0,campos.dto_2||0,campos.dto_3||0,campos.alicuota_iva||0,
-                 campos.stock_actual||0,campos.stock_minimo||0]
+                 campos.stock_actual||0,campos.stock_minimo||0,
+                 pcf||0, pvFinal||0]
               );
               if (key) existMap.set(key, { id: ins.rows[0].id, proveedor_id });
               nuevos++;
