@@ -326,6 +326,11 @@ router.post('/:cliente_id', async (req, res) => {
     ).catch(() => {});
 
     await client.query('COMMIT');
+    const verificar = await pool.query(
+      'SELECT id FROM presupuestos WHERE id = $1',
+      [presupuesto_id]
+    );
+    console.log('VERIFICACION POST-COMMIT:', JSON.stringify(verificar.rows));
     res.json({ ok: true, presupuesto_id, numero_completo, fecha_vencimiento: fechaVencStr });
 
   } catch (err) {
