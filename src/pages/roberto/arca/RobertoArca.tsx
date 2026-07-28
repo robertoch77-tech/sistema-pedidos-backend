@@ -216,13 +216,23 @@ function TabEmitir({ cid, config, onEmitida }: {
   };
 
   // Calcular importes
-  const total     = n(ventaSel?.total ?? ventaSel?.monto_total ?? 0);
-  const neto21    = total / 1.21;
-  const iva21     = total - neto21;
-  const neto105   = 0;
-  const iva105    = 0;
+  const total = n(ventaSel?.total ?? ventaSel?.monto_total ?? 0);
+  const itemsVenta = (ventaSel?.items ?? []) as any[];
+  const iva21 = itemsVenta
+    .filter((it: any) => n(it.alicuota_iva) === 21)
+    .reduce((acc: number, it: any) => acc + n(it.precio ?? it.precio_unitario) * n(it.cantidad) * 21 / 100, 0);
+  const neto21 = itemsVenta
+    .filter((it: any) => n(it.alicuota_iva) === 21)
+    .reduce((acc: number, it: any) => acc + n(it.precio ?? it.precio_unitario) * n(it.cantidad), 0) - iva21;
+  const iva105 = itemsVenta
+    .filter((it: any) => n(it.alicuota_iva) === 10.5)
+    .reduce((acc: number, it: any) => acc + n(it.precio ?? it.precio_unitario) * n(it.cantidad) * 10.5 / 100, 0);
+  const neto105 = itemsVenta
+    .filter((it: any) => n(it.alicuota_iva) === 10.5)
+    .reduce((acc: number, it: any) => acc + n(it.precio ?? it.precio_unitario) * n(it.cantidad), 0) - iva105;
 
   const emitir = async () => {
+    if (!ventaSel) return;
     setError('');
     setEmitiendo(true);
     try {
@@ -328,7 +338,7 @@ function TabEmitir({ cid, config, onEmitida }: {
       </div>
 
       {/* Importes calculados */}
-      {(ventaSel || true) && (
+      {ventaSel && (
         <div style={{ backgroundColor: '#fff', borderRadius: '10px', padding: '18px 20px', boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}>
           <h4 style={{ margin: '0 0 12px', fontSize: '13px', fontWeight: 700, color: NAVY }}>Desglose de importes</h4>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
