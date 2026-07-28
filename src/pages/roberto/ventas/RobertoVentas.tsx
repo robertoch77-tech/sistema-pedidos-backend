@@ -404,6 +404,10 @@ function RobertoVentas() {
   const [formaPago,      setFormaPago]      = useState('efectivo');
   const [montoRecibido,  setMontoRecibido]  = useState<number>(0);
 
+  // CC cliente
+  const [ccClienteId,  setCcClienteId]  = useState<number | null>(null);
+  const [cargandoCC,   setCargandoCC]   = useState(false);
+
   // Submit
   const [procesando,   setProcesando]   = useState(false);
   const [errVenta,     setErrVenta]     = useState('');
@@ -476,6 +480,25 @@ function RobertoVentas() {
     const t = setTimeout(cargarVentas, 300);
     return () => clearTimeout(t);
   }, [cargarVentas]);
+
+  // ── Fetch id de CC del cliente seleccionado ───────────────────
+  const fetchCuentaCorrienteId = useCallback(async (clienteId: number) => {
+    if (!cid) return;
+    setCargandoCC(true);
+    try {
+      const r = await fetch(
+        `${API_BASE}/api/superadmin/cuenta-corriente/${cid}/${clienteId}`,
+        { headers: authHdr }
+      );
+      if (r.ok) {
+        const d = await r.json();
+        setCcClienteId(d.cuenta?.id ?? d.id ?? null);
+      } else {
+        setCcClienteId(null);
+      }
+    } catch { setCcClienteId(null); }
+    finally { setCargandoCC(false); }
+  }, [cid]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Enfocar input al abrir modal ──────────────────────────────
   useEffect(() => {
@@ -585,6 +608,7 @@ function RobertoVentas() {
   const resetModal = () => {
     setItems([]); setTipoCliente('mostrador'); setNomMostrador('');
     setBusqCliente(''); setClienteSel(null); setClientesDrop([]);
+    setCcClienteId(null);
     setBusqProd(''); setProdsDrop([]); setShowDrop(false);
     setDescGlobal(0); setRecargo(0); setPrecioConIva(true); setEnCC(false); setObserv('');
     setFormaPago('efectivo'); setMontoRecibido(0);
@@ -631,6 +655,7 @@ function RobertoVentas() {
       comprador_nombre:      compradorNombre,
       comprador_cuit:        compradorCuit,
       va_a_cuenta_corriente: enCC,
+      ...(enCC && ccClienteId ? { cuenta_corriente_cliente_id: ccClienteId } : {}),
       observaciones:         observ,
       descuento_global:      descGlobal,
       recargo_global:        recargo,
@@ -913,7 +938,7 @@ function RobertoVentas() {
                   </div>
                   <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
                     {(['mostrador', 'cuenta'] as const).map(t => (
-                      <button key={t} onClick={() => { setTipoCliente(t); setClienteSel(null); setBusqCliente(''); setClientesDrop([]); }}
+                      <button key={t} onClick={() => { setTipoCliente(t); setClienteSel(null); setBusqCliente(''); setClientesDrop([]); setCcClienteId(null); setEnCC(false); }}
                         style={{ ...btnStyle(tipoCliente === t ? BLUE : '#EDF2F7', tipoCliente === t ? '#fff' : GRAY), fontSize: '12px', padding: '7px 14px' }}>
                         {t === 'mostrador' ? '🏪 Mostrador' : '👥 Con cuenta'}
                       </button>
@@ -931,7 +956,7 @@ function RobertoVentas() {
                       {clienteSel && (
                         <div style={{ marginTop: '5px', fontSize: '13px', color: GREEN, fontWeight: 600 }}>
                           ✓ {clienteSel.comprador_nombre}{clienteSel.comprador_cuit ? ` — ${clienteSel.comprador_cuit}` : ''}
-                          <button onClick={() => { setClienteSel(null); setBusqCliente(''); }}
+                          <button onClick={() => { setClienteSel(null); setBusqCliente(''); setCcClienteId(null); setEnCC(false); }}
                             style={{ marginLeft: '8px', background: 'none', border: 'none', color: GRAY, cursor: 'pointer', fontSize: '12px' }}>×</button>
                         </div>
                       )}
@@ -939,7 +964,7 @@ function RobertoVentas() {
                         <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, backgroundColor: '#fff', border: '1.5px solid #CBD5E0', borderRadius: '8px', boxShadow: '0 8px 24px rgba(0,0,0,0.15)', zIndex: 20, marginTop: '2px' }}>
                           {clientesDrop.map(cl => (
                             <div key={cl.id}
-                              onClick={() => { setClienteSel(cl); setBusqCliente(cl.comprador_nombre); setClientesDrop([]); }}
+                              onClick={() => { setClienteSel(cl); setBusqCliente(cl.comprador_nombre); setClientesDrop([]); setEnCC(false); setCcClienteId(null); fetchCuentaCorrienteId(cl.id); }}
                               style={{ padding: '10px 14px', cursor: 'pointer', borderBottom: '1px solid #F7FAFC', fontSize: '13px' }}
                               onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#EBF8FF'; }}
                               onMouseLeave={e => { e.currentTarget.style.backgroundColor = '#fff'; }}>
@@ -1135,9 +1160,24 @@ function RobertoVentas() {
                               style={{ ...inputStyle, width: '90px' }} />
                           </div>
                         </div>
-                        <button onClick={() => setEnCC(v => !v)}
+                        <button
+                          onClick={() => {
+                            if (!enCC) {
+                              if (tipoCliente !== 'cuenta' || !clienteSel) {
+                                setErrVenta('Seleccioná un cliente con cuenta corriente para activar esta opción.');
+                                return;
+                              }
+                              if (cargandoCC) return;
+                              if (!ccClienteId) {
+                                setErrVenta('Este cliente no tiene cuenta corriente abierta.');
+                                return;
+                              }
+                            }
+                            setErrVenta('');
+                            setEnCC(v => !v);
+                          }}
                           style={{ ...btnStyle(enCC ? BLUE : '#EDF2F7', enCC ? '#fff' : GRAY), fontSize: '12px', padding: '7px 14px', width: 'fit-content' }}>
-                          {enCC ? '💳 Cuenta corriente: ON' : '💳 Cuenta corriente: OFF'}
+                          {cargandoCC ? '⏳ Verificando CC...' : enCC ? '💳 Cuenta corriente: ON' : '💳 Cuenta corriente: OFF'}
                         </button>
                         <div>
                           <label style={labelStyle}>Observaciones</label>
