@@ -788,6 +788,9 @@ export default function RobertoRemitos() {
 
   // ── Imprimir desde lista ─────────────────────────────────────
   const imprimirDesde = (r: RemitoRow) => {
+    const cfgRaw = localStorage.getItem(`roberto_config_${cid}`);
+    const cfg = cfgRaw ? JSON.parse(cfgRaw) : {};
+    const nombreNegocioDesde = cfg.nombre_comercial || 'Mi Negocio';
     const w = window.open('', '_blank');
     if (!w) return;
     const cfgD   = JSON.parse(localStorage.getItem(`roberto_config_${getClienteId()}`) || '{}');
