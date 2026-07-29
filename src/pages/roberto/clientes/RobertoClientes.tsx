@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import * as XLSX from 'xlsx';
 import { API_BASE } from '../../../config/api';
 import { getToken } from '../../../utils/auth';
 
@@ -957,6 +958,288 @@ ${logoBlockCli}
 }
 
 // ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// MODAL IMPORTAR CLIENTES DESDE EXCEL
+// ═══════════════════════════════════════════════════════════════
+const CAMPOS_CLIENTES = [
+  { key: 'nombre',        label: 'Nombre *',         req: true  },
+  { key: 'cuit',          label: 'CUIT',             req: false },
+  { key: 'razon_social',  label: 'Razón social',     req: false },
+  { key: 'email',         label: 'Email',            req: false },
+  { key: 'telefono',      label: 'Teléfono',         req: false },
+  { key: 'whatsapp',      label: 'WhatsApp',         req: false },
+  { key: 'direccion',     label: 'Dirección',        req: false },
+  { key: 'ciudad',        label: 'Ciudad',           req: false },
+  { key: 'condicion_iva', label: 'Condición IVA',    req: false },
+];
+
+function normHdr(s: string) {
+  return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
+}
+
+function autoDetectMap(cols: string[]): Record<string, string> {
+  const map: Record<string, string> = {};
+  const aliases: Record<string, string[]> = {
+    nombre:        ['nombre', 'name', 'cliente', 'razon', 'razonsocial'],
+    cuit:          ['cuit', 'cuil', 'rut', 'nif', 'documento'],
+    razon_social:  ['razonsocial', 'razon', 'denominacion'],
+    email:         ['email', 'mail', 'correo', 'emailaddress'],
+    telefono:      ['telefono', 'tel', 'phone', 'celular'],
+    whatsapp:      ['whatsapp', 'wsp', 'ws'],
+    direccion:     ['direccion', 'domicilio', 'address', 'calle'],
+    ciudad:        ['ciudad', 'localidad', 'city'],
+    condicion_iva: ['condicioniva', 'iva', 'condicion', 'condicionafip'],
+  };
+  cols.forEach(col => {
+    const n = normHdr(col);
+    for (const [field, alts] of Object.entries(aliases)) {
+      if (alts.some(a => n.includes(a)) && !map[field]) {
+        map[field] = col;
+      }
+    }
+  });
+  return map;
+}
+
+interface ImportModalProps {
+  cid: number | null;
+  token: string | null;
+  onClose: () => void;
+  onDone: () => void;
+}
+
+function ModalImportarClientes({ cid, token, onClose, onDone }: ImportModalProps) {
+  const [paso, setPaso] = useState(1);
+  const [archivo, setArchivo] = useState<File | null>(null);
+  const [columnas, setColumnas] = useState<string[]>([]);
+  const [muestra, setMuestra] = useState<string[][]>([]);
+  const [mapeo, setMapeo] = useState<Record<string, string>>({});
+  const [conflicto, setConflicto] = useState<'saltar' | 'actualizar'>('actualizar');
+  const [cargando, setCargando] = useState(false);
+  const [resultado, setResultado] = useState<{ importados: number; actualizados: number; saltados: number; errores: number } | null>(null);
+  const [error, setError] = useState('');
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [drag, setDrag] = useState(false);
+
+  function procesarArchivo(f: File) {
+    setArchivo(f);
+    setError('');
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        const data = new Uint8Array(e.target!.result as ArrayBuffer);
+        const wb = XLSX.read(data, { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows: string[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }) as string[][];
+        // find header row (most non-empty cells in first 10)
+        let hdrIdx = 0;
+        let maxFull = 0;
+        rows.slice(0, 10).forEach((row, i) => {
+          const full = row.filter(c => String(c).trim()).length;
+          if (full > maxFull) { maxFull = full; hdrIdx = i; }
+        });
+        const cols = rows[hdrIdx].map(c => String(c).trim()).filter(Boolean);
+        const preview = rows.slice(hdrIdx + 1, hdrIdx + 4).map(r => r.slice(0, cols.length).map(c => String(c)));
+        setColumnas(cols);
+        setMuestra(preview);
+        setMapeo(autoDetectMap(cols));
+        setPaso(2);
+      } catch {
+        setError('No se pudo leer el archivo. Asegurate que sea .xlsx, .xls o .csv');
+      }
+    };
+    reader.readAsArrayBuffer(f);
+  }
+
+  async function importar() {
+    if (!cid || !archivo) return;
+    if (!Object.values(mapeo).find((_, i) => Object.keys(mapeo)[i] === 'nombre') && !mapeo['nombre']) {
+      setError('Debés mapear el campo Nombre.');
+      return;
+    }
+    setCargando(true);
+    setError('');
+    try {
+      const fd = new FormData();
+      fd.append('archivo', archivo);
+      fd.append('mapeo', JSON.stringify(mapeo));
+      fd.append('conflicto', conflicto);
+      const res = await fetch(`${API_BASE}/api/superadmin/importador-entidades/clientes/${cid}/importar`, {
+        method: 'POST', headers: { 'x-superadmin-token': token || '' }, body: fd,
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Error al importar');
+      setResultado(json);
+      setPaso(3);
+    } catch (e: any) {
+      setError(e.message || 'Error al importar');
+    } finally {
+      setCargando(false);
+    }
+  }
+
+  const ovStyle: React.CSSProperties = {
+    position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.55)',
+    zIndex: 1100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px',
+  };
+  const panStyle: React.CSSProperties = {
+    backgroundColor: '#fff', borderRadius: '16px', width: '100%', maxWidth: '620px',
+    maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
+  };
+
+  return (
+    <div style={ovStyle} onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={panStyle}>
+        {/* Header */}
+        <div style={{ padding: '20px 24px 16px', borderBottom: '1px solid #EDF2F7', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <h3 style={{ margin: 0, color: NAVY, fontSize: '16px', fontWeight: 700 }}>📥 Importar clientes desde Excel</h3>
+            <p style={{ margin: '2px 0 0', color: GRAY, fontSize: '12px' }}>Paso {paso} de 3 — {paso === 1 ? 'Seleccionar archivo' : paso === 2 ? 'Mapear columnas' : 'Resultado'}</p>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: GRAY }}>✕</button>
+        </div>
+
+        <div style={{ padding: '24px' }}>
+          {/* Step indicator */}
+          <div style={{ display: 'flex', gap: '8px', marginBottom: '24px' }}>
+            {[1, 2, 3].map(s => (
+              <div key={s} style={{ flex: 1, height: '4px', borderRadius: '2px', backgroundColor: s <= paso ? BLUE : '#E2E8F0' }} />
+            ))}
+          </div>
+
+          {paso === 1 && (
+            <div>
+              <div
+                onDragOver={e => { e.preventDefault(); setDrag(true); }}
+                onDragLeave={() => setDrag(false)}
+                onDrop={e => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files[0]; if (f) procesarArchivo(f); }}
+                onClick={() => fileRef.current?.click()}
+                style={{
+                  border: `2px dashed ${drag ? BLUE : '#CBD5E0'}`, borderRadius: '12px',
+                  padding: '48px 24px', textAlign: 'center', cursor: 'pointer',
+                  backgroundColor: drag ? '#EBF4FF' : '#F7FAFC', transition: 'all 0.2s',
+                }}>
+                <div style={{ fontSize: '48px', marginBottom: '12px' }}>📂</div>
+                <p style={{ color: NAVY, fontWeight: 600, margin: '0 0 6px' }}>Arrastrá tu archivo acá</p>
+                <p style={{ color: GRAY, fontSize: '13px', margin: 0 }}>o hacé clic para seleccionar</p>
+                <p style={{ color: GRAY, fontSize: '11px', marginTop: '8px' }}>Formatos: .xlsx, .xls, .csv</p>
+              </div>
+              <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
+                onChange={e => { const f = e.target.files?.[0]; if (f) procesarArchivo(f); }} />
+              {error && <p style={{ color: RED, fontSize: '13px', marginTop: '12px' }}>{error}</p>}
+            </div>
+          )}
+
+          {paso === 2 && (
+            <div>
+              <p style={{ color: GRAY, fontSize: '13px', marginBottom: '16px' }}>
+                Archivo: <strong>{archivo?.name}</strong> · Asigná cada campo del sistema a una columna de tu Excel.
+              </p>
+
+              {/* Preview table */}
+              {muestra.length > 0 && (
+                <div style={{ overflowX: 'auto', marginBottom: '20px', border: '1px solid #E2E8F0', borderRadius: '8px' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+                    <thead>
+                      <tr style={{ backgroundColor: '#F7FAFC' }}>
+                        {columnas.map(c => (
+                          <th key={c} style={{ padding: '6px 10px', textAlign: 'left', color: NAVY, fontWeight: 600, borderBottom: '1px solid #E2E8F0', whiteSpace: 'nowrap' }}>{c}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {muestra.map((row, i) => (
+                        <tr key={i}>
+                          {row.map((cell, j) => (
+                            <td key={j} style={{ padding: '5px 10px', color: TEXT, borderBottom: '1px solid #F0F0F0', maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cell}</td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* Mapping fields */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
+                {CAMPOS_CLIENTES.map(campo => (
+                  <div key={campo.key}>
+                    <label style={{ display: 'block', fontSize: '11px', color: GRAY, marginBottom: '3px', fontWeight: 600 }}>
+                      {campo.label}
+                    </label>
+                    <select
+                      value={mapeo[campo.key] || ''}
+                      onChange={e => setMapeo(m => ({ ...m, [campo.key]: e.target.value }))}
+                      style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: `1px solid ${mapeo[campo.key] ? BLUE : '#CBD5E0'}`, fontSize: '12px', color: TEXT, backgroundColor: mapeo[campo.key] ? '#EBF4FF' : '#fff' }}>
+                      <option value="">— Sin mapear —</option>
+                      {columnas.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                ))}
+              </div>
+
+              {/* Conflicto */}
+              <div style={{ backgroundColor: '#F7FAFC', borderRadius: '8px', padding: '12px 14px', marginBottom: '16px' }}>
+                <p style={{ margin: '0 0 8px', fontSize: '12px', color: NAVY, fontWeight: 600 }}>Si ya existe un cliente con ese nombre o CUIT:</p>
+                <div style={{ display: 'flex', gap: '12px' }}>
+                  {(['actualizar', 'saltar'] as const).map(op => (
+                    <label key={op} style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '12px', color: TEXT }}>
+                      <input type="radio" name="conflicto" value={op} checked={conflicto === op} onChange={() => setConflicto(op)} />
+                      {op === 'actualizar' ? '✏️ Actualizar datos' : '⏭️ Saltar (no modificar)'}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {error && <p style={{ color: RED, fontSize: '13px', marginBottom: '12px' }}>{error}</p>}
+
+              <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                <button onClick={() => setPaso(1)} style={{ padding: '9px 18px', borderRadius: '8px', border: '1px solid #CBD5E0', backgroundColor: '#fff', cursor: 'pointer', fontSize: '13px', color: GRAY }}>
+                  ← Volver
+                </button>
+                <button onClick={importar} disabled={cargando || !mapeo['nombre']}
+                  style={{ padding: '9px 20px', borderRadius: '8px', border: 'none', backgroundColor: cargando || !mapeo['nombre'] ? '#A0AEC0' : BLUE, color: '#fff', cursor: cargando || !mapeo['nombre'] ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: 600 }}>
+                  {cargando ? 'Importando...' : '📤 Importar'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {paso === 3 && resultado && (
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '56px', marginBottom: '16px' }}>✅</div>
+              <h3 style={{ color: NAVY, margin: '0 0 20px' }}>Importación completada</h3>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '24px' }}>
+                {[
+                  { label: 'Importados', value: resultado.importados, color: GREEN },
+                  { label: 'Actualizados', value: resultado.actualizados, color: BLUE },
+                  { label: 'Saltados', value: resultado.saltados, color: ORANGE },
+                  { label: 'Con errores', value: resultado.errores, color: RED },
+                ].map(item => (
+                  <div key={item.label} style={{ backgroundColor: '#F7FAFC', borderRadius: '10px', padding: '14px', border: `2px solid ${item.value > 0 ? item.color : '#E2E8F0'}` }}>
+                    <div style={{ fontSize: '28px', fontWeight: 700, color: item.value > 0 ? item.color : GRAY }}>{item.value}</div>
+                    <div style={{ fontSize: '12px', color: GRAY, marginTop: '2px' }}>{item.label}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+                <button onClick={() => { setPaso(1); setArchivo(null); setResultado(null); setError(''); }}
+                  style={{ padding: '9px 18px', borderRadius: '8px', border: '1px solid #CBD5E0', backgroundColor: '#fff', cursor: 'pointer', fontSize: '13px', color: GRAY }}>
+                  Importar otro
+                </button>
+                <button onClick={() => { onClose(); onDone(); }}
+                  style={{ padding: '9px 20px', borderRadius: '8px', border: 'none', backgroundColor: GREEN, color: '#fff', cursor: 'pointer', fontSize: '13px', fontWeight: 600 }}>
+                  ✓ Finalizar
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // COMPONENTE PRINCIPAL
 // ═══════════════════════════════════════════════════════════════
 export default function RobertoClientes() {
@@ -979,6 +1262,7 @@ export default function RobertoClientes() {
   const [filtroSaldo,   setFiltroSaldo]   = useState('');
   const [modalCliente,  setModalCliente]  = useState(false);
   const [editCliente,   setEditCliente]   = useState<ClienteFinal | null>(null);
+  const [showImport,    setShowImport]    = useState(false);
 
   const cargarDash = useCallback(() => {
     if (!cid) return;
@@ -1060,6 +1344,7 @@ export default function RobertoClientes() {
         </div>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           <button onClick={() => { setEditCliente(null); setModalCliente(true); }} style={btnSt(GREEN)}>＋ Nuevo cliente</button>
+          <button onClick={() => setShowImport(true)} style={btnSt('#6B46C1', '#fff')}>📥 Importar Excel</button>
           <button onClick={exportarExcel} style={btnSt(BLUE)}>📤 Exportar Excel</button>
         </div>
       </div>
@@ -1179,6 +1464,12 @@ export default function RobertoClientes() {
       </div>
 
       <Pag p={pagina} tp={totalPags} pp={porPagina} setP={setPagina} setPP={setPorPagina} />
+
+      {showImport && (
+        <ModalImportarClientes cid={cid} token={token}
+          onClose={() => setShowImport(false)}
+          onDone={() => { setShowImport(false); cargarClientes(); cargarDash(); }} />
+      )}
 
       {/* Modal nuevo/editar */}
       {modalCliente && cid && (
