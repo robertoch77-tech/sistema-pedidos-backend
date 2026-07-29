@@ -281,6 +281,27 @@ function RobertoCompras() {
   };
 
   const abrirModal  = () => { resetModal(); setModalOpen(true); };
+
+  const imprimirCompra = (c: CompraRow) => {
+    const cfg = JSON.parse(localStorage.getItem(`roberto_config_${cid}`) || '{}');
+    const negocio = cfg.nombre_comercial || 'Mi Negocio';
+    const w = window.open('', '_blank');
+    if (!w) return;
+    w.document.write(`<!DOCTYPE html><html><head><title>Compra ${c.numero_factura || c.id}</title>
+      <style>body{font-family:Arial,sans-serif;padding:32px;color:#2D3748;max-width:600px;margin:auto}
+      h2{color:#1B2A4A;margin:0 0 4px}p{margin:4px 0;font-size:13px}
+      .total{font-size:20px;font-weight:700;color:#E53E3E;margin-top:16px}
+      @media print{body{padding:12px}}</style></head><body>
+      <h2>${negocio}</h2>
+      <h3 style="color:#2B6CB0;margin:8px 0">COMPRA — ${c.numero_factura || '(sin nro)'}</h3>
+      <p><strong>Fecha:</strong> ${fmtFecha(c.fecha)}</p>
+      <p><strong>Proveedor:</strong> ${c.proveedor_nombre || '—'}</p>
+      <p><strong>Tipo:</strong> ${c.tipo === 'detallada' ? 'Detallada' : 'Simple'}</p>
+      <p><strong>Estado:</strong> ${c.estado}</p>
+      <div class="total">TOTAL: $${Number(c.total).toLocaleString('es-AR',{minimumFractionDigits:2})}</div>
+      <script>setTimeout(()=>{window.print()},350)</script></body></html>`);
+    w.document.close();
+  };
   const cerrarModal = () => { setModalOpen(false); if (confirmado) cargarCompras(); resetModal(); };
 
   // ── Guardar compra ────────────────────────────────────────
@@ -405,7 +426,7 @@ function RobertoCompras() {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', minWidth: '650px' }}>
               <thead>
                 <tr style={{ backgroundColor: '#EBF4FF' }}>
-                  {['Fecha', 'Proveedor', 'Nro Factura', 'Tipo', 'Total', 'Estado'].map(col => (
+                  {['Fecha', 'Proveedor', 'Nro Factura', 'Tipo', 'Total', 'Estado', ''].map(col => (
                     <th key={col} style={{ padding: '11px 14px', textAlign: 'left', fontWeight: 600, color: NAVY, borderBottom: `2px solid ${SEP}`, whiteSpace: 'nowrap' }}>{col}</th>
                   ))}
                 </tr>
@@ -422,6 +443,12 @@ function RobertoCompras() {
                     <td style={{ padding: '10px 14px', color: GRAY }}>{c.tipo === 'detallada' ? 'Detallada' : 'Simple'}</td>
                     <td style={{ padding: '10px 14px', fontWeight: 700, color: RED, fontFamily: 'monospace' }}>{fmt(c.total)}</td>
                     <td style={{ padding: '10px 14px' }}><BadgeEstado estado={c.estado} /></td>
+                    <td style={{ padding: '10px 14px' }}>
+                      <button onClick={() => imprimirCompra(c)}
+                        style={{ backgroundColor: '#EDF2F7', color: GRAY, border: 'none', borderRadius: '5px', padding: '5px 8px', fontSize: '11px', cursor: 'pointer' }}>
+                        🖨️
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>

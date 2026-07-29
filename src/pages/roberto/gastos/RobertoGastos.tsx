@@ -280,6 +280,29 @@ function RobertoGastos() {
     }
   };
 
+  const imprimirGastoVar = (g: GastoVariable) => {
+    const cfg = JSON.parse(localStorage.getItem(`roberto_config_${cid}`) || '{}');
+    const negocio = cfg.nombre_comercial || 'Mi Negocio';
+    const w = window.open('', '_blank');
+    if (!w) return;
+    w.document.write(`<!DOCTYPE html><html><head><title>Gasto ${g.id}</title>
+      <style>body{font-family:Arial,sans-serif;padding:32px;color:#2D3748;max-width:500px;margin:auto}
+      h2{color:#1B2A4A;margin:0 0 4px}p{margin:4px 0;font-size:13px}
+      .monto{font-size:22px;font-weight:700;color:#DD6B20;margin-top:16px}
+      @media print{body{padding:12px}}</style></head><body>
+      <h2>${negocio}</h2>
+      <h3 style="color:#DD6B20;margin:8px 0">GASTO VARIABLE</h3>
+      <p><strong>Fecha:</strong> ${fmtFecha(g.fecha)}</p>
+      <p><strong>Descripción:</strong> ${g.descripcion}</p>
+      <p><strong>Categoría:</strong> ${g.categoria}</p>
+      ${g.proveedor_nombre ? `<p><strong>Proveedor:</strong> ${g.proveedor_nombre}</p>` : ''}
+      ${g.comprobante ? `<p><strong>Comprobante:</strong> ${g.comprobante}</p>` : ''}
+      ${g.observaciones ? `<p><strong>Notas:</strong> ${g.observaciones}</p>` : ''}
+      <div class="monto">MONTO: $${Number(g.monto).toLocaleString('es-AR',{minimumFractionDigits:2})}</div>
+      <script>setTimeout(()=>{window.print()},350)</script></body></html>`);
+    w.document.close();
+  };
+
   // ── EXPORTAR EXCEL ─────────────────────────────────────
   const exportarExcel = (datos: any[], nombre: string, columnas: string[], campos: string[]) => {
     const sep = ';';
@@ -519,6 +542,10 @@ function RobertoGastos() {
                       <td style={{ padding:'10px 14px', fontWeight:700, color:ORANGE }}>{fmt(g.monto)}</td>
                       <td style={{ padding:'10px 14px' }}>
                         <div style={{ display:'flex', gap:'6px' }}>
+                          <button onClick={() => imprimirGastoVar(g)}
+                            style={{ backgroundColor:'#EDF2F7', color:GRAY, border:'none', borderRadius:'6px', padding:'5px 8px', fontSize:'11px', cursor:'pointer' }}>
+                            🖨️
+                          </button>
                           <button onClick={() => abrirModalVar(g)}
                             style={{ backgroundColor:BLUE, color:'#fff', border:'none', borderRadius:'6px', padding:'5px 10px', fontSize:'11px', fontWeight:600, cursor:'pointer' }}>
                             ✏️ Editar

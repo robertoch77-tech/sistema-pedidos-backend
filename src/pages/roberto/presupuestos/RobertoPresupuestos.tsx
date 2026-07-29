@@ -695,6 +695,42 @@ function RobertoPresupuestos() {
     } catch { /* silent */ }
   };
 
+  // ── Imprimir presupuesto ──────────────────────────────────────
+  const imprimirPresupuesto = async (id: number) => {
+    if (!cid) return;
+    try {
+      const r = await fetch(`${API_BASE}/api/superadmin/presupuestos/${cid}/${id}`, { headers: authHdr });
+      if (!r.ok) return;
+      const { presupuesto: p, items: its } = await r.json();
+      const cfg = JSON.parse(localStorage.getItem(`roberto_config_${cid}`) || '{}');
+      const negocio = cfg.nombre_comercial || 'Mi Negocio';
+      const itemsHTML = (its as any[]).map(it => {
+        const sub = it.precio_unitario * it.cantidad * (1 - (it.descuento_porcentaje || 0) / 100);
+        return `<tr><td>${it.cantidad}</td><td>${it.descripcion}</td><td style="text-align:right">$${sub.toLocaleString('es-AR',{minimumFractionDigits:2})}</td></tr>`;
+      }).join('');
+      const w = window.open('', '_blank');
+      if (!w) return;
+      w.document.write(`<!DOCTYPE html><html><head><title>Presupuesto ${p.numero_completo}</title>
+        <style>body{font-family:Arial,sans-serif;padding:32px;color:#2D3748;max-width:700px;margin:auto}
+        h2{color:#1B2A4A;margin:0 0 4px}p{margin:4px 0;font-size:13px}
+        table{width:100%;border-collapse:collapse;margin:16px 0}
+        th{background:#F7FAFC;padding:9px 10px;text-align:left;font-size:12px;color:#718096;border-bottom:1px solid #E2E8F0}
+        td{padding:9px 10px;border-bottom:1px solid #F0F0F0;font-size:13px}
+        .total{font-size:20px;font-weight:700;color:#38A169;margin-top:12px}
+        @media print{body{padding:12px}}</style></head><body>
+        <h2>${negocio}</h2>
+        <h3 style="color:#2B6CB0;margin:8px 0">PRESUPUESTO ${p.numero_completo}</h3>
+        <p><strong>Fecha:</strong> ${new Date(p.fecha).toLocaleDateString('es-AR')}</p>
+        ${p.comprador_nombre ? `<p><strong>Cliente:</strong> ${p.comprador_nombre}</p>` : ''}
+        ${p.fecha_vencimiento ? `<p><strong>Válido hasta:</strong> ${new Date(p.fecha_vencimiento).toLocaleDateString('es-AR')}</p>` : ''}
+        <table><thead><tr><th>Cant</th><th>Descripción</th><th style="text-align:right">Subtotal</th></tr></thead>
+        <tbody>${itemsHTML}</tbody></table>
+        <div class="total">TOTAL: $${Number(p.total).toLocaleString('es-AR',{minimumFractionDigits:2})}</div>
+        <script>setTimeout(()=>{window.print()},350)</script></body></html>`);
+      w.document.close();
+    } catch { /* silent */ }
+  };
+
   // ── Convertir en venta ────────────────────────────────────────
   const convertirEnVenta = async (id: number, fromDetalle = false) => {
     if (!cid) return;
@@ -829,6 +865,10 @@ function RobertoPresupuestos() {
                           <button onClick={() => verDetalle(p.id)}
                             style={{ backgroundColor: '#EBF4FF', color: BLUE, border: 'none', borderRadius: '5px', padding: '5px 8px', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}>
                             👁️ Ver
+                          </button>
+                          <button onClick={() => imprimirPresupuesto(p.id)}
+                            style={{ backgroundColor: '#EDF2F7', color: GRAY, border: 'none', borderRadius: '5px', padding: '5px 8px', fontSize: '11px', cursor: 'pointer' }}>
+                            🖨️
                           </button>
                           {!p.convertido_a_venta && (
                             <button onClick={() => convertirEnVenta(p.id)}

@@ -667,6 +667,26 @@ function PantallaDetalleCCC({
   const totalPages = Math.max(1, Math.ceil(total / limit));
   const tituloAccion = tipo === 'clientes' ? 'Cobrar' : 'Pagar';
 
+  const imprimirMovimiento = (m: Movimiento) => {
+    const w = window.open('', '_blank');
+    if (!w) return;
+    const esDebito = m.debe > 0;
+    w.document.write(`<!DOCTYPE html><html><head><title>Movimiento ${m.numero_comprobante || m.id}</title>
+      <style>body{font-family:Arial,sans-serif;padding:32px;color:#2D3748;max-width:500px;margin:auto}
+      h2{color:#1B2A4A;margin:0 0 4px}p{margin:4px 0;font-size:13px}
+      .monto{font-size:22px;font-weight:700;color:${esDebito ? RED : GREEN};margin-top:16px}
+      @media print{body{padding:12px}}</style></head><body>
+      <h2>${entidad.nombre}</h2>
+      <h3 style="color:#2B6CB0;margin:8px 0">MOVIMIENTO CC — ${m.tipo.toUpperCase()}</h3>
+      ${m.numero_comprobante ? `<p><strong>Comprobante:</strong> ${m.numero_comprobante}</p>` : ''}
+      <p><strong>Fecha:</strong> ${fmtFecha(m.fecha)}</p>
+      ${m.descripcion ? `<p><strong>Descripción:</strong> ${m.descripcion}</p>` : ''}
+      <div class="monto">${esDebito ? 'Debe' : 'Haber'}: $${Number(esDebito ? m.debe : m.haber).toLocaleString('es-AR',{minimumFractionDigits:2})}</div>
+      <p style="margin-top:12px;font-size:13px;color:#718096">Saldo resultante: $${Number(m.saldo).toLocaleString('es-AR',{minimumFractionDigits:2})}</p>
+      <script>setTimeout(()=>{window.print()},350)</script></body></html>`);
+    w.document.close();
+  };
+
   // Entidad actualizada con saldo live
   const entidadLive: EntidadCC = { ...entidad, saldo_actual: saldo, saldo_vencido: saldoVenc };
 
@@ -766,7 +786,7 @@ function PantallaDetalleCCC({
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', minWidth: '750px' }}>
                 <thead style={{ backgroundColor: '#F7FAFC', borderBottom: `2px solid ${SEP}` }}>
                   <tr>
-                    {['Fecha', 'Tipo', 'Descripción', 'Comprobante', 'Debe', 'Haber', 'Saldo'].map(h => (
+                    {['Fecha', 'Tipo', 'Descripción', 'Comprobante', 'Debe', 'Haber', 'Saldo', ''].map(h => (
                       <th key={h} style={{ padding: '10px 14px', textAlign: 'left', color: GRAY, fontWeight: 600, fontSize: '11px' }}>{h}</th>
                     ))}
                   </tr>
@@ -781,6 +801,12 @@ function PantallaDetalleCCC({
                       <td style={{ padding: '10px 14px', color: RED, fontWeight: 600 }}>{m.debe > 0 ? fmt(m.debe) : '—'}</td>
                       <td style={{ padding: '10px 14px', color: GREEN, fontWeight: 600 }}>{m.haber > 0 ? fmt(m.haber) : '—'}</td>
                       <td style={{ padding: '10px 14px', fontWeight: 700, color: m.saldo >= 0 ? RED : GREEN }}>{fmt(m.saldo)}</td>
+                      <td style={{ padding: '10px 14px' }}>
+                        <button onClick={() => imprimirMovimiento(m)}
+                          style={{ backgroundColor: '#EDF2F7', color: GRAY, border: 'none', borderRadius: '5px', padding: '4px 7px', fontSize: '11px', cursor: 'pointer' }}>
+                          🖨️
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
