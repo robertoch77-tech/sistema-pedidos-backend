@@ -495,6 +495,7 @@ const generarReciboHTML = (
 </head>
 <body>
   <div class="header">
+    ${cfg.logo_url ? `<img src="${cfg.logo_url}" alt="" style="max-width:150px;max-height:70px;object-fit:contain;display:block;margin:0 auto 10px">` : ''}
     <div class="negocio">${cfg.nombre_comercial || 'Mi Negocio'}</div>
     ${cfg.direccion ? `<div>${cfg.direccion}</div>` : ''}
     ${cfg.cuit ? `<div>CUIT: ${cfg.cuit}</div>` : ''}
@@ -570,6 +571,19 @@ const generarReciboHTML = (
 function generarEstadoCuentaPDF(entidad: EntidadCC, movs: Movimiento[], tipo: TabCC) {
   const w = window.open('', '_blank');
   if (!w) return;
+  const cfg = (() => { try { return JSON.parse(localStorage.getItem(`roberto_config_${getClienteId()}`) || '{}'); } catch { return {}; } })();
+  const logoUrl  = cfg.logo_url         || '';
+  const negNom   = cfg.nombre_comercial || '';
+  const negDir   = cfg.direccion        || '';
+  const negCuit  = cfg.cuit             || '';
+  const logoBlock = `<div style="display:flex;align-items:center;gap:16px;margin-bottom:20px;padding-bottom:12px;border-bottom:2px solid #e2e8f0">
+    ${logoUrl ? `<img src="${logoUrl}" alt="" style="max-width:150px;max-height:70px;object-fit:contain;flex-shrink:0">` : ''}
+    <div>
+      ${negNom  ? `<div style="font-size:18px;font-weight:700">${negNom}</div>`  : ''}
+      ${negDir  ? `<div style="font-size:12px;color:#666">${negDir}</div>`       : ''}
+      ${negCuit ? `<div style="font-size:12px;color:#666">CUIT: ${negCuit}</div>` : ''}
+    </div>
+  </div>`;
   const filas = movs.map((m, i) => `
     <tr style="background:${i % 2 === 0 ? '#fff' : '#F7FAFC'}">
       <td>${fmtFecha(m.fecha)}</td>
@@ -587,6 +601,7 @@ function generarEstadoCuentaPDF(entidad: EntidadCC, movs: Movimiento[], tipo: Ta
     th{background:#F7FAFC;padding:8px;text-align:left;font-size:11px;color:#718096;border-bottom:2px solid #63B3ED}
     td{padding:8px;border-bottom:1px solid #EDF2F7}
     </style></head><body>
+    ${logoBlock}
     <h1>ESTADO DE CUENTA</h1>
     <p><strong>${tipo === 'clientes' ? 'Cliente' : 'Proveedor'}:</strong> ${entidad.nombre} | <strong>CUIT:</strong> ${entidad.cuit || '—'}</p>
     <p><strong>Saldo al cierre:</strong> <span style="font-size:16px;font-weight:700;color:${entidad.saldo_actual > 0 ? RED : GREEN}">${fmt(entidad.saldo_actual)}</span></p>

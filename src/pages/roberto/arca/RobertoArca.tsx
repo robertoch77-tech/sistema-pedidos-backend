@@ -84,6 +84,19 @@ function generarPDFComprobante(comp: Comprobante) {
   const qrData = { ver: 1, cmp: comp.numero_completo, cae: comp.cae, imp: n(comp.importe_total) };
   const qrBase64 = btoa(JSON.stringify(qrData));
   const qrUrl    = `https://www.afip.gob.ar/fe/qr/?p=${qrBase64}`;
+  const cfg = (() => { try { return JSON.parse(localStorage.getItem(`roberto_config_${getClienteId()}`) || '{}'); } catch { return {}; } })();
+  const logoUrl  = cfg.logo_url         || '';
+  const negNom   = cfg.nombre_comercial || '';
+  const negDir   = cfg.direccion        || '';
+  const negCuit  = cfg.cuit             || '';
+  const logoBlock = `<div style="display:flex;align-items:center;gap:16px;margin-bottom:20px;padding-bottom:12px;border-bottom:2px solid #e2e8f0">
+    ${logoUrl ? `<img src="${logoUrl}" alt="" style="max-width:150px;max-height:70px;object-fit:contain;flex-shrink:0">` : ''}
+    <div>
+      ${negNom  ? `<div style="font-size:18px;font-weight:700">${negNom}</div>`   : ''}
+      ${negDir  ? `<div style="font-size:12px;color:#666">${negDir}</div>`        : ''}
+      ${negCuit ? `<div style="font-size:12px;color:#666">CUIT: ${negCuit}</div>` : ''}
+    </div>
+  </div>`;
 
   const w = window.open('', '_blank');
   if (!w) return;
@@ -92,6 +105,7 @@ function generarPDFComprobante(comp: Comprobante) {
     .box{border:2px solid #2B6CB0;border-radius:8px;padding:20px;margin-bottom:16px}
     table{width:100%;border-collapse:collapse}td,th{padding:8px;border-bottom:1px solid #eee}
     .total{font-size:22px;font-weight:700;color:#2B6CB0}</style></head><body>
+    ${logoBlock}
     <div class="box">
       <h1 style="color:#1B2A4A;margin:0 0 4px">${comp.numero_completo}</h1>
       <p style="margin:0;color:#718096">Fecha: ${fmtFecha(comp.fecha_emision)}</p>

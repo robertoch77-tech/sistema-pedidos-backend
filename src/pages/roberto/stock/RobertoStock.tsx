@@ -686,12 +686,26 @@ export default function RobertoStock() {
         <td style="text-align:right">${fmt(it.precio_venta_1)}</td>
       </tr>`;
     }).join('');
+    const cfgStk = (() => { try { return JSON.parse(localStorage.getItem(`roberto_config_${cid}`) || '{}'); } catch { return {}; } })();
+    const logoUrlStk = cfgStk.logo_url         || '';
+    const negNomStk  = cfgStk.nombre_comercial || '';
+    const negDirStk  = cfgStk.direccion        || '';
+    const negCuitStk = cfgStk.cuit             || '';
+    const logoBlockStk = `<div style="display:flex;align-items:center;gap:16px;margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid #e2e8f0">
+      ${logoUrlStk ? `<img src="${logoUrlStk}" alt="" style="max-width:120px;max-height:50px;object-fit:contain;flex-shrink:0">` : ''}
+      <div>
+        ${negNomStk  ? `<div style="font-size:14px;font-weight:700">${negNomStk}</div>`   : ''}
+        ${negDirStk  ? `<div style="font-size:10px;color:#666">${negDirStk}</div>`        : ''}
+        ${negCuitStk ? `<div style="font-size:10px;color:#666">CUIT: ${negCuitStk}</div>` : ''}
+      </div>
+    </div>`;
     w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Stock</title>
 <style>@page{size:A4 landscape;margin:10mm}body{font-family:Arial,sans-serif;font-size:11px}
 h2{color:#1B2A4A}table{width:100%;border-collapse:collapse}
 th{background:#1B2A4A;color:#fff;padding:6px 8px;text-align:left;font-size:10px}
 td{padding:5px 8px;border-bottom:1px solid #eee;font-size:10px}</style>
 </head><body>
+${logoBlockStk}
 <h2>📊 Reporte de Stock — ${new Date().toLocaleDateString('es-AR')}</h2>
 <table><thead><tr><th>Código</th><th>Descripción</th><th>Stock</th><th>Mínimo</th><th>Estado</th><th>Costo</th><th>Precio</th></tr></thead>
 <tbody>${filas}</tbody></table></body></html>`);
@@ -710,6 +724,19 @@ td{padding:5px 8px;border-bottom:1px solid #eee;font-size:10px}</style>
     const filasR = valorizado.por_rubro.map(r =>
       `<tr><td>${r.rubro || 'Sin rubro'}</td><td style="text-align:center">${r.productos}</td><td style="text-align:center">${fmtNum(r.unidades)}</td><td style="text-align:right">${fmt(r.valor_costo)}</td><td style="text-align:right">${fmt(r.valor_venta)}</td></tr>`
     ).join('');
+    const cfgVal = (() => { try { return JSON.parse(localStorage.getItem(`roberto_config_${cid}`) || '{}'); } catch { return {}; } })();
+    const logoUrlVal = cfgVal.logo_url         || '';
+    const negNomVal  = cfgVal.nombre_comercial || '';
+    const negDirVal  = cfgVal.direccion        || '';
+    const negCuitVal = cfgVal.cuit             || '';
+    const logoBlockVal = `<div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;padding-bottom:10px;border-bottom:2px solid #e2e8f0">
+      ${logoUrlVal ? `<img src="${logoUrlVal}" alt="" style="max-width:150px;max-height:70px;object-fit:contain;flex-shrink:0">` : ''}
+      <div>
+        ${negNomVal  ? `<div style="font-size:18px;font-weight:700">${negNomVal}</div>`   : ''}
+        ${negDirVal  ? `<div style="font-size:12px;color:#666">${negDirVal}</div>`        : ''}
+        ${negCuitVal ? `<div style="font-size:12px;color:#666">CUIT: ${negCuitVal}</div>` : ''}
+      </div>
+    </div>`;
     w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Stock Valorizado</title>
 <style>@page{size:A4;margin:12mm}body{font-family:Arial,sans-serif;font-size:12px}
 h2{color:#1B2A4A}table{width:100%;border-collapse:collapse;margin-bottom:20px}
@@ -717,6 +744,7 @@ th{background:#1B2A4A;color:#fff;padding:6px 8px;text-align:left;font-size:11px}
 td{padding:6px 8px;border-bottom:1px solid #eee;font-size:11px}
 .kpi{display:inline-block;margin:0 16px 16px 0;padding:12px 20px;border-left:4px solid #2B6CB0;background:#EBF8FF;border-radius:8px}
 </style></head><body>
+${logoBlockVal}
 <h2>📊 Stock Valorizado — ${new Date().toLocaleDateString('es-AR')}</h2>
 <div>
 <div class="kpi"><strong>${valorizado.total_productos}</strong><br/>Productos</div>

@@ -242,6 +242,7 @@ function PantallaComprobante({ comp, onNuevaVenta, onCerrar }: {
   const generarHTML = (size: 'A4' | 'A5' | 'ticket') => {
     const cfg = JSON.parse(localStorage.getItem(`roberto_config_${getClienteId()}`) || '{}');
     const nombreNegocio = cfg.nombre_comercial || 'Mi Negocio';
+    const logoUrl       = cfg.logo_url         || '';
     const membreteLinas = [cfg.direccion, cfg.cuit, cfg.membrete].filter(Boolean)
       .map(l => `<div>${l}</div>`).join('');
     const isTicket = size === 'ticket';
@@ -289,6 +290,7 @@ function PantallaComprobante({ comp, onNuevaVenta, onCerrar }: {
   .footer { text-align: center; margin-top: 12px; font-size: ${isTicket ? '10px' : '12px'}; }
 </style></head><body>
 <div class="header">
+  ${logoUrl ? `<img src="${logoUrl}" alt="" style="max-width:${isTicket ? '80px' : '150px'};max-height:60px;object-fit:contain;display:block;margin:0 auto 8px">` : ''}
   <div class="negocio">${nombreNegocio}</div>
   <div>Comprobante de Venta</div>
   ${membreteLinas}
@@ -710,6 +712,7 @@ function RobertoVentas() {
   const generarHTMLDetalle = (det: { venta: any; items: any[] }) => {
     const cfg = JSON.parse(localStorage.getItem(`roberto_config_${cid}`) || '{}');
     const nombreNegocio = cfg.nombre_comercial || 'Mi Negocio';
+    const logoUrlD      = cfg.logo_url         || '';
     const membrete = [cfg.direccion, cfg.cuit, cfg.membrete].filter(Boolean)
       .map(l => `<div>${l}</div>`).join('');
     const itemsHTML = det.items.map(it =>
@@ -737,6 +740,7 @@ function RobertoVentas() {
   th { border-bottom: 1px solid #000; font-weight: bold; }
 </style></head><body>
 <div class="header">
+  ${logoUrlD ? `<img src="${logoUrlD}" alt="" style="max-width:150px;max-height:60px;object-fit:contain;display:block;margin:0 auto 8px">` : ''}
   <div class="negocio">${nombreNegocio}</div>
   <div>Comprobante de Venta</div>
   ${membrete}

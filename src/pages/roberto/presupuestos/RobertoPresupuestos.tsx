@@ -243,6 +243,7 @@ function PantallaResultado({ res: r, onEditar, onConvertir, onCerrar }: {
   const generarHTML = (size: 'A4' | 'A5') => {
     const cfg = JSON.parse(localStorage.getItem(`roberto_config_${getClienteId()}`) || '{}');
     const nombreNegocio = cfg.nombre_comercial || 'Mi Negocio';
+    const logoUrlP      = cfg.logo_url         || '';
     const membreteLinas = [cfg.direccion, cfg.cuit, cfg.membrete].filter(Boolean)
       .map(l => `<div style="color:#718096;font-size:11px">${l}</div>`).join('');
 
@@ -276,7 +277,10 @@ function PantallaResultado({ res: r, onEditar, onConvertir, onCerrar }: {
   .validez { background:#F0FFF4; border:1px solid #9AE6B4; border-radius:6px; padding:8px 12px; margin-top:10px; font-size:11px; }
 </style></head><body>
 <div class="header">
-  <div><div class="negocio">${nombreNegocio}</div><div style="color:#718096">PRESUPUESTO</div>${membreteLinas}</div>
+  <div>
+    ${logoUrlP ? `<img src="${logoUrlP}" alt="" style="max-width:150px;max-height:60px;object-fit:contain;display:block;margin-bottom:6px">` : ''}
+    <div class="negocio">${nombreNegocio}</div><div style="color:#718096">PRESUPUESTO</div>${membreteLinas}
+  </div>
   <div style="text-align:right"><div style="font-size:18px;font-weight:700;color:#1B2A4A">${r.numero_completo}</div><div style="color:#718096">Fecha: ${new Date().toLocaleDateString('es-AR')}</div></div>
 </div>
 <div class="row"><span><b>Cliente:</b></span><span>${r.comprador_nombre || 'Sin nombre'}</span></div>

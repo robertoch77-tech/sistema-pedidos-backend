@@ -112,7 +112,7 @@ function RobertoLogin() {
       if (!res.ok) throw new Error(data.mensaje || 'Error al ingresar');
 
       // Guardar datos del negocio para comprobantes
-      localStorage.setItem(`roberto_config_${data.cliente.id}`, JSON.stringify({
+      const configLocal: Record<string, string> = {
         nombre_comercial: data.cliente.nombre_comercial || '',
         razon_social:     data.cliente.razon_social     || '',
         cuit:             data.cliente.cuit             || '',
@@ -122,7 +122,16 @@ function RobertoLogin() {
         provincia:        data.cliente.provincia        || '',
         telefono:         data.cliente.telefono         || '',
         whatsapp:         data.cliente.whatsapp         || '',
-      }));
+        logo_url:         '',
+      };
+      try {
+        const cfgRes = await fetch(`${API_BASE}/api/superadmin/config/${data.cliente.id}`);
+        if (cfgRes.ok) {
+          const cfgData = await cfgRes.json();
+          if (cfgData.logo_url) configLocal.logo_url = cfgData.logo_url;
+        }
+      } catch { /* sin red: logo_url quedará vacío hasta que se acceda a Config */ }
+      localStorage.setItem(`roberto_config_${data.cliente.id}`, JSON.stringify(configLocal));
 
       localStorage.setItem('roberto_portal_session', JSON.stringify({
         token:   data.token,

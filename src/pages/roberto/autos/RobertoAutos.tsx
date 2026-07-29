@@ -916,6 +916,7 @@ function generarContratoPDF(venta: VentaAuto, clienteId: number) {
 </head>
 <body>
 <button class="btn-imprimir no-print" onclick="window.print()">🖨 Imprimir / Guardar PDF</button>
+${cfg.logo_url ? `<div style="margin-bottom:16px"><img src="${cfg.logo_url}" alt="" style="max-width:150px;max-height:70px;object-fit:contain"></div>` : ''}
 <h1>Contrato de Compraventa de Vehículo</h1>
 <p>En <strong>${ciudad}</strong>, a los <strong>${dia}</strong> días del mes de <strong>${mes}</strong> de <strong>${anio}</strong></p>
 
