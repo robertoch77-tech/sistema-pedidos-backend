@@ -199,8 +199,7 @@ function PanelResumen({ items, sumaSubtotales, descuentoMonto, recargoMonto, iva
 }) {
   return (
     <>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.45)', zIndex: 500 }} />
-      <div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: 'min(460px, 96vw)', backgroundColor: '#fff', zIndex: 501, boxShadow: '-8px 0 40px rgba(0,0,0,0.25)', display: 'flex', flexDirection: 'column', animation: 'slideIn .2s ease' }}>
+      <div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: 'min(460px, 96vw)', backgroundColor: '#fff', zIndex: 250, boxShadow: '-8px 0 40px rgba(0,0,0,0.25)', display: 'flex', flexDirection: 'column', animation: 'slideIn .2s ease', pointerEvents: 'auto' }}>
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
 
         {/* Header */}
@@ -551,7 +550,7 @@ function RobertoVentas() {
   // Totales / opciones
   const [descGlobal,     setDescGlobal]     = useState(0);
   const [recargo,        setRecargo]        = useState(0);
-  const [precioConIva,   setPrecioConIva]   = useState(true);
+  const [precioConIva,   setPrecioConIva]   = useState(false);
   const [enCC,           setEnCC]           = useState(false);
   const [observ,         setObserv]         = useState('');
   const [formaPago,      setFormaPago]      = useState('efectivo');
@@ -714,12 +713,16 @@ function RobertoVentas() {
         if (r.ok) {
           const d = await r.json();
           const lista: ProductoResult[] = d.productos || d.items || [];
-          // Coincidencia exacta de código (sin espacios, 1 resultado)
-          if (!q.includes(' ') && lista.length === 1) {
-            const p = lista[0];
-            if ((p.codigo && p.codigo.toLowerCase() === q.toLowerCase()) || p.ean === q) {
-              agregarProducto(p);
+          // Coincidencia exacta de código (sin espacios) → auto-add
+          if (!q.includes(' ')) {
+            const exacto = lista.find(p =>
+              (p.codigo && p.codigo.toLowerCase() === q.toLowerCase()) ||
+              (p.ean && p.ean === q)
+            );
+            if (exacto) {
+              agregarProducto(exacto);
               setBusqProd('');
+              setShowDrop(false);
               setLoadProd(false);
               return;
             }
