@@ -142,6 +142,7 @@ app.use('/api/superadmin/portal-auth', require('./routes/superadmin/portal-auth'
 app.use('/api/superadmin/importador', require('./routes/superadmin/importador'));
 app.use('/api/superadmin/importador-entidades', require('./routes/superadmin/importador-entidades'));
 app.use('/api/superadmin/eliminar-registro',   require('./routes/superadmin/eliminar-registro'));
+app.use('/api/superadmin/gestion-claves',      require('./routes/superadmin/gestion-claves'));
 app.use('/api/superadmin/ventas', require('./routes/superadmin/ventas'));
 app.use('/api/superadmin/clientes-finales', require('./routes/superadmin/clientes-finales'));
 app.use('/api/superadmin/presupuestos', require('./routes/superadmin/presupuestos'));
