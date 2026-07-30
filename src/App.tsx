@@ -43,6 +43,7 @@ import RobertoAutos from './pages/roberto/autos/RobertoAutos';
 import CatalogoPublico from './pages/catalogo/CatalogoPublico';
 import CatalogoAutos from './pages/catalogo/CatalogoAutos';
 import RobertoCatalogo from './pages/roberto/catalogo/RobertoCatalogo';
+import GestionClaves from './pages/roberto/configuracion/GestionClaves';
 import PiLogin from './pages/pedidos-inteligentes/PiLogin';
 import PiDashboard from './pages/pedidos-inteligentes/PiDashboard';
 import PiProductos from './pages/pedidos-inteligentes/productos/PiProductos';
@@ -151,6 +152,7 @@ function App() {
         <Route path="/catalogo/productos/:codigo" element={<CatalogoPublico />} />
         <Route path="/catalogo/autos/:codigo"     element={<CatalogoAutos />} />
         <Route path="/roberto/catalogo"           element={<RobertoCatalogo />} />
+        <Route path="/roberto/gestion-claves"     element={<GestionClaves />} />
         <Route path="/pedidos-inteligentes/login"     element={<PiLogin />} />
         <Route path="/pedidos-inteligentes/dashboard"  element={<PiDashboard />} />
         <Route path="/pedidos-inteligentes/productos"  element={<PiProductos />} />

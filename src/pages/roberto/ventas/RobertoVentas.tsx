@@ -577,7 +577,7 @@ function RobertoVentas() {
   const [cargandoCC,   setCargandoCC]   = useState(false);
 
   // IVA toggle + resumen panel
-  const [modoIva,      setModoIva]      = useState<'off'|'agregar'|'discriminar'>('off');
+  const [modoIva,      setModoIva]      = useState<'off'|'agregar'|'discriminar'>('discriminar');
   const [showResumen,  setShowResumen]  = useState(false);
 
   // Submit
