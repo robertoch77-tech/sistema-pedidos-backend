@@ -1017,9 +1017,12 @@ function ModalImportarProveedores({ cid, token, onClose, onDone }: ImportModalPr
   }
 
   function confirmarEncabezado() {
-    const cols = todasFilas[filaEncabezado]?.map(c => c.trim()).filter(Boolean) ?? [];
+    const filaCruda = todasFilas[filaEncabezado]?.map(c => c.trim()) ?? [];
+    const posMap: Record<string, number> = {};
+    filaCruda.forEach((c, i) => { if (c && !posMap[c]) posMap[c] = i; });
+    const cols = filaCruda.filter(Boolean);
     const dataFilas = todasFilas.slice(filaEncabezado + 1).filter(r => r.some(c => c.trim()));
-    const preview = dataFilas.slice(0, 3).map(r => r.slice(0, cols.length));
+    const preview = dataFilas.slice(0, 3).map(r => cols.map(col => r[posMap[col]] ?? ''));
     setColumnas(cols);
     setMuestra(preview);
     setMapeo(autoDetectMapP(cols));
