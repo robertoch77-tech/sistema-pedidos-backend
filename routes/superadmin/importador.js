@@ -1515,9 +1515,23 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
               alicuota_iva:   numVal(fila, mapeo.iva, enc),
               stock_actual:   numVal(fila, mapeo.stock, enc),
               stock_minimo:   numVal(fila, mapeo.stock_minimo, enc),
+              utilidad_1:     numVal(fila, mapeo.utilidad_1, enc),
+              utilidad_2:     numVal(fila, mapeo.utilidad_2, enc),
+              utilidad_3:     numVal(fila, mapeo.utilidad_3, enc),
             };
             const pcf = calcPCF(campos.precio_costo, campos.dto_1, campos.dto_2, campos.dto_3);
-            const pvFinal = campos.precio_venta_1 || pcf || 0;
+            const u1 = campos.utilidad_1 || 0;
+            const u2 = campos.utilidad_2 || 0;
+            const u3 = campos.utilidad_3 || 0;
+            const iva = campos.alicuota_iva || 0;
+            let pv1 = campos.precio_venta_1;
+            let pv2 = campos.precio_venta_2;
+            let pv3 = campos.precio_venta_3;
+            if (u1 > 0 && pcf > 0) pv1 = pcf * (1 + u1 / 100);
+            if (u2 > 0 && pcf > 0) pv2 = pcf * (1 + u2 / 100);
+            if (u3 > 0 && pcf > 0) pv3 = pcf * (1 + u3 / 100);
+            let pvFinal = pv1 || pcf || 0;
+            if (iva > 0 && pvFinal > 0) pvFinal = pvFinal * (1 + iva / 100);
             if (key && existMap.has(key)) {
               const existing = existMap.get(key);
               const mismoProv = proveedor_id === null ||
@@ -1537,13 +1551,15 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
                    stock_actual=COALESCE($15,stock_actual),stock_minimo=COALESCE($16,stock_minimo),
                    precio_costo_final=COALESCE($17,precio_costo_final),
                    precio_venta_final=COALESCE($18,precio_venta_final),
+                   utilidad_1=COALESCE($21,utilidad_1),utilidad_2=COALESCE($22,utilidad_2),utilidad_3=COALESCE($23,utilidad_3),
                    modificado_en=now() WHERE id=$19 AND cliente_id=$20`,
-                  [descripcion,proveedor_id,campos.precio_costo,campos.precio_venta_1,campos.precio_venta_2,
-                   campos.precio_venta_3,campos.marca,campos.rubro,campos.unidad_medida,campos.ean,
+                  [descripcion,proveedor_id,campos.precio_costo,pv1,pv2,
+                   pv3,campos.marca,campos.rubro,campos.unidad_medida,campos.ean,
                    campos.dto_1,campos.dto_2,campos.dto_3,campos.alicuota_iva,
                    campos.stock_actual,campos.stock_minimo,
                    pcf||null, pvFinal||null,
-                   existing.id,cliente_id]
+                   existing.id,cliente_id,
+                   campos.utilidad_1||null,campos.utilidad_2||null,campos.utilidad_3||null]
                 );
                 actualizados++;
               } else {
@@ -1553,14 +1569,16 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
                   `INSERT INTO productos_propios
                    (cliente_id,proveedor_id,codigo,descripcion,precio_costo,precio_venta_1,precio_venta_2,
                     precio_venta_3,marca,rubro,unidad_medida,ean,dto_1,dto_2,dto_3,alicuota_iva,
-                    stock_actual,stock_minimo,precio_costo_final,precio_venta_final,activo)
-                   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,true) RETURNING id`,
+                    stock_actual,stock_minimo,precio_costo_final,precio_venta_final,
+                    utilidad_1,utilidad_2,utilidad_3,activo)
+                   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,true) RETURNING id`,
                   [cliente_id,proveedor_id,codigoPrefijado,descripcion,
-                   campos.precio_costo||0,campos.precio_venta_1||0,campos.precio_venta_2||0,campos.precio_venta_3||0,
+                   campos.precio_costo||0,pv1||0,pv2||0,pv3||0,
                    campos.marca,campos.rubro,campos.unidad_medida,campos.ean,
                    campos.dto_1||0,campos.dto_2||0,campos.dto_3||0,campos.alicuota_iva||0,
                    campos.stock_actual||0,campos.stock_minimo||0,
-                   pcf||0, pvFinal||0]
+                   pcf||0, pvFinal||0,
+                   campos.utilidad_1||0,campos.utilidad_2||0,campos.utilidad_3||0]
                 );
                 const newKey = codigoPrefijado ? codigoPrefijado.trim().toUpperCase() : null;
                 if (newKey) existMap.set(newKey, { id: ins.rows[0].id, proveedor_id });
@@ -1572,14 +1590,16 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
                 `INSERT INTO productos_propios
                  (cliente_id,proveedor_id,codigo,descripcion,precio_costo,precio_venta_1,precio_venta_2,
                   precio_venta_3,marca,rubro,unidad_medida,ean,dto_1,dto_2,dto_3,alicuota_iva,
-                  stock_actual,stock_minimo,precio_costo_final,precio_venta_final,activo)
-                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,true) RETURNING id`,
+                  stock_actual,stock_minimo,precio_costo_final,precio_venta_final,
+                  utilidad_1,utilidad_2,utilidad_3,activo)
+                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,true) RETURNING id`,
                 [cliente_id,proveedor_id,codigo,descripcion,
-                 campos.precio_costo||0,campos.precio_venta_1||0,campos.precio_venta_2||0,campos.precio_venta_3||0,
+                 campos.precio_costo||0,pv1||0,pv2||0,pv3||0,
                  campos.marca,campos.rubro,campos.unidad_medida,campos.ean,
                  campos.dto_1||0,campos.dto_2||0,campos.dto_3||0,campos.alicuota_iva||0,
                  campos.stock_actual||0,campos.stock_minimo||0,
-                 pcf||0, pvFinal||0]
+                 pcf||0, pvFinal||0,
+                 campos.utilidad_1||0,campos.utilidad_2||0,campos.utilidad_3||0]
               );
               if (key) existMap.set(key, { id: ins.rows[0].id, proveedor_id });
               nuevos++;

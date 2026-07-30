@@ -31,15 +31,18 @@ function txt(v) {
   return String(v).trim();
 }
 
-function valPorCol(fila, nombreCol, encabezados) {
+function valPorCol(fila, nombreCol, encabezados, colPosMap) {
+  if (colPosMap && colPosMap[nombreCol] !== undefined) {
+    return txt(fila[colPosMap[nombreCol]] ?? '');
+  }
   const idx = encabezados.indexOf(nombreCol);
   return idx >= 0 ? txt(fila[idx]) : '';
 }
 
-function buildFila(fila, mapeo, encabezados) {
+function buildFila(fila, mapeo, encabezados, colPosMap) {
   const out = {};
   for (const [campo, colExcel] of Object.entries(mapeo)) {
-    if (colExcel) out[campo] = valPorCol(fila, colExcel, encabezados);
+    if (colExcel) out[campo] = valPorCol(fila, colExcel, encabezados, colPosMap);
   }
   return out;
 }
@@ -47,12 +50,15 @@ function buildFila(fila, mapeo, encabezados) {
 function analizarArchivo(buffer) {
   const filas = leerArchivo(buffer);
   if (!filas.length) throw new Error('El archivo está vacío');
-  const idxEnc    = detectarEncabezado(filas);
-  const columnas  = filas[idxEnc].map(c => txt(c)).filter(Boolean);
+  const idxEnc   = detectarEncabezado(filas);
+  const filaCruda = filas[idxEnc].map(c => txt(c));
+  const colPosMap = {};
+  filaCruda.forEach((c, i) => { if (c && !colPosMap[c]) colPosMap[c] = i; });
+  const columnas  = filaCruda.filter(Boolean);
   const muestra   = filas.slice(idxEnc + 1, idxEnc + 6)
-    .map(fila => columnas.map((_, i) => txt(fila[i] ?? '')));
+    .map(fila => columnas.map(col => txt(fila[colPosMap[col]] ?? '')));
   const dataFilas = filas.slice(idxEnc + 1).filter(f => f.some(c => c !== '' && c != null));
-  return { columnas, muestra, total_filas: dataFilas.length, dataFilas, idxEnc };
+  return { columnas, muestra, total_filas: dataFilas.length, dataFilas, idxEnc, colPosMap };
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -85,11 +91,11 @@ router.post('/clientes/:clienteId/importar', upload.single('archivo'), async (re
   let importados = 0, actualizados = 0, saltados = 0, errores = 0;
 
   try {
-    const { columnas, dataFilas } = analizarArchivo(req.file.buffer);
+    const { columnas, dataFilas, colPosMap } = analizarArchivo(req.file.buffer);
 
     for (const fila of dataFilas) {
       try {
-        const d = buildFila(fila, mapeo, columnas);
+        const d = buildFila(fila, mapeo, columnas, colPosMap);
         const nombre = d.nombre || '';
         const cuit   = d.cuit   || '';
         if (!nombre) { errores++; continue; }
@@ -206,11 +212,11 @@ router.post('/proveedores/:clienteId/importar', upload.single('archivo'), async 
   let importados = 0, actualizados = 0, saltados = 0, errores = 0;
 
   try {
-    const { columnas, dataFilas } = analizarArchivo(req.file.buffer);
+    const { columnas, dataFilas, colPosMap } = analizarArchivo(req.file.buffer);
 
     for (const fila of dataFilas) {
       try {
-        const d = buildFila(fila, mapeo, columnas);
+        const d = buildFila(fila, mapeo, columnas, colPosMap);
         const nombre = d.nombre || '';
         const cuit   = d.cuit   || '';
         if (!nombre) { errores++; continue; }
