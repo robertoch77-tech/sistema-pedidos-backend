@@ -543,6 +543,7 @@ function RobertoVentas() {
   const [prodsDrop,    setProdsDrop]    = useState<ProductoResult[]>([]);
   const [listaPrecio,  setListaPrecio]  = useState<'pv1'|'pv2'|'pv3'>('pv1');
   const [showDrop,     setShowDrop]     = useState(false);
+  const [dropIdx,      setDropIdx]      = useState(-1);
   const [loadProd,     setLoadProd]     = useState(false);
   const [modalLibre,   setModalLibre]   = useState(false);
   const itemInputRef = useRef<HTMLInputElement>(null);
@@ -663,6 +664,19 @@ function RobertoVentas() {
     }
   }, [modalOpen, comprobante]);
 
+  // ── Atajos de teclado globales (solo cuando modal abierto) ───
+  useEffect(() => {
+    if (!modalOpen || comprobante) return;
+    const handler = (e: KeyboardEvent) => {
+      // Ctrl+B → foco al buscador
+      if (e.ctrlKey && e.key === 'b') { e.preventDefault(); itemInputRef.current?.focus(); }
+      // Ctrl+Enter → confirmar venta
+      if (e.ctrlKey && e.key === 'Enter') { e.preventDefault(); document.getElementById('btn-confirmar-venta')?.click(); }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [modalOpen, comprobante]);
+
   // ── Buscar clientes finales (debounced) ───────────────────────
   useEffect(() => {
     if (!busqCliente.trim() || tipoCliente !== 'cuenta' || clienteSel) {
@@ -728,11 +742,12 @@ function RobertoVentas() {
             }
           }
           setProdsDrop(lista);
+          setDropIdx(-1);
           setShowDrop(lista.length > 0);
         }
       } catch { /* silent */ }
       finally { setLoadProd(false); }
-    }, 300);
+    }, 150);
     return () => clearTimeout(t);
   }, [busqProd]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1160,8 +1175,9 @@ function RobertoVentas() {
 
                 {/* ── SECCIÓN ITEMS ────────────────────────── */}
                 <div style={{ marginBottom: '20px' }}>
-                  <div style={{ fontSize: '12px', fontWeight: 700, color: NAVY, textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: `2px solid ${SEP}`, paddingBottom: '6px', marginBottom: '12px' }}>
-                    📦 Productos
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `2px solid ${SEP}`, paddingBottom: '6px', marginBottom: '12px' }}>
+                    <span style={{ fontSize: '12px', fontWeight: 700, color: NAVY, textTransform: 'uppercase', letterSpacing: '0.5px' }}>📦 Productos</span>
+                    <span style={{ fontSize: '10px', color: GRAY, opacity: 0.7 }}>↑↓ navegar · Enter agregar · Ctrl+B buscar · Ctrl+Enter confirmar</span>
                   </div>
 
                   {/* Selector lista de precios */}
@@ -1184,10 +1200,22 @@ function RobertoVentas() {
                         value={busqProd}
                         onChange={e => setBusqProd(e.target.value)}
                         onKeyDown={e => {
-                          if (e.key === 'Enter' && prodsDrop.length > 0) agregarProducto(prodsDrop[0]);
-                          if (e.key === 'Escape') { setShowDrop(false); setBusqProd(''); }
+                          if (e.key === 'ArrowDown' && showDrop && prodsDrop.length > 0) {
+                            e.preventDefault();
+                            setDropIdx(prev => prev < prodsDrop.length - 1 ? prev + 1 : 0);
+                          } else if (e.key === 'ArrowUp' && showDrop && prodsDrop.length > 0) {
+                            e.preventDefault();
+                            setDropIdx(prev => prev > 0 ? prev - 1 : prodsDrop.length - 1);
+                          } else if (e.key === 'Enter') {
+                            e.preventDefault();
+                            if (showDrop && prodsDrop.length > 0) {
+                              agregarProducto(prodsDrop[dropIdx >= 0 ? dropIdx : 0]);
+                            }
+                          } else if (e.key === 'Escape') {
+                            setShowDrop(false); setBusqProd(''); setDropIdx(-1);
+                          }
                         }}
-                        placeholder="🔍 Nombre, código o EAN — Enter para agregar el primero"
+                        placeholder="🔍 Código, nombre, EAN — ↑↓ navegar · Enter agregar · Esc cancelar"
                         style={inputStyle}
                       />
                       {loadProd && (
@@ -1199,12 +1227,13 @@ function RobertoVentas() {
                           <div style={{ display: 'grid', gridTemplateColumns: '90px 1fr 90px 60px', padding: '6px 12px', fontSize: '10px', fontWeight: 700, color: GRAY, borderBottom: '1px solid #EDF2F7', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                             <span>Código</span><span>Descripción</span><span>Precio</span><span>Stock</span>
                           </div>
-                          {prodsDrop.slice(0, 8).map(p => (
+                          {prodsDrop.slice(0, 8).map((p, pi) => (
                             <div key={p.id}
                               onClick={() => agregarProducto(p)}
-                              style={{ display: 'grid', gridTemplateColumns: '90px 1fr 90px 60px', padding: '9px 12px', cursor: 'pointer', borderBottom: '1px solid #F7FAFC', fontSize: '13px', alignItems: 'center' }}
-                              onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#EBF8FF'; }}
-                              onMouseLeave={e => { e.currentTarget.style.backgroundColor = '#fff'; }}>
+                              onMouseEnter={() => setDropIdx(pi)}
+                              style={{ display: 'grid', gridTemplateColumns: '90px 1fr 90px 60px', padding: '9px 12px', cursor: 'pointer', borderBottom: '1px solid #F7FAFC', fontSize: '13px', alignItems: 'center',
+                                backgroundColor: pi === dropIdx ? '#EBF8FF' : '#fff',
+                                borderLeft: pi === dropIdx ? '3px solid #2B6CB0' : '3px solid transparent' }}>
                               <span style={{ fontFamily: 'monospace', color: GRAY, fontSize: '11px' }}>{p.codigo || '—'}</span>
                               <span style={{ fontWeight: 500, color: TEXT }}>{p.descripcion}</span>
                               <span style={{ fontWeight: 700, color: GREEN }}>{fmt(
@@ -1455,10 +1484,10 @@ function RobertoVentas() {
                 {/* Botones */}
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
                   <button onClick={cerrarModal} style={btnStyle('#EDF2F7', GRAY)}>Cancelar</button>
-                  <button onClick={confirmarVenta}
+                  <button id="btn-confirmar-venta" onClick={confirmarVenta}
                     disabled={confirmDisabled}
                     style={btnStyle(GREEN, '#fff', confirmDisabled)}>
-                    {procesando ? '⏳ Procesando...' : '✅ Confirmar venta'}
+                    {procesando ? '⏳ Procesando...' : '✅ Confirmar venta (Ctrl+Enter)'}
                   </button>
                 </div>
               </div>
