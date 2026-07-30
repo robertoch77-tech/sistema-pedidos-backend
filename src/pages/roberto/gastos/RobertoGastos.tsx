@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { API_BASE } from '../../../config/api';
+import ModalEliminar from '../components/ModalEliminar';
 
 const NAVY  = '#1B2A4A';
 const BLUE  = '#2B6CB0';
@@ -103,6 +104,7 @@ function RobertoGastos() {
   const [filtroBuscar, setFiltroBuscar] = useState('');
   const [modalVar, setModalVar]       = useState(false);
   const [editVar, setEditVar]         = useState<GastoVariable | null>(null);
+  const [modalEliminar, setModalEliminar] = useState<{ id: number; tabla: 'gastos_fijos' | 'gastos_variables'; desc: string } | null>(null);
   const [formVar, setFormVar]         = useState({ descripcion:'', monto:'', categoria:'otro', fecha:hoy(), comprobante:'', proveedor_id:'', observaciones:'' });
   const [proveedores, setProveedores] = useState<Proveedor[]>([]);
 
@@ -230,15 +232,6 @@ function RobertoGastos() {
     finally { setGuardando(false); }
   };
 
-  const eliminarFijo = async (id: number) => {
-    if (!window.confirm('¿Desactivar este gasto fijo?')) return;
-    const r = await fetch(`${API_BASE}/api/superadmin/gastos/fijos/${cid}/${id}`, { method: 'DELETE', headers: headers() });
-    if (r.ok) {
-      cargarFijos(); cargarResumen();
-    } else {
-      alert('Error al eliminar el gasto fijo. Intentá de nuevo.');
-    }
-  };
 
   // ── CRUD VARIABLES ─────────────────────────────────────
   const abrirModalVar = (g?: GastoVariable) => {
@@ -267,17 +260,6 @@ function RobertoGastos() {
       cargarResumen();
     } catch (e: any) { setError(e.message); }
     finally { setGuardando(false); }
-  };
-
-  const eliminarVar = async (id: number) => {
-    if (!window.confirm('¿Eliminar este gasto variable?')) return;
-    const r = await fetch(`${API_BASE}/api/superadmin/gastos/variables/${cid}/${id}`, { method: 'DELETE', headers: headers() });
-    if (r.ok) {
-      cargarVariables(paginaVar, limitVar);
-      cargarResumen();
-    } else {
-      alert('Error al eliminar el gasto variable. Intentá de nuevo.');
-    }
   };
 
   const imprimirGastoVar = (g: GastoVariable) => {
@@ -466,7 +448,7 @@ function RobertoGastos() {
                             style={{ backgroundColor:BLUE, color:'#fff', border:'none', borderRadius:'6px', padding:'5px 10px', fontSize:'11px', fontWeight:600, cursor:'pointer' }}>
                             ✏️ Editar
                           </button>
-                          <button onClick={() => eliminarFijo(g.id)}
+                          <button onClick={() => setModalEliminar({ id: g.id, tabla: 'gastos_fijos', desc: g.descripcion })}
                             style={{ backgroundColor:'#FFF5F5', color:RED, border:`1px solid ${RED}`, borderRadius:'6px', padding:'5px 10px', fontSize:'11px', fontWeight:600, cursor:'pointer' }}>
                             🗑️
                           </button>
@@ -550,7 +532,7 @@ function RobertoGastos() {
                             style={{ backgroundColor:BLUE, color:'#fff', border:'none', borderRadius:'6px', padding:'5px 10px', fontSize:'11px', fontWeight:600, cursor:'pointer' }}>
                             ✏️ Editar
                           </button>
-                          <button onClick={() => eliminarVar(g.id)}
+                          <button onClick={() => setModalEliminar({ id: g.id, tabla: 'gastos_variables', desc: g.descripcion })}
                             style={{ backgroundColor:'#FFF5F5', color:RED, border:`1px solid ${RED}`, borderRadius:'6px', padding:'5px 10px', fontSize:'11px', fontWeight:600, cursor:'pointer' }}>
                             🗑️
                           </button>
@@ -682,6 +664,22 @@ function RobertoGastos() {
             </button>
           </div>
         </Modal>
+      )}
+      {modalEliminar && cid && sesion?.token && (
+        <ModalEliminar
+          tabla={modalEliminar.tabla}
+          id={modalEliminar.id}
+          descripcion={modalEliminar.desc}
+          clienteId={cid}
+          token={sesion.token}
+          tokenHeader="x-roberto-token"
+          onClose={() => setModalEliminar(null)}
+          onDone={() => {
+            setModalEliminar(null);
+            if (modalEliminar.tabla === 'gastos_fijos') cargarFijos();
+            else cargarVariables();
+          }}
+        />
       )}
     </div>
   );

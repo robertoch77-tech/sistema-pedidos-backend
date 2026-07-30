@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { API_BASE } from '../../../config/api';
 import { getToken } from '../../../utils/auth';
+import ModalEliminar from '../components/ModalEliminar';
 
 // ── Colores ──────────────────────────────────────────────────────────────────
 const NAVY    = '#1B2A4A';
@@ -451,6 +452,7 @@ function RobertoPresupuestos() {
   // ── Modal nuevo/editar ─────────────────────────────────────────
   const [modalOpen,     setModalOpen]     = useState(false);
   const [editandoId,    setEditandoId]    = useState<number | null>(null);
+  const [modalEliminar, setModalEliminar] = useState<{ id: number; desc: string } | null>(null);
 
   // Cliente
   const [tipoCliente,   setTipoCliente]   = useState<'mostrador'|'cuenta'>('mostrador');
@@ -882,6 +884,11 @@ function RobertoPresupuestos() {
                               🗑️
                             </button>
                           )}
+                          <button onClick={() => setModalEliminar({ id: p.id, desc: `Presupuesto #${p.id}` })}
+                            title="Eliminar definitivamente"
+                            style={{ backgroundColor: '#742A2A', color: '#FEB2B2', border: 'none', borderRadius: '5px', padding: '5px 8px', fontSize: '11px', cursor: 'pointer' }}>
+                            ✕
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -1231,6 +1238,17 @@ function RobertoPresupuestos() {
       {/* Modal producto libre */}
       {modalLibre && (
         <ModalProductoLibre onAgregar={agregarLibre} onCerrar={() => setModalLibre(false)} />
+      )}
+      {modalEliminar && cid && token && (
+        <ModalEliminar
+          tabla="presupuestos"
+          id={modalEliminar.id}
+          descripcion={modalEliminar.desc}
+          clienteId={cid}
+          token={token}
+          onClose={() => setModalEliminar(null)}
+          onDone={() => { setModalEliminar(null); cargarLista(); }}
+        />
       )}
     </div>
   );

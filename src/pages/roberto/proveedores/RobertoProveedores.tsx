@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { API_BASE } from '../../../config/api';
 import { getToken } from '../../../utils/auth';
+import ModalEliminar from '../components/ModalEliminar';
 
 // ── Colores ───────────────────────────────────────────────────
 const NAVY   = '#1B2A4A';
@@ -922,7 +923,12 @@ const CAMPOS_PROVEEDORES = [
   { key: 'contacto_nombre', label: 'Contacto nombre',  req: false },
   { key: 'contacto_cargo',  label: 'Contacto cargo',   req: false },
   { key: 'condicion_iva',   label: 'Condición IVA',    req: false },
-  { key: 'notas',           label: 'Notas',            req: false },
+  { key: 'notas',            label: 'Notas',             req: false },
+  { key: 'descuento_general',label: 'Descuento general', req: false },
+  { key: 'limite_credito',   label: 'Límite crédito',    req: false },
+  { key: 'plazo_pago_dias',  label: 'Plazo pago (días)', req: false },
+  { key: 'codigo_postal',    label: 'Código postal',     req: false },
+  { key: 'sitio_web',        label: 'Sitio web',         req: false },
 ];
 
 function normHdrP(s: string) {
@@ -944,7 +950,12 @@ function autoDetectMapP(cols: string[]): Record<string, string> {
     contacto_nombre: ['contactonombre', 'contacto', 'nombrecont'],
     contacto_cargo:  ['contactocargo', 'cargo'],
     condicion_iva:   ['condicioniva', 'iva', 'condicion'],
-    notas:           ['notas', 'nota', 'observaciones', 'obs'],
+    notas:             ['notas', 'nota', 'observaciones', 'obs'],
+    descuento_general: ['descuento', 'descuentogeneral', 'discount', 'dto'],
+    limite_credito:    ['limitecredito', 'limite', 'credito'],
+    plazo_pago_dias:   ['plazopago', 'plazo', 'diaspago'],
+    codigo_postal:     ['codigopostal', 'cp', 'zipcode', 'postal'],
+    sitio_web:         ['sitioweb', 'web', 'website', 'url', 'pagina'],
   };
   cols.forEach(col => {
     const n = normHdrP(col);
@@ -1193,7 +1204,8 @@ export default function RobertoProveedores() {
   const [filtroSaldo,  setFiltroSaldo]  = useState('');
   const [modalProv,    setModalProv]    = useState(false);
   const [editProv,     setEditProv]     = useState<Proveedor | null>(null);
-  const [showImport,   setShowImport]   = useState(false);
+  const [showImport,     setShowImport]     = useState(false);
+  const [modalEliminar,  setModalEliminar]  = useState<{ id: number; desc: string } | null>(null);
 
   const cargarDash = useCallback(() => {
     if (!cid) return;
@@ -1392,6 +1404,9 @@ export default function RobertoProveedores() {
                             <button onClick={() => desactivar(p)}
                               style={{ backgroundColor: '#FFF5F5', color: RED, border: 'none', borderRadius: '5px', padding: '5px 8px', fontSize: '11px', cursor: 'pointer' }}>🗑️</button>
                           )}
+                          <button onClick={() => setModalEliminar({ id: p.id, desc: p.nombre })}
+                            title="Eliminar definitivamente"
+                            style={{ backgroundColor: '#742A2A', color: '#FEB2B2', border: 'none', borderRadius: '5px', padding: '5px 8px', fontSize: '11px', cursor: 'pointer' }}>✕</button>
                         </div>
                       </td>
                     </tr>
@@ -1417,6 +1432,17 @@ export default function RobertoProveedores() {
           proveedor={editProv}
           onGuardado={() => { setModalProv(false); setEditProv(null); cargarProveedores(); cargarDash(); }}
           onCerrar={() => { setModalProv(false); setEditProv(null); }}
+        />
+      )}
+      {modalEliminar && cid && token && (
+        <ModalEliminar
+          tabla="proveedores"
+          id={modalEliminar.id}
+          descripcion={modalEliminar.desc}
+          clienteId={cid}
+          token={token}
+          onClose={() => setModalEliminar(null)}
+          onDone={() => { setModalEliminar(null); cargarProveedores(); cargarDash(); }}
         />
       )}
     </div>

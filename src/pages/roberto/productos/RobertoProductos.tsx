@@ -2,6 +2,7 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { API_BASE } from '../../../config/api';
 import { getToken } from '../../../utils/auth';
+import ModalEliminar from '../components/ModalEliminar';
 
 const API   = API_BASE;
 const NAVY  = '#1B2A4A';
@@ -1592,6 +1593,7 @@ function RobertoProductos() {
   const [modalImportador, setModalImportador] = useState(false);
   const [modalEditar, setModalEditar]         = useState<ProductoReal | null>(null);
   const [modalNuevo, setModalNuevo]           = useState(false);
+  const [modalEliminar, setModalEliminar]     = useState<{ id: number; desc: string } | null>(null);
 
   // ── Helpers edición ──────────────────────────────────────────
   const defEdit = (p: ProductoReal): EditState => ({
@@ -1997,6 +1999,17 @@ function RobertoProductos() {
       {modalNuevo && <ModalNuevoProducto proveedores={filtrosOpts.proveedores} clienteId={clienteId} token={token}
         onCerrar={() => setModalNuevo(false)}
         onGuardado={() => { setModalNuevo(false); cargarProductos(1); cargarFiltros(); }} />}
+      {modalEliminar && clienteId && token && (
+        <ModalEliminar
+          tabla="productos_propios"
+          id={modalEliminar.id}
+          descripcion={modalEliminar.desc}
+          clienteId={clienteId}
+          token={token}
+          onClose={() => setModalEliminar(null)}
+          onDone={() => { setModalEliminar(null); cargarProductos(1); cargarFiltros(); }}
+        />
+      )}
 
       {/* HEADER */}
       <div style={{ backgroundColor: NAVY, padding: '14px 24px', display: 'flex', alignItems: 'center', gap: 12, position: 'sticky', top: 0, zIndex: 10 }}>
@@ -2522,8 +2535,11 @@ function RobertoProductos() {
                       </td>
                     )}
                     {/* Acciones */}
-                    <td style={{ ...td, width: 90 }}>
-                      <button style={{ ...btnStyle(BLUE, '#fff'), padding: '4px 10px', fontSize: 11 }} onClick={() => setModalEditar(p)}>✏️ Editar</button>
+                    <td style={{ ...td, width: 120 }}>
+                      <div style={{ display: 'flex', gap: '4px' }}>
+                        <button style={{ ...btnStyle(BLUE, '#fff'), padding: '4px 10px', fontSize: 11 }} onClick={() => setModalEditar(p)}>✏️ Editar</button>
+                        <button style={{ ...btnStyle('#E53E3E', '#fff'), padding: '4px 8px', fontSize: 11 }} onClick={() => setModalEliminar({ id: p.id, desc: p.descripcion })}>🗑️</button>
+                      </div>
                     </td>
                   </tr>
                 );

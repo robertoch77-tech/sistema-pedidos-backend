@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { API_BASE } from '../../../config/api';
 import { getToken } from '../../../utils/auth';
+import ModalEliminar from '../components/ModalEliminar';
 
 // ── Colores ───────────────────────────────────────────────────
 const NAVY   = '#1B2A4A';
@@ -970,7 +971,10 @@ const CAMPOS_CLIENTES = [
   { key: 'whatsapp',      label: 'WhatsApp',         req: false },
   { key: 'direccion',     label: 'Dirección',        req: false },
   { key: 'ciudad',        label: 'Ciudad',           req: false },
-  { key: 'condicion_iva', label: 'Condición IVA',    req: false },
+  { key: 'condicion_iva',     label: 'Condición IVA',     req: false },
+  { key: 'limite_credito',    label: 'Límite crédito',    req: false },
+  { key: 'plazo_pago_dias',   label: 'Plazo pago (días)', req: false },
+  { key: 'descuento_especial',label: 'Descuento especial',req: false },
 ];
 
 function normHdr(s: string) {
@@ -988,7 +992,10 @@ function autoDetectMap(cols: string[]): Record<string, string> {
     whatsapp:      ['whatsapp', 'wsp', 'ws'],
     direccion:     ['direccion', 'domicilio', 'address', 'calle'],
     ciudad:        ['ciudad', 'localidad', 'city'],
-    condicion_iva: ['condicioniva', 'iva', 'condicion', 'condicionafip'],
+    condicion_iva:     ['condicioniva', 'iva', 'condicion', 'condicionafip'],
+    limite_credito:    ['limitecredito', 'limite', 'credito', 'creditlimit'],
+    plazo_pago_dias:   ['plazopago', 'plazo', 'diaspago', 'paymentterm'],
+    descuento_especial:['descuento', 'descuentoespecial', 'discount', 'dto'],
   };
   cols.forEach(col => {
     const n = normHdr(col);
@@ -1263,6 +1270,7 @@ export default function RobertoClientes() {
   const [modalCliente,  setModalCliente]  = useState(false);
   const [editCliente,   setEditCliente]   = useState<ClienteFinal | null>(null);
   const [showImport,    setShowImport]    = useState(false);
+  const [modalEliminar, setModalEliminar] = useState<{ id: number; desc: string } | null>(null);
 
   const cargarDash = useCallback(() => {
     if (!cid) return;
@@ -1452,6 +1460,8 @@ export default function RobertoClientes() {
                             style={{ backgroundColor: '#EDF2F7', color: GRAY, border: 'none', borderRadius: '5px', padding: '5px 8px', fontSize: '11px', cursor: 'pointer' }}>✏️</button>
                           <button onClick={() => { setClienteCC(c); setVista('cc'); }}
                             style={{ backgroundColor: '#EDF2F7', color: GRAY, border: 'none', borderRadius: '5px', padding: '5px 8px', fontSize: '11px', cursor: 'pointer' }}>👁️</button>
+                          <button onClick={() => setModalEliminar({ id: c.id, desc: c.comprador_nombre })}
+                            style={{ backgroundColor: '#FFF5F5', color: RED, border: 'none', borderRadius: '5px', padding: '5px 8px', fontSize: '11px', cursor: 'pointer' }}>🗑️</button>
                         </div>
                       </td>
                     </tr>
@@ -1478,6 +1488,17 @@ export default function RobertoClientes() {
           cliente={editCliente}
           onGuardado={() => { setModalCliente(false); setEditCliente(null); cargarClientes(); cargarDash(); }}
           onCerrar={() => { setModalCliente(false); setEditCliente(null); }}
+        />
+      )}
+      {modalEliminar && cid && token && (
+        <ModalEliminar
+          tabla="cuentas_corrientes_clientes"
+          id={modalEliminar.id}
+          descripcion={modalEliminar.desc}
+          clienteId={cid}
+          token={token}
+          onClose={() => setModalEliminar(null)}
+          onDone={() => { setModalEliminar(null); cargarClientes(); cargarDash(); }}
         />
       )}
     </div>
