@@ -783,8 +783,16 @@ function RobertoVentas() {
       alicuota:    parseFloat(String(p.alicuota_iva))   || 21,
       stock_actual:parseFloat(String(p.stock_actual))   || 0,
     }]);
-    setProdsDrop([]); setShowDrop(false); setBusqProd('');
-    setTimeout(() => itemInputRef.current?.focus(), 60);
+    setProdsDrop([]); setShowDrop(false); setBusqProd(''); setDropIdx(-1);
+    // Foco va a la cantidad del producto recién agregado
+    setTimeout(() => {
+      const inputs = document.querySelectorAll<HTMLInputElement>('input[data-campo="cantidad"]');
+      if (inputs.length > 0) {
+        const last = inputs[inputs.length - 1];
+        last.focus();
+        last.select();
+      }
+    }, 80);
   };
 
   const agregarLibre = (data: { descripcion: string; precio: number; cantidad: number }) => {
@@ -1303,6 +1311,7 @@ function RobertoVentas() {
                                 </td>
                                 <td style={{ padding: '4px 6px', textAlign: 'right' }}>
                                   <input type="number" value={it.cantidad} min="0.01" step="0.01"
+                                    data-campo="cantidad"
                                     onChange={e => actualizarItem(it.tempId, 'cantidad', parseFloat(e.target.value) || 0)}
                                     onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); itemInputRef.current?.focus(); } }}
                                     style={{ ...inputStyle, width: '64px', padding: '4px 6px', textAlign: 'right' }} />
