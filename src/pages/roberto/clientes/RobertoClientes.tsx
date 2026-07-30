@@ -1027,6 +1027,8 @@ function ModalImportarClientes({ cid, token, onClose, onDone }: ImportModalProps
   const [error, setError] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
   const [drag, setDrag] = useState(false);
+  const [todasFilas, setTodasFilas] = useState<string[][]>([]);
+  const [filaEncabezado, setFilaEncabezado] = useState<number>(0);
 
   function procesarArchivo(f: File) {
     setArchivo(f);
@@ -1037,25 +1039,31 @@ function ModalImportarClientes({ cid, token, onClose, onDone }: ImportModalProps
         const data = new Uint8Array(e.target!.result as ArrayBuffer);
         const wb = XLSX.read(data, { type: 'array' });
         const ws = wb.Sheets[wb.SheetNames[0]];
-        const rows: string[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }) as string[][];
-        // find header row (most non-empty cells in first 10)
-        let hdrIdx = 0;
-        let maxFull = 0;
+        const rows: string[][] = (XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }) as any[][])
+          .map(r => r.map(c => String(c ?? '')));
+        let hdrIdx = 0; let maxFull = 0;
         rows.slice(0, 10).forEach((row, i) => {
-          const full = row.filter(c => String(c).trim()).length;
+          const full = row.filter(c => c.trim()).length;
           if (full > maxFull) { maxFull = full; hdrIdx = i; }
         });
-        const cols = rows[hdrIdx].map(c => String(c).trim()).filter(Boolean);
-        const preview = rows.slice(hdrIdx + 1, hdrIdx + 4).map(r => r.slice(0, cols.length).map(c => String(c)));
-        setColumnas(cols);
-        setMuestra(preview);
-        setMapeo(autoDetectMap(cols));
-        setPaso(2);
+        setTodasFilas(rows);
+        setFilaEncabezado(hdrIdx);
+        setPaso(15);
       } catch {
         setError('No se pudo leer el archivo. Asegurate que sea .xlsx, .xls o .csv');
       }
     };
     reader.readAsArrayBuffer(f);
+  }
+
+  function confirmarEncabezado() {
+    const cols = todasFilas[filaEncabezado]?.map(c => c.trim()).filter(Boolean) ?? [];
+    const dataFilas = todasFilas.slice(filaEncabezado + 1).filter(r => r.some(c => c.trim()));
+    const preview = dataFilas.slice(0, 3).map(r => r.slice(0, cols.length));
+    setColumnas(cols);
+    setMuestra(preview);
+    setMapeo(autoDetectMap(cols));
+    setPaso(2);
   }
 
   async function importar() {
@@ -1101,7 +1109,9 @@ function ModalImportarClientes({ cid, token, onClose, onDone }: ImportModalProps
         <div style={{ padding: '20px 24px 16px', borderBottom: '1px solid #EDF2F7', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
             <h3 style={{ margin: 0, color: NAVY, fontSize: '16px', fontWeight: 700 }}>📥 Importar clientes desde Excel</h3>
-            <p style={{ margin: '2px 0 0', color: GRAY, fontSize: '12px' }}>Paso {paso} de 3 — {paso === 1 ? 'Seleccionar archivo' : paso === 2 ? 'Mapear columnas' : 'Resultado'}</p>
+            <p style={{ margin: '2px 0 0', color: GRAY, fontSize: '12px' }}>
+              {paso === 1 ? 'Paso 1 de 3 — Seleccionar archivo' : paso === 15 ? 'Paso 1.5 de 3 — Seleccionar encabezado' : paso === 2 ? 'Paso 2 de 3 — Mapear columnas' : 'Paso 3 de 3 — Resultado'}
+            </p>
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: GRAY }}>✕</button>
         </div>
@@ -1109,8 +1119,8 @@ function ModalImportarClientes({ cid, token, onClose, onDone }: ImportModalProps
         <div style={{ padding: '24px' }}>
           {/* Step indicator */}
           <div style={{ display: 'flex', gap: '8px', marginBottom: '24px' }}>
-            {[1, 2, 3].map(s => (
-              <div key={s} style={{ flex: 1, height: '4px', borderRadius: '2px', backgroundColor: s <= paso ? BLUE : '#E2E8F0' }} />
+            {[1, 15, 2, 3].map(s => (
+              <div key={s} style={{ flex: 1, height: '4px', borderRadius: '2px', backgroundColor: (paso === 3 ? 3 : paso === 2 ? 2 : paso === 15 ? 1.5 : 1) >= (s === 15 ? 1.5 : s) ? BLUE : '#E2E8F0' }} />
             ))}
           </div>
 
@@ -1134,6 +1144,69 @@ function ModalImportarClientes({ cid, token, onClose, onDone }: ImportModalProps
               <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
                 onChange={e => { const f = e.target.files?.[0]; if (f) procesarArchivo(f); }} />
               {error && <p style={{ color: RED, fontSize: '13px', marginTop: '12px' }}>{error}</p>}
+            </div>
+          )}
+
+          {paso === 15 && (
+            <div>
+              <p style={{ color: NAVY, fontSize: '13px', fontWeight: 600, marginBottom: '4px' }}>
+                Hacé click en la fila que contiene los encabezados de columna (Nombre, CUIT, etc.)
+              </p>
+              <p style={{ color: GRAY, fontSize: '12px', marginBottom: '12px' }}>
+                Archivo: <strong>{archivo?.name}</strong>
+              </p>
+              <div style={{ border: '1px solid #E2E8F0', borderRadius: '8px', overflowX: 'auto', maxHeight: '400px', overflowY: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+                  <tbody>
+                    {todasFilas.slice(0, 20).map((fila, idx) => {
+                      const seleccionada = idx === filaEncabezado;
+                      const arriba = idx < filaEncabezado;
+                      return (
+                        <tr
+                          key={idx}
+                          onClick={() => setFilaEncabezado(idx)}
+                          style={{
+                            cursor: 'pointer',
+                            backgroundColor: seleccionada ? '#EBF4FF' : arriba ? '#F7FAFC' : '#fff',
+                            borderLeft: seleccionada ? `3px solid ${BLUE}` : '3px solid transparent',
+                            borderBottom: '1px solid #EDF2F7',
+                          }}
+                          onMouseEnter={e => { if (!seleccionada) (e.currentTarget as HTMLTableRowElement).style.backgroundColor = '#F7FAFC'; }}
+                          onMouseLeave={e => { (e.currentTarget as HTMLTableRowElement).style.backgroundColor = seleccionada ? '#EBF4FF' : arriba ? '#F7FAFC' : '#fff'; }}
+                        >
+                          <td style={{ padding: '6px 8px', color: GRAY, fontWeight: 600, whiteSpace: 'nowrap', userSelect: 'none', minWidth: '60px' }}>
+                            Fila {idx + 1}
+                          </td>
+                          {fila.slice(0, 8).map((celda, j) => (
+                            <td key={j} style={{
+                              padding: '6px 10px',
+                              maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                              color: seleccionada ? NAVY : arriba ? '#A0AEC0' : TEXT,
+                              fontWeight: seleccionada ? 700 : 400,
+                              textDecoration: arriba ? 'line-through' : 'none',
+                            }}>
+                              {celda}
+                            </td>
+                          ))}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <p style={{ color: GRAY, fontSize: '12px', marginTop: '10px' }}>
+                📊 Se importarán <strong>{todasFilas.slice(filaEncabezado + 1).filter(r => r.some(c => c.trim())).length}</strong> filas de datos (de fila {filaEncabezado + 2} en adelante)
+              </p>
+              {error && <p style={{ color: RED, fontSize: '13px', marginTop: '8px' }}>{error}</p>}
+              <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '16px' }}>
+                <button onClick={() => setPaso(1)} style={{ padding: '9px 18px', borderRadius: '8px', border: '1px solid #CBD5E0', backgroundColor: '#fff', cursor: 'pointer', fontSize: '13px', color: GRAY }}>
+                  ← Volver
+                </button>
+                <button onClick={confirmarEncabezado}
+                  style={{ padding: '9px 20px', borderRadius: '8px', border: 'none', backgroundColor: BLUE, color: '#fff', cursor: 'pointer', fontSize: '13px', fontWeight: 600 }}>
+                  Continuar →
+                </button>
+              </div>
             </div>
           )}
 
@@ -1201,7 +1274,7 @@ function ModalImportarClientes({ cid, token, onClose, onDone }: ImportModalProps
               {error && <p style={{ color: RED, fontSize: '13px', marginBottom: '12px' }}>{error}</p>}
 
               <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-                <button onClick={() => setPaso(1)} style={{ padding: '9px 18px', borderRadius: '8px', border: '1px solid #CBD5E0', backgroundColor: '#fff', cursor: 'pointer', fontSize: '13px', color: GRAY }}>
+                <button onClick={() => setPaso(15)} style={{ padding: '9px 18px', borderRadius: '8px', border: '1px solid #CBD5E0', backgroundColor: '#fff', cursor: 'pointer', fontSize: '13px', color: GRAY }}>
                   ← Volver
                 </button>
                 <button onClick={importar} disabled={cargando || !mapeo['nombre']}
