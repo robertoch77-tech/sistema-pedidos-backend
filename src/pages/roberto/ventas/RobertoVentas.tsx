@@ -154,8 +154,9 @@ function calcTotales(items: ItemVenta[], descGlobal: number, recargo: number, pr
   return { sumaSubtotales, descuentoMonto, recargoMonto, ivaByAlic, ivaTotal, total: precioConIva ? baseConRecargo : baseConRecargo + ivaTotal };
 }
 
-// ── Calcular totales (nuevo: precio AS-IS, IVA opcional) ──────────────────────
-function calcTotalesNew(items: ItemVenta[], descGlobal: number, recargo: number, agregarIva: boolean) {
+// ── Calcular totales — 3 modos de IVA ─────────────────────────────────────────
+// modoIva: 'off' = precio tal cual sin IVA | 'agregar' = suma IVA encima | 'discriminar' = precio ya incluye IVA, mostrar desglose
+function calcTotalesNew(items: ItemVenta[], descGlobal: number, recargo: number, modoIva: 'off' | 'agregar' | 'discriminar') {
   const ivaByAlic: Record<number, number> = {};
   let sumaSubtotales = 0;
   const itemsSub: { alic: number; sub: number }[] = [];
@@ -171,15 +172,24 @@ function calcTotalesNew(items: ItemVenta[], descGlobal: number, recargo: number,
   const recargoMonto   = base * (recargo / 100);
   const baseConRecargo = base * (1 + recargo / 100);
 
-  if (agregarIva) {
+  if (modoIva === 'agregar') {
+    // Precio NO incluye IVA → sumar IVA encima → total sube
     const factor = sumaSubtotales > 0 ? baseConRecargo / sumaSubtotales : 1;
     for (const { alic, sub } of itemsSub) {
       ivaByAlic[alic] = (ivaByAlic[alic] || 0) + sub * factor * (alic / 100);
     }
+  } else if (modoIva === 'discriminar') {
+    // Precio YA incluye IVA → extraer IVA del precio → total NO cambia
+    const factor = sumaSubtotales > 0 ? baseConRecargo / sumaSubtotales : 1;
+    for (const { alic, sub } of itemsSub) {
+      ivaByAlic[alic] = (ivaByAlic[alic] || 0) + sub * factor * (alic / (100 + alic));
+    }
   }
 
   const ivaTotal = Object.values(ivaByAlic).reduce((a, b) => a + b, 0);
-  return { sumaSubtotales, descuentoMonto, recargoMonto, ivaByAlic, ivaTotal, total: baseConRecargo + ivaTotal };
+  // En 'agregar' el total sube. En 'discriminar' y 'off' el total queda igual.
+  const total = modoIva === 'agregar' ? baseConRecargo + ivaTotal : baseConRecargo;
+  return { sumaSubtotales, descuentoMonto, recargoMonto, ivaByAlic, ivaTotal, total };
 }
 
 // ── Panel resumen lateral ──────────────────────────────────────────────────────
@@ -190,10 +200,10 @@ const PAGO_LABELS: Record<string, string> = {
 };
 
 function PanelResumen({ items, sumaSubtotales, descuentoMonto, recargoMonto, ivaByAlic, ivaTotal, total,
-  descGlobal, recargo, agregarIva, formaPago, montoRecibido, vueltoRT, onClose }: {
+  descGlobal, recargo, modoIva, formaPago, montoRecibido, vueltoRT, onClose }: {
   items: ItemVenta[]; sumaSubtotales: number; descuentoMonto: number; recargoMonto: number;
   ivaByAlic: Record<number, number>; ivaTotal: number; total: number;
-  descGlobal: number; recargo: number; agregarIva: boolean;
+  descGlobal: number; recargo: number; modoIva: 'off'|'agregar'|'discriminar';
   formaPago: string; montoRecibido: number; vueltoRT: number;
   onClose: () => void;
 }) {
@@ -264,7 +274,12 @@ function PanelResumen({ items, sumaSubtotales, descuentoMonto, recargoMonto, iva
                 <span>Recargo ({recargo}%)</span><span>+{fmt(recargoMonto)}</span>
               </div>
             )}
-            {agregarIva && Object.entries(ivaByAlic).sort(([a],[b]) => Number(a)-Number(b)).map(([alic, monto]) => (
+            {modoIva === 'discriminar' && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', color: BLUE }}>
+                <span>Neto (sin IVA)</span><span>{fmt(total - ivaTotal)}</span>
+              </div>
+            )}
+            {modoIva !== 'off' && Object.entries(ivaByAlic).sort(([a],[b]) => Number(a)-Number(b)).map(([alic, monto]) => (
               <div key={alic} style={{ display: 'flex', justifyContent: 'space-between', color: GRAY }}>
                 <span>IVA {alic}%</span><span>{fmt(monto)}</span>
               </div>
@@ -562,7 +577,7 @@ function RobertoVentas() {
   const [cargandoCC,   setCargandoCC]   = useState(false);
 
   // IVA toggle + resumen panel
-  const [agregarIva,   setAgregarIva]   = useState(false);
+  const [modoIva,      setModoIva]      = useState<'off'|'agregar'|'discriminar'>('off');
   const [showResumen,  setShowResumen]  = useState(false);
 
   // Submit
@@ -720,10 +735,9 @@ function RobertoVentas() {
         } catch { /* fall through */ }
       }
 
-      // Búsqueda por texto
+      // Búsqueda general (cubre código, EAN, nombre, marca, rubro)
       try {
-        const param = /^\d+$/.test(q) ? `ean=${q}` : `buscar=${encodeURIComponent(q)}`;
-        const r = await fetch(`${API_BASE}/api/superadmin/importador/productos/${cid}?${param}&limit=8`, { headers: authHdr });
+        const r = await fetch(`${API_BASE}/api/superadmin/importador/productos/${cid}?buscar=${encodeURIComponent(q)}&limit=8`, { headers: authHdr });
         if (r.ok) {
           const d = await r.json();
           const lista: ProductoResult[] = d.productos || d.items || [];
@@ -796,7 +810,7 @@ function RobertoVentas() {
     setCcClienteId(null);
     setBusqProd(''); setProdsDrop([]); setShowDrop(false);
     setDescGlobal(0); setRecargo(0); setPrecioConIva(true); setEnCC(false); setObserv('');
-    setAgregarIva(false); setShowResumen(false);
+    setModoIva('off'); setShowResumen(false);
     setFormaPago('efectivo'); setMontoRecibido(0);
     setErrVenta(''); setComprobante(null);
   };
@@ -834,7 +848,7 @@ function RobertoVentas() {
       : (nomMostrador.trim() || 'Mostrador');
     const compradorCuit = tipoCliente === 'cuenta' ? (clienteSel?.comprador_cuit || '') : '';
 
-    const { sumaSubtotales, descuentoMonto, recargoMonto, ivaByAlic, ivaTotal, total } = calcTotalesNew(items, descGlobal, recargo, agregarIva);
+    const { sumaSubtotales, descuentoMonto, recargoMonto, ivaByAlic, ivaTotal, total } = calcTotalesNew(items, descGlobal, recargo, modoIva);
     const vueltoCalc = formaPago === 'efectivo' ? Math.max(0, montoRecibido - total) : 0;
 
     const body = {
@@ -846,7 +860,7 @@ function RobertoVentas() {
       descuento_global:      descGlobal,
       recargo_global:        recargo,
       precio_con_iva:        false,
-      agregar_iva:           agregarIva,
+      modo_iva:              modoIva,
       forma_pago:            formaPago,
       monto_recibido:        formaPago === 'efectivo' ? montoRecibido : total,
       vuelto:                vueltoCalc,
@@ -889,7 +903,7 @@ function RobertoVentas() {
   };
 
   // ── Totales en tiempo real ────────────────────────────────────
-  const { sumaSubtotales, descuentoMonto, recargoMonto, ivaByAlic, ivaTotal, total } = calcTotalesNew(items, descGlobal, recargo, agregarIva);
+  const { sumaSubtotales, descuentoMonto, recargoMonto, ivaByAlic, ivaTotal, total } = calcTotalesNew(items, descGlobal, recargo, modoIva);
   const vueltoRT = formaPago === 'efectivo' ? montoRecibido - total : 0;
   const confirmDisabled = procesando || items.length === 0 || (formaPago === 'efectivo' && montoRecibido > 0 && montoRecibido < total);
 
@@ -1110,14 +1124,24 @@ function RobertoVentas() {
               <div style={{ padding: '24px 28px' }}>
 
                 {/* ── TOOLBAR SUPERIOR: IVA + RESUMEN ─────── */}
-                <div style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-                  <button
-                    onClick={() => setAgregarIva(v => !v)}
-                    style={{ ...btnStyle(agregarIva ? BLUE : '#EDF2F7', agregarIva ? '#fff' : GRAY), fontSize: '12px', padding: '7px 14px', border: `1.5px solid ${agregarIva ? BLUE : '#CBD5E0'}` }}>
-                    🏷️ {agregarIva ? 'IVA: ON' : 'IVA: OFF'}
-                  </button>
-                  <span style={{ fontSize: '12px', color: GRAY, flex: 1 }}>
-                    {agregarIva ? 'Se suma IVA (por alícuota de cada producto) sobre el precio' : 'Se usa el precio tal cual — sin IVA adicional'}
+                <div style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  {([
+                    { val: 'off' as const, label: 'Sin IVA', desc: 'Precio tal cual — sin agregar ni discriminar IVA', color: '#EDF2F7', textColor: GRAY },
+                    { val: 'agregar' as const, label: '+ IVA', desc: 'Suma IVA encima del precio (venta a consumidor final)', color: '#EBF4FF', textColor: BLUE },
+                    { val: 'discriminar' as const, label: 'IVA incl.', desc: 'El precio ya incluye IVA — lo muestra discriminado', color: '#F0FFF4', textColor: GREEN },
+                  ]).map(opt => (
+                    <button key={opt.val}
+                      onClick={() => setModoIva(opt.val)}
+                      style={{ fontSize: '12px', padding: '7px 14px', borderRadius: '8px', border: `2px solid ${modoIva === opt.val ? opt.textColor : '#CBD5E0'}`, cursor: 'pointer', fontWeight: modoIva === opt.val ? 700 : 500,
+                        backgroundColor: modoIva === opt.val ? opt.color : '#fff',
+                        color: modoIva === opt.val ? opt.textColor : GRAY }}>
+                      {opt.label}
+                    </button>
+                  ))}
+                  <span style={{ fontSize: '11px', color: GRAY, flex: 1, marginLeft: '4px' }}>
+                    {modoIva === 'off' && '💡 Precio tal cual — sin agregar ni discriminar IVA'}
+                    {modoIva === 'agregar' && '💡 Se suma IVA (por alícuota) sobre el precio'}
+                    {modoIva === 'discriminar' && '💡 El precio ya tiene IVA — se muestra Neto + IVA = mismo total'}
                   </span>
                   <button
                     onClick={() => setShowResumen(true)}
@@ -1280,16 +1304,19 @@ function RobertoVentas() {
                                 <td style={{ padding: '4px 6px', textAlign: 'right' }}>
                                   <input type="number" value={it.cantidad} min="0.01" step="0.01"
                                     onChange={e => actualizarItem(it.tempId, 'cantidad', parseFloat(e.target.value) || 0)}
+                                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); itemInputRef.current?.focus(); } }}
                                     style={{ ...inputStyle, width: '64px', padding: '4px 6px', textAlign: 'right' }} />
                                 </td>
                                 <td style={{ padding: '4px 6px', textAlign: 'right' }}>
                                   <input type="number" value={it.precio} min="0" step="0.01"
                                     onChange={e => actualizarItem(it.tempId, 'precio', parseFloat(e.target.value) || 0)}
+                                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); itemInputRef.current?.focus(); } }}
                                     style={{ ...inputStyle, width: '84px', padding: '4px 6px', textAlign: 'right' }} />
                                 </td>
                                 <td style={{ padding: '4px 6px', textAlign: 'right' }}>
                                   <input type="number" value={it.dto} min="0" max="100" step="0.5"
                                     onChange={e => actualizarItem(it.tempId, 'dto', parseFloat(e.target.value) || 0)}
+                                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); itemInputRef.current?.focus(); } }}
                                     style={{ ...inputStyle, width: '56px', padding: '4px 6px', textAlign: 'right' }} />
                                 </td>
                                 <td style={{ padding: '4px 6px', textAlign: 'right' }}>
@@ -1342,13 +1369,18 @@ function RobertoVentas() {
                             <span>Recargo ({recargo}%):</span><span>+{fmt(recargoMonto)}</span>
                           </div>
                         )}
-                        {agregarIva && Object.entries(ivaByAlic).sort(([a],[b]) => Number(a) - Number(b)).map(([alic, monto]) => (
+                        {modoIva === 'discriminar' && (
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', fontSize: '12px', color: BLUE }}>
+                            <span>Neto (sin IVA):</span><span>{fmt(total - ivaTotal)}</span>
+                          </div>
+                        )}
+                        {modoIva !== 'off' && Object.entries(ivaByAlic).sort(([a],[b]) => Number(a) - Number(b)).map(([alic, monto]) => (
                           <div key={alic} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', fontSize: '12px', color: GRAY }}>
                             <span>IVA {alic}%:</span><span>{fmt(monto)}</span>
                           </div>
                         ))}
                         <div style={{ borderTop: `2px solid ${SEP}`, marginTop: '10px', paddingTop: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span style={{ fontSize: '15px', fontWeight: 700, color: NAVY }}>{agregarIva ? 'TOTAL (c/IVA):' : 'TOTAL:'}</span>
+                          <span style={{ fontSize: '15px', fontWeight: 700, color: NAVY }}>{modoIva === 'agregar' ? 'TOTAL (c/IVA):' : modoIva === 'discriminar' ? 'TOTAL (IVA incl.):' : 'TOTAL:'}</span>
                           <span style={{ fontSize: '24px', fontWeight: 800, color: GREEN }}>{fmt(total)}</span>
                         </div>
                       </div>
@@ -1458,8 +1490,8 @@ function RobertoVentas() {
                     <div style={{ color: '#fff' }}>
                       <div style={{ fontSize: '11px', opacity: 0.65, textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '2px' }}>Total a cobrar</div>
                       <div style={{ fontSize: '26px', fontWeight: 900, color: '#68D391', fontFamily: 'monospace' }}>{fmt(total)}</div>
-                      {agregarIva && ivaTotal > 0 && (
-                        <div style={{ fontSize: '11px', opacity: 0.75, marginTop: '2px' }}>Incluye IVA: {fmt(ivaTotal)}</div>
+                      {modoIva !== 'off' && ivaTotal > 0 && (
+                        <div style={{ fontSize: '11px', opacity: 0.75, marginTop: '2px' }}>{modoIva === 'discriminar' ? 'IVA discriminado' : 'IVA incluido'}: {fmt(ivaTotal)}</div>
                       )}
                     </div>
                     <div style={{ color: '#fff', textAlign: 'right' }}>
@@ -1513,7 +1545,7 @@ function RobertoVentas() {
           total={total}
           descGlobal={descGlobal}
           recargo={recargo}
-          agregarIva={agregarIva}
+          modoIva={modoIva}
           formaPago={formaPago}
           montoRecibido={montoRecibido}
           vueltoRT={vueltoRT}
