@@ -47,10 +47,12 @@ function buildFila(fila, mapeo, encabezados, colPosMap) {
   return out;
 }
 
-function analizarArchivo(buffer) {
+function analizarArchivo(buffer, filaEncabezadoManual = null) {
   const filas = leerArchivo(buffer);
   if (!filas.length) throw new Error('El archivo está vacío');
-  const idxEnc   = detectarEncabezado(filas);
+  const idxEnc = (filaEncabezadoManual != null && filaEncabezadoManual >= 0 && filaEncabezadoManual < filas.length)
+    ? filaEncabezadoManual
+    : detectarEncabezado(filas);
   const filaCruda = filas[idxEnc].map(c => txt(c));
   const colPosMap = {};
   filaCruda.forEach((c, i) => { if (c && !colPosMap[c]) colPosMap[c] = i; });
@@ -91,7 +93,8 @@ router.post('/clientes/:clienteId/importar', upload.single('archivo'), async (re
   let importados = 0, actualizados = 0, saltados = 0, errores = 0;
 
   try {
-    const { columnas, dataFilas, colPosMap } = analizarArchivo(req.file.buffer);
+    const filaEncabezadoManual = req.body.filaEncabezado != null ? parseInt(req.body.filaEncabezado) : null;
+    const { columnas, dataFilas, colPosMap } = analizarArchivo(req.file.buffer, filaEncabezadoManual);
 
     for (const fila of dataFilas) {
       try {
@@ -212,7 +215,8 @@ router.post('/proveedores/:clienteId/importar', upload.single('archivo'), async 
   let importados = 0, actualizados = 0, saltados = 0, errores = 0;
 
   try {
-    const { columnas, dataFilas, colPosMap } = analizarArchivo(req.file.buffer);
+    const filaEncabezadoManual = req.body.filaEncabezado != null ? parseInt(req.body.filaEncabezado) : null;
+    const { columnas, dataFilas, colPosMap } = analizarArchivo(req.file.buffer, filaEncabezadoManual);
 
     for (const fila of dataFilas) {
       try {

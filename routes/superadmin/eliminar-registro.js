@@ -52,6 +52,17 @@ router.post('/', async (req, res) => {
       return res.status(404).json({ mensaje: 'Registro no encontrado' });
     }
 
+    if (tabla === 'productos_propios') {
+      const refs = await pool.query(
+        'SELECT COUNT(*) AS cnt FROM ventas_items WHERE producto_id = $1', [id]
+      );
+      if (parseInt(refs.rows[0].cnt) > 0) {
+        return res.status(400).json({
+          mensaje: `No se puede eliminar: el producto tiene ${refs.rows[0].cnt} venta(s) asociada(s). Desactivalo en su lugar.`
+        });
+      }
+    }
+
     await pool.query(
       `DELETE FROM ${tabla} WHERE id = $1 AND ${config.col_cliente} = $2`,
       [id, cliente_id]

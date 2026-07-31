@@ -887,6 +887,9 @@ router.delete('/productos', async (req, res) => {
     res.json({ ok: true, eliminados: r.rowCount });
   } catch (err) {
     console.error('DELETE /productos error:', err.message);
+    if (err.code === '23503') {
+      return res.status(400).json({ error: 'No se puede eliminar: uno o más productos tienen ventas asociadas.' });
+    }
     res.status(500).json({ mensaje: 'Error al eliminar productos', detalle: err.message });
   }
 });
@@ -1500,6 +1503,8 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
             if (!descripcion) { errores++; continue; }
             const codigo = val(fila, mapeo.codigo, enc) || null;
             const key = codigo ? codigo.trim().toUpperCase() : null;
+            const prefixedKey = (key && prefix) ? `${prefix}-${key}` : null;
+            const effectiveKey = (key && !existMap.has(key) && prefixedKey && existMap.has(prefixedKey)) ? prefixedKey : key;
             const campos = {
               precio_costo:   numVal(fila, mapeo.precio_costo, enc),
               precio_venta_1: numVal(fila, mapeo.precio_venta_1, enc),
@@ -1532,8 +1537,8 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
             if (u3 > 0 && pcf > 0) pv3 = pcf * (1 + u3 / 100);
             let pvFinal = pv1 || pcf || 0;
             if (iva > 0 && pvFinal > 0) pvFinal = pvFinal * (1 + iva / 100);
-            if (key && existMap.has(key)) {
-              const existing = existMap.get(key);
+            if (effectiveKey && existMap.has(effectiveKey)) {
+              const existing = existMap.get(effectiveKey);
               const mismoProv = proveedor_id === null ||
                 existing.proveedor_id === null ||
                 Number(existing.proveedor_id) === Number(proveedor_id);
@@ -1585,7 +1590,8 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
                 nuevos++;
               }
             } else {
-              // CASO 3 — código nuevo: insertar normal
+              // CASO 3 — código nuevo: insertar con prefijo si hay proveedor
+              const codigoFinal = prefix ? `${prefix}-${codigo}` : codigo;
               const ins = await client.query(
                 `INSERT INTO productos_propios
                  (cliente_id,proveedor_id,codigo,descripcion,precio_costo,precio_venta_1,precio_venta_2,
@@ -1593,7 +1599,7 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
                   stock_actual,stock_minimo,precio_costo_final,precio_venta_final,
                   utilidad_1,utilidad_2,utilidad_3,activo)
                  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,true) RETURNING id`,
-                [cliente_id,proveedor_id,codigo,descripcion,
+                [cliente_id,proveedor_id,codigoFinal,descripcion,
                  campos.precio_costo||0,pv1||0,pv2||0,pv3||0,
                  campos.marca,campos.rubro,campos.unidad_medida,campos.ean,
                  campos.dto_1||0,campos.dto_2||0,campos.dto_3||0,campos.alicuota_iva||0,
@@ -1601,7 +1607,8 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
                  pcf||0, pvFinal||0,
                  campos.utilidad_1||0,campos.utilidad_2||0,campos.utilidad_3||0]
               );
-              if (key) existMap.set(key, { id: ins.rows[0].id, proveedor_id });
+              const finalKey = codigoFinal ? codigoFinal.trim().toUpperCase() : null;
+              if (finalKey) existMap.set(finalKey, { id: ins.rows[0].id, proveedor_id });
               nuevos++;
             }
           } catch { errores++; }
