@@ -1,12 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import LogoRCH from '../../components/superadmin/LogoRCH';
 import ClientesRoberto from './clientes/ClientesRoberto';
+import GestionClaves from '../roberto/configuracion/GestionClaves';
 
-type Pagina = 'inicio' | 'clientes' | 'configuracion';
+type Pagina = 'inicio' | 'clientes' | 'claves' | 'configuracion';
 
 const menuItems: { icon: string; label: string; key: Pagina }[] = [
   { icon: '🏠', label: 'Inicio', key: 'inicio' },
   { icon: '👥', label: 'Clientes', key: 'clientes' },
+  { icon: '🔐', label: 'Gestión de claves', key: 'claves' },
   { icon: '⚙️', label: 'Configuración', key: 'configuracion' },
 ];
 
@@ -37,6 +39,7 @@ function SuperAdminDashboard() {
   const titulos: Record<Pagina, string> = {
     inicio: 'Resumen general',
     clientes: 'Clientes',
+    claves: 'Gestión de claves',
     configuracion: 'Configuración',
   };
 
@@ -44,6 +47,8 @@ function SuperAdminDashboard() {
     switch (pagina) {
       case 'clientes':
         return <ClientesRoberto />;
+      case 'claves':
+        return <GestionClaves />;
       case 'configuracion':
         return (
           <div style={{ padding: '28px' }}>

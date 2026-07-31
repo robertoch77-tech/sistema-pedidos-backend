@@ -74,7 +74,6 @@ const MENU_ITEMS = [
   { id: 'catalogo',      icon: '🛍️', label: 'Catálogo',           flag: 'catalogo' },
   { id: 'reportes',      icon: '📈', label: 'Reportes',          flag: null },
   { id: 'configuracion', icon: '⚙️', label: 'Configuración',     flag: null },
-  { id: 'claves',        icon: '🔐', label: 'Gestión de claves', flag: null },
 ];
 
 // ─── LOGO ────────────────────────────────────────────────────
@@ -174,7 +173,6 @@ function RobertoDashboard() {
 
   const RUTAS: Record<string, string> = {
     configuracion:    '/roberto/config',
-    claves:           '/roberto/gestion-claves',
     productos:        '/roberto/productos',
     ventas:           '/roberto/ventas',
     stock:            '/roberto/stock',

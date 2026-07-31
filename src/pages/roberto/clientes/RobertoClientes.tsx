@@ -1082,6 +1082,7 @@ function ModalImportarClientes({ cid, token, onClose, onDone }: ImportModalProps
       fd.append('archivo', archivo);
       fd.append('mapeo', JSON.stringify(mapeo));
       fd.append('conflicto', conflicto);
+      fd.append('filaEncabezado', String(filaEncabezado));
       const res = await fetch(`${API_BASE}/api/superadmin/importador-entidades/clientes/${cid}/importar`, {
         method: 'POST', headers: { 'x-superadmin-token': token || '' }, body: fd,
       });

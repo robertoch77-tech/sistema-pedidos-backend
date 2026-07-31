@@ -1038,6 +1038,7 @@ function ModalImportarProveedores({ cid, token, onClose, onDone }: ImportModalPr
       fd.append('archivo', archivo);
       fd.append('mapeo', JSON.stringify(mapeo));
       fd.append('conflicto', conflicto);
+      fd.append('filaEncabezado', String(filaEncabezado));
       const res = await fetch(`${API_BASE}/api/superadmin/importador-entidades/proveedores/${cid}/importar`, {
         method: 'POST', headers: { 'x-superadmin-token': token || '' }, body: fd,
       });

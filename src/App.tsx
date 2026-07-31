@@ -129,6 +129,7 @@ function App() {
         <Route path="/superadmin/clientes" element={<SuperAdminDashboard />} />
         <Route path="/superadmin/clientes/nuevo" element={<NuevoCliente />} />
         <Route path="/superadmin/clientes/:id" element={<DetalleCliente />} />
+        <Route path="/superadmin/gestion-claves" element={<GestionClaves />} />
         {/* Panel cliente Roberto — separado de Ivan */}
         <Route path="/roberto/login" element={<RobertoLogin />} />
         <Route path="/roberto/dashboard" element={<RobertoDashboard />} />
@@ -152,7 +153,6 @@ function App() {
         <Route path="/catalogo/productos/:codigo" element={<CatalogoPublico />} />
         <Route path="/catalogo/autos/:codigo"     element={<CatalogoAutos />} />
         <Route path="/roberto/catalogo"           element={<RobertoCatalogo />} />
-        <Route path="/roberto/gestion-claves"     element={<GestionClaves />} />
         <Route path="/pedidos-inteligentes/login"     element={<PiLogin />} />
         <Route path="/pedidos-inteligentes/dashboard"  element={<PiDashboard />} />
         <Route path="/pedidos-inteligentes/productos"  element={<PiProductos />} />
