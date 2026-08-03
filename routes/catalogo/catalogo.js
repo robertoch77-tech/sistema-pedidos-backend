@@ -128,7 +128,7 @@ router.get('/:codigo/productos', async (req, res) => {
             solo_disponible, destacado, page = 1, limit = 24 } = req.query;
 
     const params = [row.cliente_id];
-    const where  = ['p.cliente_id = $1', 'p.activo = true'];
+    const where  = ['p.cliente_id = $1', 'p.activo = true', 'p.visible_catalogo = true'];
     let   i      = 2;
 
     if (buscar) {

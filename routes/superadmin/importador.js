@@ -91,6 +91,7 @@ async function asegurarTablas() {
       ['productos_propios', 'precio_venta_3',      'NUMERIC DEFAULT 0'],
       ['productos_propios', 'punto_reposicion',    'NUMERIC DEFAULT 0'],
       ['productos_propios', 'destacado',          'BOOLEAN DEFAULT false'],
+      ['productos_propios', 'visible_catalogo',   'BOOLEAN DEFAULT true'],
       ['productos_propios', 'imagen_url',         'TEXT'],
       ['importaciones_historial', 'total_excel',  'INT DEFAULT 0'],
       ['importaciones_historial', 'nuevos',        'INT DEFAULT 0'],
@@ -553,6 +554,8 @@ router.get('/productos/:cliente_id', async (req, res) => {
       marca       = '',
       rubro       = '',
       activo,
+      visible_catalogo,
+      sin_foto,
       fecha_desde,
       fecha_hasta,
       fecha_tipo  = 'importacion',
@@ -588,6 +591,13 @@ router.get('/productos/:cliente_id', async (req, res) => {
       values.push(activo === 'true');
       where.push(`activo = $${values.length}`);
     }
+    if (visible_catalogo === 'true' || visible_catalogo === 'false') {
+      values.push(visible_catalogo === 'true');
+      where.push(`COALESCE(visible_catalogo, true) = $${values.length}`);
+    }
+    if (sin_foto === 'true') {
+      where.push(`(imagen_url IS NULL OR imagen_url = '')`);
+    }
     const campoFecha = fecha_tipo === 'actualizacion' ? 'modificado_en' : 'creado_en';
     if (fecha_desde) {
       values.push(fecha_desde);
@@ -614,7 +624,7 @@ router.get('/productos/:cliente_id', async (req, res) => {
                 utilidad_1, utilidad_2, utilidad_3,
                 COALESCE(stock_actual, 0) AS stock_actual,
                 COALESCE(stock_minimo, 0) AS stock_minimo,
-                activo, destacado, creado_en, modificado_en
+                activo, destacado, COALESCE(visible_catalogo, true) AS visible_catalogo, creado_en, modificado_en
          FROM productos_propios
          WHERE ${whereStr}
          ORDER BY descripcion ASC
@@ -1934,6 +1944,55 @@ router.delete('/proveedor/:cliente_id/:proveedor_id', async (req, res) => {
   } catch (err) {
     console.error('DELETE /proveedor error:', err.message);
     res.status(500).json({ mensaje: 'Error al eliminar proveedor', detalle: err.message });
+  }
+});
+
+// PATCH /productos/:id/catalogo — toggle visible_catalogo
+router.patch('/productos/:id/catalogo', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { visible_catalogo, cliente_id } = req.body;
+    if (!cliente_id) return res.status(400).json({ mensaje: 'cliente_id requerido' });
+    await pool.query(
+      'UPDATE productos_propios SET visible_catalogo = $1 WHERE id = $2 AND cliente_id = $3',
+      [!!visible_catalogo, id, cliente_id]
+    );
+    res.json({ ok: true, visible_catalogo: !!visible_catalogo });
+  } catch (err) {
+    console.error('PATCH /productos/:id/catalogo error:', err.message);
+    res.status(500).json({ mensaje: 'Error al actualizar visibilidad', detalle: err.message });
+  }
+});
+
+// POST /productos/ocultar-sin-foto — oculta del catálogo todos los productos sin imagen
+router.post('/productos/ocultar-sin-foto', async (req, res) => {
+  try {
+    const { cliente_id } = req.body;
+    if (!cliente_id) return res.status(400).json({ mensaje: 'cliente_id requerido' });
+    const r = await pool.query(
+      `UPDATE productos_propios SET visible_catalogo = false
+       WHERE cliente_id = $1 AND (imagen_url IS NULL OR imagen_url = '') RETURNING id`,
+      [cliente_id]
+    );
+    res.json({ ok: true, ocultados: r.rowCount });
+  } catch (err) {
+    console.error('POST /ocultar-sin-foto error:', err.message);
+    res.status(500).json({ mensaje: 'Error al ocultar productos', detalle: err.message });
+  }
+});
+
+// GET /productos/:cliente_id/count-sin-foto — cuenta productos sin imagen visibles en catálogo
+router.get('/productos/:cliente_id/count-sin-foto', async (req, res) => {
+  try {
+    const { cliente_id } = req.params;
+    const r = await pool.query(
+      `SELECT COUNT(*)::int AS total FROM productos_propios
+       WHERE cliente_id = $1 AND visible_catalogo = true AND (imagen_url IS NULL OR imagen_url = '')`,
+      [cliente_id]
+    );
+    res.json({ total: r.rows[0].total });
+  } catch (err) {
+    res.status(500).json({ mensaje: 'Error', detalle: err.message });
   }
 });
 
