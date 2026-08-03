@@ -6,6 +6,7 @@ const { verificarCualquierToken } = require('./authMiddleware');
 // ── Asegurar tablas ───────────────────────────────────────────
 async function asegurarTablas() {
   try {
+    await pool.query(`ALTER TABLE config_negocio ADD COLUMN IF NOT EXISTS iva_modo_defecto VARCHAR(20) DEFAULT 'discriminar'`).catch(() => {});
     await pool.query(`
       CREATE TABLE IF NOT EXISTS config_negocio (
         id                BIGSERIAL PRIMARY KEY,
@@ -20,6 +21,7 @@ async function asegurarTablas() {
         campana           BOOLEAN DEFAULT true,
         whatsapp_notif    BOOLEAN DEFAULT false,
         whatsapp_numero   TEXT DEFAULT '',
+        iva_modo_defecto  VARCHAR(20) DEFAULT 'discriminar',
         creado_en         TIMESTAMPTZ DEFAULT now(),
         modificado_en     TIMESTAMPTZ DEFAULT now()
       )
@@ -43,6 +45,7 @@ const CONFIG_DEFAULT = {
   campana:          true,
   whatsapp_notif:   false,
   whatsapp_numero:  '',
+  iva_modo_defecto: 'discriminar',
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -84,14 +87,15 @@ router.put('/:cliente_id', async (req, res) => {
       campana          = true,
       whatsapp_notif   = false,
       whatsapp_numero  = '',
+      iva_modo_defecto = 'discriminar',
     } = req.body;
 
     const result = await pool.query(
       `INSERT INTO config_negocio
          (cliente_id, nombre_comercial, cuit, direccion, logo_url, membrete,
           tamano_defecto, tamano_tickets, campana, whatsapp_notif, whatsapp_numero,
-          creado_en, modificado_en)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now(),now())
+          iva_modo_defecto, creado_en, modificado_en)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,now(),now())
        ON CONFLICT (cliente_id) DO UPDATE SET
          nombre_comercial = EXCLUDED.nombre_comercial,
          cuit             = EXCLUDED.cuit,
@@ -103,13 +107,14 @@ router.put('/:cliente_id', async (req, res) => {
          campana          = EXCLUDED.campana,
          whatsapp_notif   = EXCLUDED.whatsapp_notif,
          whatsapp_numero  = EXCLUDED.whatsapp_numero,
+         iva_modo_defecto = EXCLUDED.iva_modo_defecto,
          modificado_en    = now()
        RETURNING *`,
       [
         cliente_id,
         nombre_comercial, cuit, direccion, logo_url, membrete,
         tamano_defecto, tamano_tickets,
-        !!campana, !!whatsapp_notif, whatsapp_numero,
+        !!campana, !!whatsapp_notif, whatsapp_numero, iva_modo_defecto,
       ]
     );
 
