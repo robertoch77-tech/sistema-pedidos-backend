@@ -15,7 +15,11 @@ async function asegurarTablas() {
     await pool.query(`ALTER TABLE ventas ADD COLUMN IF NOT EXISTS descuento_global NUMERIC DEFAULT 0`).catch(() => {});
     await pool.query(`ALTER TABLE ventas ADD COLUMN IF NOT EXISTS recargo_global   NUMERIC DEFAULT 0`).catch(() => {});
     await pool.query(`ALTER TABLE ventas ADD COLUMN IF NOT EXISTS precio_con_iva   BOOLEAN DEFAULT true`).catch(() => {});
-    await pool.query(`ALTER TABLE ventas ADD COLUMN IF NOT EXISTS forma_pago       TEXT DEFAULT 'efectivo'`).catch(() => {});
+    await pool.query(`ALTER TABLE ventas ADD COLUMN IF NOT EXISTS forma_pago         TEXT DEFAULT 'efectivo'`).catch(() => {});
+    await pool.query(`ALTER TABLE ventas ADD COLUMN IF NOT EXISTS comprador_telefono TEXT DEFAULT ''`).catch(() => {});
+    await pool.query(`ALTER TABLE ventas ADD COLUMN IF NOT EXISTS comprador_email    TEXT DEFAULT ''`).catch(() => {});
+    await pool.query(`ALTER TABLE ventas ADD COLUMN IF NOT EXISTS comprador_direccion TEXT DEFAULT ''`).catch(() => {});
+    await pool.query(`ALTER TABLE ventas ADD COLUMN IF NOT EXISTS comprador_ciudad   TEXT DEFAULT ''`).catch(() => {});
     await pool.query(`ALTER TABLE ventas ADD COLUMN IF NOT EXISTS monto_recibido   NUMERIC DEFAULT 0`).catch(() => {});
     await pool.query(`ALTER TABLE ventas ADD COLUMN IF NOT EXISTS vuelto           NUMERIC DEFAULT 0`).catch(() => {});
 
@@ -87,6 +91,7 @@ router.get('/:cliente_id', async (req, res) => {
       pool.query(
         `SELECT id, numero, numero_completo, tipo_comprobante,
                 comprador_nombre, comprador_cuit,
+                comprador_telefono, comprador_email, comprador_direccion, comprador_ciudad,
                 subtotal, iva_monto, total, saldo,
                 estado, cobrada, anulada,
                 va_a_cuenta_corriente, observaciones, fecha, creado_en
@@ -116,6 +121,8 @@ router.post('/:cliente_id', async (req, res) => {
   const { cliente_id } = req.params;
   const {
     comprador_nombre = '', comprador_cuit = '',
+    comprador_telefono = '', comprador_email = '',
+    comprador_direccion = '', comprador_ciudad = '',
     items = [],
     va_a_cuenta_corriente = false,
     observaciones = '',
@@ -181,17 +188,19 @@ router.post('/:cliente_id', async (req, res) => {
       `INSERT INTO ventas
          (cliente_id, numero, numero_completo, prefijo, tipo_comprobante,
           comprador_nombre, comprador_cuit,
+          comprador_telefono, comprador_email, comprador_direccion, comprador_ciudad,
           subtotal, iva_monto, total, saldo,
           estado, cobrada, anulada,
           va_a_cuenta_corriente, observaciones,
           descuento_global, recargo_global, precio_con_iva,
           forma_pago, monto_recibido, vuelto,
           fecha, creado_en, modificado_en)
-       VALUES ($1,$2,$3,'V','VENTA',$4,$5,$6,$7,$8,$8,'pendiente',false,false,$9,$10,$11,$12,$13,$14,$15,$16,now(),now(),now())
+       VALUES ($1,$2,$3,'V','VENTA',$4,$5,$6,$7,$8,$9,$10,$11,$12,$12,'pendiente',false,false,$13,$14,$15,$16,$17,$18,$19,$20,now(),now(),now())
        RETURNING id`,
       [
         cliente_id, numero, numero_completo,
         comprador_nombre, comprador_cuit,
+        comprador_telefono, comprador_email, comprador_direccion, comprador_ciudad,
         sumaSubtotales.toFixed(4), iva_total.toFixed(4), total_venta.toFixed(4),
         va_a_cuenta_corriente, observaciones,
         descPct, recargoPct, conIva,
