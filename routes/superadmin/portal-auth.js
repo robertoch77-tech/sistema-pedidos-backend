@@ -29,7 +29,8 @@ router.post('/login', async (req, res) => {
       `SELECT id, nombre_comercial, razon_social, cuit, condicion_iva,
               direccion_fiscal, ciudad_fiscal, provincia_fiscal, telefono, whatsapp,
               plan, estado, codigo_acceso, mayorista_id, password_hash,
-              habilitar_sucursales, habilitar_empleados, arca_habilitado
+              habilitar_sucursales, habilitar_empleados, arca_habilitado,
+              prueba_inicio, prueba_fin
        FROM clientes_roberto
        WHERE codigo_acceso = $1`,
       [codigo.trim()]
@@ -43,6 +44,16 @@ router.post('/login', async (req, res) => {
 
     if (cliente.estado === 'suspendido') {
       return res.status(403).json({ mensaje: 'Cuenta suspendida. Contactá a tu administrador.' });
+    }
+
+    if (cliente.estado === 'prueba') {
+      const prueba_fin = cliente.prueba_fin;
+      if (prueba_fin && new Date(prueba_fin) < new Date()) {
+        return res.status(403).json({
+          mensaje: 'Tu período de prueba ha finalizado. Contactá a tu administrador para activar tu cuenta.',
+          prueba_vencida: true,
+        });
+      }
     }
 
     if (!cliente.password_hash) {
@@ -83,6 +94,7 @@ router.post('/login', async (req, res) => {
         habilitar_sucursales: !!cliente.habilitar_sucursales,
         habilitar_empleados:  !!cliente.habilitar_empleados,
         arca_habilitado:      !!cliente.arca_habilitado,
+        prueba_fin:           cliente.prueba_fin || null,
       },
     });
   } catch (error) {

@@ -8,6 +8,8 @@ async function asegurarColumnas() {
   try {
     await pool.query(`ALTER TABLE mayoristas ADD COLUMN IF NOT EXISTS tipo_fuente TEXT`);
     await pool.query(`ALTER TABLE clientes_roberto ADD COLUMN IF NOT EXISTS password_hash TEXT`);
+    await pool.query(`ALTER TABLE clientes_roberto ADD COLUMN IF NOT EXISTS prueba_inicio DATE`);
+    await pool.query(`ALTER TABLE clientes_roberto ADD COLUMN IF NOT EXISTS prueba_fin DATE`);
   } catch (err) {
     console.error('SuperAdmin clientes: error al asegurar columnas:', err.message);
   }
@@ -88,8 +90,20 @@ router.put('/:id/estado', async (req, res) => {
   try {
     const { id } = req.params;
     const { estado } = req.body;
-    if (!['activo', 'suspendido'].includes(estado)) {
+    if (!['activo', 'suspendido', 'prueba'].includes(estado)) {
       return res.status(400).json({ mensaje: 'Estado inválido' });
+    }
+    if (estado === 'prueba') {
+      const check = await pool.query('SELECT prueba_fin FROM clientes_roberto WHERE id=$1', [id]);
+      if (!check.rows[0]?.prueba_fin) {
+        await pool.query(
+          `UPDATE clientes_roberto SET prueba_inicio=CURRENT_DATE, prueba_fin=CURRENT_DATE + INTERVAL '15 days' WHERE id=$1`,
+          [id]
+        );
+      }
+    }
+    if (estado === 'activo') {
+      await pool.query('UPDATE clientes_roberto SET prueba_inicio=NULL, prueba_fin=NULL WHERE id=$1', [id]);
     }
     const clienteRes = await pool.query(
       'UPDATE clientes_roberto SET estado=$1, modificado_en=now() WHERE id=$2 RETURNING mayorista_id',
@@ -103,6 +117,46 @@ router.put('/:id/estado', async (req, res) => {
     res.json({ ok: true, estado });
   } catch (error) {
     console.error('SuperAdmin PUT estado error:', error.message);
+    res.status(500).json({ mensaje: 'Error del servidor' });
+  }
+});
+
+router.put('/:id/prueba', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { prueba_inicio, prueba_fin, extender_dias } = req.body;
+    if (extender_dias) {
+      await pool.query(
+        `UPDATE clientes_roberto SET
+          prueba_inicio = COALESCE(prueba_inicio, CURRENT_DATE),
+          prueba_fin = COALESCE(prueba_fin, CURRENT_DATE) + $1 * INTERVAL '1 day',
+          estado = 'prueba',
+          modificado_en = now()
+        WHERE id = $2`,
+        [extender_dias, id]
+      );
+    } else if (prueba_inicio && prueba_fin) {
+      await pool.query(
+        `UPDATE clientes_roberto SET
+          prueba_inicio = $1, prueba_fin = $2, estado = 'prueba', modificado_en = now()
+        WHERE id = $3`,
+        [prueba_inicio, prueba_fin, id]
+      );
+    } else {
+      await pool.query(
+        `UPDATE clientes_roberto SET
+          prueba_inicio = NULL, prueba_fin = NULL, estado = 'activo', modificado_en = now()
+        WHERE id = $1`,
+        [id]
+      );
+    }
+    const result = await pool.query(
+      'SELECT estado, prueba_inicio, prueba_fin FROM clientes_roberto WHERE id=$1',
+      [id]
+    );
+    res.json({ ok: true, ...result.rows[0] });
+  } catch (error) {
+    console.error('SuperAdmin PUT prueba error:', error.message);
     res.status(500).json({ mensaje: 'Error del servidor' });
   }
 });
