@@ -23,7 +23,9 @@ router.get('/mayoristas', checkAdmin, async (req, res) => {
               habilitar_pedido_sugerido, habilitar_cross_selling, habilitar_lector_barras,
               habilitar_mis_promociones, habilitar_estados_avanzados, habilitar_medios_de_pago,
               habilitar_analiticas
-       FROM mayoristas ORDER BY nombre`
+       FROM mayoristas
+       WHERE (tipo_fuente IS NULL OR tipo_fuente != 'roberto')
+       ORDER BY nombre`
     );
     res.json(resultado.rows);
   } catch (error) { res.status(500).json({ mensaje: 'Error del servidor' }); }
