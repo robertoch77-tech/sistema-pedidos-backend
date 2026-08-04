@@ -1719,7 +1719,7 @@ router.put('/actualizar-precios-v2', async (req, res) => {
 router.put('/actualizar-masivo', async (req, res) => {
   try {
     const { cliente_id, ids, campo, valor } = req.body;
-    const PERMITIDOS = ['marca','rubro','descuento_1','descuento_2','descuento_3','utilidad_1','utilidad_2','utilidad_3','precio_costo','alicuota_iva','activo','unidad_medida','stock_minimo'];
+    const PERMITIDOS = ['marca','rubro','dto_1','dto_2','dto_3','utilidad_1','utilidad_2','utilidad_3','precio_costo','alicuota_iva','activo','unidad_medida','stock_minimo'];
     if (!PERMITIDOS.includes(campo)) return res.status(400).json({ mensaje: 'Campo no permitido' });
     if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ mensaje: 'IDs requeridos' });
     const r = await pool.query(
