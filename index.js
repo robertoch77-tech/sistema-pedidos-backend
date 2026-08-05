@@ -2,6 +2,8 @@ const express = require('express');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const dotenv = require('dotenv');
+const helmet = require('helmet');
+const mongoSanitize = require('express-mongo-sanitize');
 const https = require('https');
 const http = require('http');
 
@@ -44,6 +46,12 @@ const crearIndices = async () => {
 crearIndices();
 
 const app = express();
+
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false,
+}));
+
 app.use(cors({
   origin: [
     'https://sistemagestionpedidos.netlify.app',
@@ -53,12 +61,43 @@ app.use(cors({
 }));
 app.use(express.json());
 
+app.use(mongoSanitize());
+
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  next();
+});
+
 app.set('trust proxy', 1);
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
   message: { error: 'Demasiados intentos. Esperá 15 minutos.' },
+});
+
+const apiLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000,
+  max: 200,
+  message: { error: 'Demasiadas solicitudes. Intentá en un momento.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use('/api/', apiLimiter);
+
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    if (res.statusCode >= 400 || duration > 5000) {
+      console.warn(`[SECURITY] ${req.method} ${req.path} → ${res.statusCode} (${duration}ms) IP:${req.ip}`);
+    }
+  });
+  next();
 });
 
 // Proxy de imágenes — resuelve Mixed Content (HTTP vs HTTPS)
@@ -167,6 +206,7 @@ app.use('/api/pi/config',   require('./routes/pi/config'));
 app.use('/api/catalogo',             require('./routes/catalogo/catalogo'));
 app.use('/api/superadmin/catalogo',  require('./routes/superadmin/catalogo'));
 app.use('/api/superadmin/historial', require('./routes/superadmin/historial'));
+app.use('/api/superadmin/backup', require('./routes/superadmin/backup'));
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
