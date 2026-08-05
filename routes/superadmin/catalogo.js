@@ -152,7 +152,7 @@ router.put('/:cid/productos/:prod_id/destacado', async (req, res) => {
     const { cid, prod_id } = req.params;
     const r = await pool.query(
       `UPDATE productos_propios
-       SET destacado = NOT COALESCE(destacado, false)
+       SET destacado = NOT COALESCE(destacado, false), modificado_en = now()
        WHERE id = $1 AND cliente_id = $2
        RETURNING id, destacado`,
       [prod_id, cid]

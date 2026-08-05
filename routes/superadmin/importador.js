@@ -2037,7 +2037,7 @@ router.patch('/productos/:id/catalogo', async (req, res) => {
     const { visible_catalogo, cliente_id } = req.body;
     if (!cliente_id) return res.status(400).json({ mensaje: 'cliente_id requerido' });
     await pool.query(
-      'UPDATE productos_propios SET visible_catalogo = $1 WHERE id = $2 AND cliente_id = $3',
+      'UPDATE productos_propios SET visible_catalogo = $1, modificado_en = now() WHERE id = $2 AND cliente_id = $3',
       [!!visible_catalogo, id, cliente_id]
     );
     res.json({ ok: true, visible_catalogo: !!visible_catalogo });
@@ -2053,7 +2053,7 @@ router.post('/productos/ocultar-sin-foto', async (req, res) => {
     const { cliente_id } = req.body;
     if (!cliente_id) return res.status(400).json({ mensaje: 'cliente_id requerido' });
     const r = await pool.query(
-      `UPDATE productos_propios SET visible_catalogo = false
+      `UPDATE productos_propios SET visible_catalogo = false, modificado_en = now()
        WHERE cliente_id = $1 AND (imagen_url IS NULL OR imagen_url = '') RETURNING id`,
       [cliente_id]
     );
