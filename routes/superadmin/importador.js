@@ -5,6 +5,7 @@ const XLSX     = require('xlsx');
 const pool     = require('../../db');
 const { verificarCualquierToken } = require('./authMiddleware');
 const { registrarCambios, registrarEvento } = require('./historial-helper');
+const { buildSearchConditions } = require('./search-helper');
 
 // ── Multer en memoria ─────────────────────────────────────────
 const upload = multer({
@@ -591,9 +592,8 @@ router.get('/productos/:cliente_id', async (req, res) => {
     const where   = ['cliente_id = $1'];
 
     if (buscar.trim()) {
-      values.push(`%${buscar.trim()}%`);
-      const n = values.length;
-      where.push(`(codigo ILIKE $${n} OR descripcion ILIKE $${n} OR marca ILIKE $${n})`);
+      const { condition, newIdx } = buildSearchConditions(buscar, values.length + 1, values);
+      if (condition) where.push(condition);
     }
     if (proveedor_id) {
       values.push(proveedor_id);
@@ -899,7 +899,10 @@ router.delete('/productos', async (req, res) => {
       const conds = ['cliente_id=$1'];
       vals = [cliente_id];
       let i = 2;
-      if (buscar)       { conds.push(`(codigo ILIKE $${i} OR descripcion ILIKE $${i})`); vals.push(`%${buscar}%`); i++; }
+      if (buscar) {
+        const { condition, newIdx } = buildSearchConditions(buscar, i, vals, ['codigo', 'descripcion']);
+        if (condition) { conds.push(condition); i = newIdx; }
+      }
       if (proveedor_id) { conds.push(`proveedor_id=$${i}`);  vals.push(proveedor_id); i++; }
       if (marca)        { conds.push(`marca=$${i}`);         vals.push(marca); i++; }
       if (rubro)        { conds.push(`rubro=$${i}`);         vals.push(rubro); i++; }
