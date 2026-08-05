@@ -166,6 +166,7 @@ app.use('/api/pi/pedidos',  require('./routes/pi/pedidos'));
 app.use('/api/pi/config',   require('./routes/pi/config'));
 app.use('/api/catalogo',             require('./routes/catalogo/catalogo'));
 app.use('/api/superadmin/catalogo',  require('./routes/superadmin/catalogo'));
+app.use('/api/superadmin/historial', require('./routes/superadmin/historial'));
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {

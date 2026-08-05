@@ -4,6 +4,7 @@ const multer   = require('multer');
 const XLSX     = require('xlsx');
 const pool     = require('../../db');
 const { verificarCualquierToken } = require('./authMiddleware');
+const { registrarCambios, registrarEvento } = require('./historial-helper');
 
 // ── Multer en memoria ─────────────────────────────────────────
 const upload = multer({
@@ -453,6 +454,12 @@ router.post('/aplicar', async (req, res) => {
                prod.marca || null, prod.unidad_medida || null, prod.ean || null,
                prod.precio_nuevo ?? 0]
             );
+            registrarEvento({
+              cliente_id, producto_id: null,
+              codigo: prod.codigo, descripcion: prod.descripcion || '',
+              campo: 'producto', valor_anterior: null, valor_nuevo: 'Producto nuevo',
+              tipo_operacion: 'nuevo', origen: 'Importar Excel'
+            });
           } else if (prod.tipo === 'subio' || prod.tipo === 'bajo') {
             await client.query(
               `UPDATE productos_propios
@@ -481,12 +488,25 @@ router.post('/aplicar', async (req, res) => {
                WHERE cliente_id=$3 AND proveedor_id=$4 AND codigo=$5`,
               [prod.precio_nuevo, prod.precio_actual, cliente_id, proveedor_id, prod.codigo]
             );
+            registrarCambios({
+              cliente_id, producto_id: null,
+              codigo: prod.codigo, descripcion: prod.descripcion || '',
+              cambios: { precio_costo: { anterior: prod.precio_actual, nuevo: prod.precio_nuevo } },
+              tipo_operacion: 'importacion',
+              origen: 'Importar Excel'
+            });
           } else if (prod.tipo === 'quitado') {
             await client.query(
               `UPDATE productos_propios SET activo=false, modificado_en=now()
                WHERE cliente_id=$1 AND proveedor_id=$2 AND codigo=$3`,
               [cliente_id, proveedor_id, prod.codigo]
             );
+            registrarEvento({
+              cliente_id, producto_id: null,
+              codigo: prod.codigo, descripcion: prod.descripcion || '',
+              campo: 'activo', valor_anterior: 'true', valor_nuevo: 'false',
+              tipo_operacion: 'desactivado', origen: 'Importar Excel'
+            });
           }
           aplicados++;
         } catch {
@@ -1664,6 +1684,17 @@ router.put('/actualizar-precios-v2', async (req, res) => {
     }
     await pool.query(`ALTER TABLE productos_propios ADD COLUMN IF NOT EXISTS stock_minimo NUMERIC DEFAULT 0`).catch(() => {});
 
+    const idsToUpdate = productos.map(p => p.id);
+    const prevMap = {};
+    if (idsToUpdate.length) {
+      const prevResH = await pool.query(
+        `SELECT id, codigo, descripcion, precio_costo, utilidad_1, utilidad_2, utilidad_3, marca, rubro
+         FROM productos_propios WHERE id=ANY($1) AND cliente_id=$2`,
+        [idsToUpdate, cliente_id]
+      );
+      for (const row of prevResH.rows) prevMap[row.id] = row;
+    }
+
     let actualizados = 0;
     for (const p of productos) {
       try {
@@ -1702,6 +1733,25 @@ router.put('/actualizar-precios-v2', async (req, res) => {
            p.stock_minimo??null, p.activo??null, p.imagen_url??null, p.id, cliente_id]
         );
         actualizados += r.rowCount;
+        const prevH = prevMap[p.id];
+        if (prevH) {
+          const cambios = {};
+          if (String(prevH.precio_costo) !== String(p.precio_costo)) cambios.precio_costo = { anterior: prevH.precio_costo, nuevo: p.precio_costo };
+          if (String(prevH.utilidad_1) !== String(p.utilidad_1)) cambios.utilidad_1 = { anterior: prevH.utilidad_1, nuevo: p.utilidad_1 };
+          if (String(prevH.utilidad_2) !== String(p.utilidad_2)) cambios.utilidad_2 = { anterior: prevH.utilidad_2, nuevo: p.utilidad_2 };
+          if (String(prevH.utilidad_3) !== String(p.utilidad_3)) cambios.utilidad_3 = { anterior: prevH.utilidad_3, nuevo: p.utilidad_3 };
+          if (p.marca !== undefined && String(prevH.marca) !== String(p.marca)) cambios.marca = { anterior: prevH.marca, nuevo: p.marca };
+          if (p.rubro !== undefined && String(prevH.rubro) !== String(p.rubro)) cambios.rubro = { anterior: prevH.rubro, nuevo: p.rubro };
+          if (Object.keys(cambios).length) {
+            registrarCambios({
+              cliente_id, producto_id: p.id,
+              codigo: prevH.codigo, descripcion: prevH.descripcion,
+              cambios,
+              tipo_operacion: 'edicion_precios',
+              origen: 'Editar precios'
+            });
+          }
+        }
       } catch (err) {
         console.error(`PUT /actualizar-precios-v2 producto ${p.id}:`, err.message);
       }
@@ -1722,10 +1772,23 @@ router.put('/actualizar-masivo', async (req, res) => {
     const PERMITIDOS = ['marca','rubro','dto_1','dto_2','dto_3','utilidad_1','utilidad_2','utilidad_3','precio_costo','alicuota_iva','activo','unidad_medida','stock_minimo'];
     if (!PERMITIDOS.includes(campo)) return res.status(400).json({ mensaje: 'Campo no permitido' });
     if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ mensaje: 'IDs requeridos' });
+    const prevRes = await pool.query(
+      `SELECT id, codigo, descripcion, ${campo} as valor_actual FROM productos_propios WHERE id=ANY($1) AND cliente_id=$2`,
+      [ids, cliente_id]
+    );
     const r = await pool.query(
       `UPDATE productos_propios SET ${campo}=$1, modificado_en=now() WHERE id=ANY($2) AND cliente_id=$3`,
       [valor, ids, cliente_id]
     );
+    for (const prev of prevRes.rows) {
+      registrarCambios({
+        cliente_id, producto_id: prev.id,
+        codigo: prev.codigo, descripcion: prev.descripcion,
+        cambios: { [campo]: { anterior: prev.valor_actual, nuevo: valor } },
+        tipo_operacion: 'edicion_masiva',
+        origen: `Acción masiva: ${campo}`
+      });
+    }
     res.json({ ok: true, actualizados: r.rowCount });
   } catch (err) {
     console.error('PUT /actualizar-masivo error:', err.message);
@@ -1838,6 +1901,23 @@ router.put('/ajuste-porcentaje', async (req, res) => {
           );
         }
         await client.query('COMMIT');
+        for (const r of resultados) {
+          const cambios = {};
+          if (tipo === 'aumento_costo' || tipo === 'descuento_costo') {
+            cambios.precio_costo = { anterior: r.precio_costo_anterior, nuevo: r.precio_costo_nuevo };
+          }
+          if (tipo === 'cambio_utilidad') {
+            cambios.utilidad = { anterior: utilidad_anterior, nuevo: utilidad_nueva };
+          }
+          cambios.precio_venta_1 = { anterior: r.pv1_anterior, nuevo: r.pv1_nuevo };
+          registrarCambios({
+            cliente_id, producto_id: r.id,
+            codigo: r.codigo, descripcion: r.descripcion,
+            cambios,
+            tipo_operacion: 'ajuste_porcentaje',
+            origen: `${tipo === 'aumento_costo' ? 'Aumento' : tipo === 'descuento_costo' ? 'Descuento' : 'Cambio utilidad'} ${porcentaje || ''}%`
+          });
+        }
       } catch (err) {
         await client.query('ROLLBACK').catch(() => {});
         throw err;
