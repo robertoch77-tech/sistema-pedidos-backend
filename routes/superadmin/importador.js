@@ -1929,12 +1929,16 @@ router.put('/ajuste-porcentaje', async (req, res) => {
         for (const r of resultados) {
           await client.query(
             `UPDATE productos_propios
-             SET precio_costo=$1, utilidad_1=$2, utilidad_2=$3, utilidad_3=$4,
-                 precio_venta_final=$5, precio_venta_2=$6, precio_venta_3=$7,
+             SET precio_costo=$1, precio_costo_final=$2,
+                 utilidad_1=$3, utilidad_2=$4, utilidad_3=$5,
+                 precio_venta_1=$6, precio_venta_2=$7, precio_venta_3=$8,
+                 precio_venta_final=$9,
                  modificado_en=now()
-             WHERE id=$8 AND cliente_id=$9`,
-            [r._pcNuevo, r._u1, r._u2, r._u3,
+             WHERE id=$10 AND cliente_id=$11`,
+            [r._pcNuevo, r._pcFinalNuevo,
+             r._u1, r._u2, r._u3,
              r._pv1, r._pv2, r._pv3,
+             r._pv1,
              r.id, cliente_id]
           );
         }
