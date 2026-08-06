@@ -472,18 +472,22 @@ router.post('/aplicar', async (req, res) => {
                    precio_venta_final = $1::numeric
                      * (1 - COALESCE(dto_1,0)/100) * (1 - COALESCE(dto_2,0)/100) * (1 - COALESCE(dto_3,0)/100)
                      * (1 + COALESCE(imp_1,0)/100) * (1 + COALESCE(imp_2,0)/100)
+                     * (1 + COALESCE(alicuota_iva,21)/100)
                      * CASE WHEN COALESCE(utilidad_1,0) > 0 THEN (1 + utilidad_1/100) ELSE 1 END,
                    precio_venta_1 = $1::numeric
                      * (1 - COALESCE(dto_1,0)/100) * (1 - COALESCE(dto_2,0)/100) * (1 - COALESCE(dto_3,0)/100)
                      * (1 + COALESCE(imp_1,0)/100) * (1 + COALESCE(imp_2,0)/100)
+                     * (1 + COALESCE(alicuota_iva,21)/100)
                      * CASE WHEN COALESCE(utilidad_1,0) > 0 THEN (1 + utilidad_1/100) ELSE 1 END,
                    precio_venta_2 = $1::numeric
                      * (1 - COALESCE(dto_1,0)/100) * (1 - COALESCE(dto_2,0)/100) * (1 - COALESCE(dto_3,0)/100)
                      * (1 + COALESCE(imp_1,0)/100) * (1 + COALESCE(imp_2,0)/100)
+                     * (1 + COALESCE(alicuota_iva,21)/100)
                      * CASE WHEN COALESCE(utilidad_2,0) > 0 THEN (1 + utilidad_2/100) ELSE 1 END,
                    precio_venta_3 = $1::numeric
                      * (1 - COALESCE(dto_1,0)/100) * (1 - COALESCE(dto_2,0)/100) * (1 - COALESCE(dto_3,0)/100)
                      * (1 + COALESCE(imp_1,0)/100) * (1 + COALESCE(imp_2,0)/100)
+                     * (1 + COALESCE(alicuota_iva,21)/100)
                      * CASE WHEN COALESCE(utilidad_3,0) > 0 THEN (1 + utilidad_3/100) ELSE 1 END,
                    modificado_en=now()
                WHERE cliente_id=$3 AND proveedor_id=$4 AND codigo=$5`,
