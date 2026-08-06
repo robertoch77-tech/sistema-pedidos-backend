@@ -1194,23 +1194,35 @@ router.put('/actualizar-precios', async (req, res) => {
     await client.query('BEGIN');
     let actualizados = 0;
     for (const p of productos) {
+      // Recálculo server-side
+      const pc  = Number(p.precio_costo)  || 0;
+      const d1  = Number(p.descuento_1)   || 0, d2 = Number(p.descuento_2) || 0, d3 = Number(p.descuento_3) || 0;
+      const i1  = Number(p.impuesto_1)    || 0, i2 = Number(p.impuesto_2)  || 0;
+      const iva = Number(p.iva)           || 0;
+      const u1  = Number(p.utilidad_1)    || 0, u2 = Number(p.utilidad_2)  || 0, u3 = Number(p.utilidad_3) || 0;
+      const pcF = pc * (1-d1/100) * (1-d2/100) * (1-d3/100);
+      const pv1 = pcF * (1+i1/100) * (1+i2/100) * (1+iva/100) * (1+u1/100);
+      const pv2 = pcF * (1+i1/100) * (1+i2/100) * (1+iva/100) * (1+u2/100);
+      const pv3 = pcF * (1+i1/100) * (1+i2/100) * (1+iva/100) * (1+u3/100);
       const r = await client.query(
         `UPDATE productos_propios
-         SET precio_costo=$1,
-             dto_1=$2, dto_2=$3, dto_3=$4,
-             imp_1=$5, imp_2=$6,
-             alicuota_iva=$7,
-             utilidad_1=$8, utilidad_2=$9, utilidad_3=$10,
-             precio_venta_final=$11, precio_venta_2=$12, precio_venta_3=$13,
+         SET precio_costo=$1, precio_costo_final=$2,
+             dto_1=$3, dto_2=$4, dto_3=$5,
+             imp_1=$6, imp_2=$7,
+             alicuota_iva=$8,
+             utilidad_1=$9, utilidad_2=$10, utilidad_3=$11,
+             precio_venta_1=$12, precio_venta_2=$13, precio_venta_3=$14,
+             precio_venta_final=$15,
              modificado_en=now()
-         WHERE id=$14 AND cliente_id=$15`,
+         WHERE id=$16 AND cliente_id=$17`,
         [
-          p.precio_costo || 0,
-          p.descuento_1 || 0, p.descuento_2 || 0, p.descuento_3 || 0,
-          p.impuesto_1 || 0, p.impuesto_2 || 0,
-          p.iva || 0,
-          p.utilidad_1 || 0, p.utilidad_2 || 0, p.utilidad_3 || 0,
-          p.precio_venta_final || 0, p.precio_venta_2 || 0, p.precio_venta_3 || 0,
+          pc, pcF,
+          d1, d2, d3,
+          i1, i2,
+          iva,
+          u1, u2, u3,
+          pv1, pv2, pv3,
+          pv1,
           p.id, cliente_id,
         ]
       );
