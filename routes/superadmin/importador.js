@@ -1705,6 +1705,35 @@ router.put('/actualizar-precios-v2', async (req, res) => {
     let actualizados = 0;
     for (const p of productos) {
       try {
+        // ── Recálculo server-side: si llega precio_costo + impuestos, el backend
+        //    recalcula pcFinal/pv1/pv2/pv3 él mismo. No depende del frontend. ──
+        let pcFinal_calc = p.precio_costo_final ?? null;
+        let pv1_calc = p.precio_venta_1 ?? null;
+        let pv2_calc = p.precio_venta_2 ?? null;
+        let pv3_calc = p.precio_venta_3 ?? null;
+        let pvFinal_calc = p.precio_venta_final ?? null;
+
+        if (p.precio_costo != null && p.iva != null) {
+          const pc  = Number(p.precio_costo) || 0;
+          const d1  = Number(p.descuento_1)  || 0;
+          const d2  = Number(p.descuento_2)  || 0;
+          const d3  = Number(p.descuento_3)  || 0;
+          const i1  = Number(p.impuesto_1)   || 0;
+          const i2  = Number(p.impuesto_2)   || 0;
+          const iva = Number(p.iva)           || 0;
+          const u1  = Number(p.utilidad_1)    || 0;
+          const u2  = Number(p.utilidad_2)    || 0;
+          const u3  = Number(p.utilidad_3)    || 0;
+
+          pcFinal_calc = pc * (1 - d1/100) * (1 - d2/100) * (1 - d3/100);
+          pv1_calc = pcFinal_calc * (1 + i1/100) * (1 + i2/100) * (1 + iva/100) * (1 + u1/100);
+          pv2_calc = pcFinal_calc * (1 + i1/100) * (1 + i2/100) * (1 + iva/100) * (1 + u2/100);
+          pv3_calc = pcFinal_calc * (1 + i1/100) * (1 + i2/100) * (1 + iva/100) * (1 + u3/100);
+          // pvFinal lo manda el frontend (sabe cuál PV está activo), pero si no llega, usar pv1
+          if (pvFinal_calc == null) pvFinal_calc = pv1_calc;
+          console.log(`[actualizar-precios-v2] id=${p.id} pc=${pc} pcF=${pcFinal_calc.toFixed(2)} pv1=${pv1_calc.toFixed(2)} pv2=${pv2_calc.toFixed(2)} pv3=${pv3_calc.toFixed(2)} pvF=${pvFinal_calc}`);
+        }
+
         // Guardar historial de precios
         const prev = await pool.query(
           'SELECT precio_costo, precio_venta_final FROM productos_propios WHERE id=$1 AND cliente_id=$2',
@@ -1733,11 +1762,11 @@ router.put('/actualizar-precios-v2', async (req, res) => {
              activo=COALESCE($20,activo), imagen_url=COALESCE($21,imagen_url),
              modificado_en=now()
            WHERE id=$22 AND cliente_id=$23`,
-          [p.precio_costo??null, p.precio_costo_final??null,
+          [p.precio_costo??null, pcFinal_calc,
            p.descuento_1??null, p.descuento_2??null, p.descuento_3??null,
            p.impuesto_1??null, p.impuesto_2??null, p.iva??null,
            p.utilidad_1??null, p.utilidad_2??null, p.utilidad_3??null,
-           p.precio_venta_final??null, p.precio_venta_1??null, p.precio_venta_2??null, p.precio_venta_3??null,
+           pvFinal_calc, pv1_calc, pv2_calc, pv3_calc,
            p.marca??null, p.rubro??null, p.unidad_medida??null,
            p.stock_minimo??null, p.activo??null, p.imagen_url??null, p.id, cliente_id]
         );
