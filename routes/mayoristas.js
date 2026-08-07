@@ -35,7 +35,8 @@ router.get('/:id/configuracion', async (req, res) => {
               habilitar_lector_barras, habilitar_cross_selling, habilitar_mensajes,
               habilitar_medios_de_pago, medios_de_pago, habilitar_notificaciones,
               habilitar_calculadora_venta, habilitar_historial_ventas,
-              habilitar_cotizaciones, habilitar_novedades
+              habilitar_cotizaciones, habilitar_novedades,
+              dto_pago_termino
        FROM mayoristas WHERE id=$1`, [id]
     );
     if (!resultado.rows[0]) return res.status(404).json({ mensaje: 'Mayorista no encontrado' });
@@ -52,7 +53,8 @@ router.put('/:id/configuracion', async (req, res) => {
       habilitar_calculadora, descuento_1, descuento_2, descuento_3, iva, orden_pdf,
       // === MODIFICADO: se agregó habilitar_productos_solicitados ===
       habilitar_ctas_ctes, habilitar_demanda, habilitar_ofertas, habilitar_productos_solicitados,
-      habilitar_medios_de_pago, medios_de_pago, habilitar_notificaciones
+      habilitar_medios_de_pago, medios_de_pago, habilitar_notificaciones,
+      dto_pago_termino
     } = req.body;
     const resultado = await pool.query(
       `UPDATE mayoristas SET
@@ -61,14 +63,15 @@ router.put('/:id/configuracion', async (req, res) => {
         habilitar_calculadora=$10, descuento_1=$11, descuento_2=$12, descuento_3=$13, iva=$14,
         orden_pdf=$15, habilitar_ctas_ctes=$16, habilitar_demanda=$17, habilitar_ofertas=$18,
         habilitar_productos_solicitados=$19, habilitar_medios_de_pago=$20, medios_de_pago=$21,
-        habilitar_notificaciones=$22
-       WHERE id=$23 RETURNING *`,
+        habilitar_notificaciones=$22,
+        dto_pago_termino=$23
+       WHERE id=$24 RETURNING *`,
       [mostrar_precios, mostrar_stock, mostrar_marca, mostrar_rubro, mostrar_tipo,
        pedir_clave, tamanio_hoja, items_por_hoja, numero_pedido_inicio,
        habilitar_calculadora, descuento_1||0, descuento_2||0, descuento_3||0, iva||21,
        orden_pdf||'codigo', habilitar_ctas_ctes||false, habilitar_demanda||false, habilitar_ofertas||false,
        habilitar_productos_solicitados||false, habilitar_medios_de_pago||false, medios_de_pago||'',
-       habilitar_notificaciones||false, id]
+       habilitar_notificaciones||false, dto_pago_termino||0, id]
     );
     res.json(resultado.rows[0]);
   } catch (error) {

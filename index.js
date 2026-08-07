@@ -45,6 +45,10 @@ const crearIndices = async () => {
 
 crearIndices();
 
+;(async () => {
+  await pool.query(`ALTER TABLE mayoristas ADD COLUMN IF NOT EXISTS dto_pago_termino NUMERIC DEFAULT 0`).catch(() => {});
+})();
+
 const app = express();
 
 app.use(helmet({

@@ -30,6 +30,27 @@ async function getConexionMayorista(mayorista_id) {
   return poolExterno;
 }
 
+async function getDtoPagoTermino(mayorista_id) {
+  try {
+    const r = await pool.query(
+      'SELECT dto_pago_termino FROM mayoristas WHERE id = $1',
+      [mayorista_id]
+    );
+    return parseFloat(r.rows[0]?.dto_pago_termino) || 0;
+  } catch { return 0; }
+}
+
+function aplicarDto(productos, dtoPct) {
+  if (!dtoPct || dtoPct <= 0) return productos;
+  const factor = 1 - dtoPct / 100;
+  return productos.map(p => ({
+    ...p,
+    precio_producto: p.precio_producto != null
+      ? Math.round(p.precio_producto * factor * 100) / 100
+      : p.precio_producto
+  }));
+}
+
 // Reemplaza ñ, acentos y el caracter roto (�) por comodin _ (1 caracter cualquiera).
 function normalizar(texto) {
   return texto.replace(/[ñÑáéíóúÁÉÍÓÚ\uFFFD]/g, '_');
@@ -112,7 +133,10 @@ router.get('/:mayorista_id/todos', async (req, res) => {
       params
     );
 
-    res.json({ productos: resultado.rows, total: resultado.rows.length });
+    const dtoPct = await getDtoPagoTermino(mayorista_id);
+    const productosConDto = aplicarDto(resultado.rows, dtoPct);
+
+    res.json({ productos: productosConDto, total: productosConDto.length });
   } catch (error) {
     console.error('Error productos todos:', error.message);
     res.status(500).json({ mensaje: 'Error del servidor' });
@@ -137,7 +161,12 @@ router.get('/:mayorista_id/buscar-ean/:ean', async (req, res) => {
          FROM "viewProductos" WHERE ean = $1 LIMIT 1`,
         [ean]
       );
-      res.json({ producto: resultado.rows[0] || null });
+      const dtoPct = await getDtoPagoTermino(mayorista_id);
+      const prod = resultado.rows[0] || null;
+      if (prod && dtoPct > 0 && prod.precio_producto != null) {
+        prod.precio_producto = Math.round(prod.precio_producto * (1 - dtoPct / 100) * 100) / 100;
+      }
+      res.json({ producto: prod });
     } catch (errCampo) {
       // La vista no tiene columna "ean" en este mayorista — modo EAN no disponible.
       res.json({ producto: null, ean_no_soportado: true });
@@ -194,7 +223,8 @@ router.get('/:mayorista_id/cross-selling', async (req, res) => {
       if (prod) resultado.push(prod);
       if (resultado.length >= 5) break;
     }
-    res.json(resultado);
+    const dtoPct = await getDtoPagoTermino(mayorista_id);
+    res.json(aplicarDto(resultado, dtoPct));
   } catch (error) {
     console.error('Error cross-selling:', error.message);
     res.json([]);
@@ -253,8 +283,11 @@ router.get('/:mayorista_id', async (req, res) => {
       params
     );
 
+    const dtoPct = await getDtoPagoTermino(mayorista_id);
+    const productosConDto = aplicarDto(productosResultado.rows, dtoPct);
+
     res.json({
-      productos: productosResultado.rows,
+      productos: productosConDto,
       total,
       pagina,
       totalPaginas: Math.ceil(total / porPagina)

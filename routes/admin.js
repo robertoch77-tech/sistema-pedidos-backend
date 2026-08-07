@@ -22,7 +22,7 @@ router.get('/mayoristas', checkAdmin, async (req, res) => {
               habilitar_banners, habilitar_mensajes, habilitar_notificaciones, habilitar_cotizaciones,
               habilitar_pedido_sugerido, habilitar_cross_selling, habilitar_lector_barras,
               habilitar_mis_promociones, habilitar_estados_avanzados, habilitar_medios_de_pago,
-              habilitar_analiticas
+              habilitar_analiticas, dto_pago_termino
        FROM mayoristas
        WHERE (tipo_fuente IS NULL OR tipo_fuente != 'roberto')
        ORDER BY nombre`
@@ -56,10 +56,10 @@ router.post('/mayoristas', checkAdmin, async (req, res) => {
           habilitar_banners, habilitar_mensajes, habilitar_notificaciones, habilitar_cotizaciones,
           habilitar_pedido_sugerido, habilitar_cross_selling, habilitar_lector_barras,
           habilitar_mis_promociones, habilitar_estados_avanzados, habilitar_medios_de_pago,
-          habilitar_analiticas)
+          habilitar_analiticas, dto_pago_termino)
        VALUES ($1,$2,$3,$4,$5,true,false,true,true,true,true,true,false,'A4',30,1,false,0,0,0,21,'codigo',
                false,false,false,false,false,false,
-               false,false,false,false,false,false,false,false,false,false,false)
+               false,false,false,false,false,false,false,false,false,false,false,0)
        RETURNING id, nombre, email, codigo`,
       [nombre.trim(), email.trim().toLowerCase(), password, codigo.trim().toLowerCase(), db_connection || '']
     );
