@@ -2,7 +2,6 @@ const express = require('express');
 const router  = express.Router();
 const pool    = require('../../db');
 const { verificarCualquierToken } = require('./authMiddleware');
-const { calcularTotalesIVA } = require('../../utils/calcularTotalesIVA');
 
 // ── Asegurar tablas ────────────────────────────────────────────
 async function asegurarTablas() {
@@ -58,8 +57,6 @@ async function asegurarTablas() {
     // Nuevas columnas IVA / recargo
     await pool.query(`ALTER TABLE presupuestos ADD COLUMN IF NOT EXISTS recargo_global NUMERIC DEFAULT 0`).catch(() => {});
     await pool.query(`ALTER TABLE presupuestos ADD COLUMN IF NOT EXISTS precio_con_iva BOOLEAN DEFAULT true`).catch(() => {});
-    await pool.query(`ALTER TABLE presupuestos ADD COLUMN IF NOT EXISTS modo_iva TEXT DEFAULT 'discriminar'`).catch(() => {});
-    console.log('Migracion modo_iva en presupuestos: OK');
 
     // analytics_eventos puede no existir — ignorar silenciosamente
     await pool.query(`
@@ -217,6 +214,10 @@ router.post('/:cliente_id', async (req, res) => {
     return res.status(400).json({ mensaje: 'El presupuesto debe tener al menos un ítem' });
   }
 
+  const descPct    = parseFloat(descuento_global) || 0;
+  const recargoPct = parseFloat(recargo_global)   || 0;
+  const conIva     = precio_con_iva !== false;
+
   try {
     // 1. Número correlativo por cliente
     const numRes = await pool.query(
@@ -227,13 +228,33 @@ router.post('/:cliente_id', async (req, res) => {
     const numero          = parseInt(numRes.rows[0].siguiente, 10);
     const numero_completo = `P-${String(numero).padStart(5, '0')}`;
 
-    // 2. Calcular totales — función compartida (espejo de calcTotales del frontend)
-    const modoIvaValidado = (['off','agregar','discriminar'].includes(req.body.modo_iva) ? req.body.modo_iva : 'discriminar');
-    const calc = calcularTotalesIVA(items, descuento_global, recargo_global, modoIvaValidado);
+    // 2. Calcular totales con nueva fórmula (IVA-aware)
+    let sumaSubtotales = 0;
+    const itemsNeto = [];
+    const itemsCalc = items.map((it, idx) => {
+      const cantidad = parseFloat(it.cantidad)             || 0;
+      const precio   = parseFloat(it.precio_unitario)      || 0;
+      const dto_pct  = parseFloat(it.descuento_porcentaje) || 0;
+      const iva_pct  = parseFloat(it.alicuota_iva)         || 21;
 
-    const sumaSubtotales = calc.sumaSubtotales;
-    const iva_total      = calc.ivaTotal;
-    const total_pres     = calc.total;
+      const precioNeto   = conIva ? precio / (1 + iva_pct / 100) : precio;
+      const subtotalItem = precioNeto * cantidad * (1 - dto_pct / 100);
+      sumaSubtotales += subtotalItem;
+      itemsNeto.push({ iva_pct, subtotalItem, dto_pct, cantidad, precioNeto });
+
+      return { ...it, cantidad, precio, dto_pct, iva_pct, orden: idx + 1 };
+    });
+
+    const base           = sumaSubtotales * (1 - descPct / 100);
+    const baseConRecargo = base * (1 + recargoPct / 100);
+    const factor         = sumaSubtotales > 0 ? baseConRecargo / sumaSubtotales : 1;
+
+    let iva_total = 0;
+    for (const { iva_pct, subtotalItem } of itemsNeto) {
+      const ivaMult = conIva ? iva_pct / (100 + iva_pct) : iva_pct / 100;
+      iva_total += subtotalItem * factor * ivaMult;
+    }
+    const total_pres = conIva ? baseConRecargo : baseConRecargo + iva_total;
 
     // 3. Fecha vencimiento
     const diasInt = parseInt(dias_validez, 10) || 15;
@@ -250,9 +271,9 @@ router.post('/:cliente_id', async (req, res) => {
           condiciones, observaciones,
           subtotal, iva_monto, total,
           descuento_global, recargo_global,
-          precio_con_iva, modo_iva, estado,
+          precio_con_iva, estado,
           fecha, creado_en, modificado_en)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,now(),now(),now())
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,now(),now(),now())
        RETURNING id`,
       [
         cliente_id, numero, numero_completo,
@@ -260,11 +281,7 @@ router.post('/:cliente_id', async (req, res) => {
         diasInt, fechaVencStr,
         condiciones, observaciones,
         sumaSubtotales.toFixed(4), iva_total.toFixed(4), total_pres.toFixed(4),
-        (parseFloat(descuento_global) || 0).toFixed(4),
-        (parseFloat(recargo_global) || 0).toFixed(4),
-        (modoIvaValidado === 'discriminar'),
-        modoIvaValidado,
-        estado,
+        descPct.toFixed(4), recargoPct.toFixed(4), conIva, estado,
       ]
     );
     const presupuesto_id = presRes.rows[0].id;
@@ -287,7 +304,7 @@ router.post('/:cliente_id', async (req, res) => {
           item.cantidad,
           item.precio_unitario,
           item.descuento_porcentaje || 0,
-          item.alicuota_iva,
+          item.alicuota_iva || 21,
           (item.cantidad * item.precio_unitario).toFixed(4),
           (item.cantidad * item.precio_unitario).toFixed(4),
         ]
@@ -572,8 +589,6 @@ router.put('/:cliente_id/:id', async (req, res) => {
     lista_precio_id = 1, dias_validez = 15,
     items = [], observaciones = '', condiciones = '',
     estado = 'borrador', descuento_global = 0,
-    recargo_global   = 0,
-    modo_iva         = 'discriminar',
   } = req.body;
 
   if (!items.length) {
@@ -588,22 +603,22 @@ router.put('/:cliente_id/:id', async (req, res) => {
     );
     if (!check.rows[0]) return res.status(404).json({ mensaje: 'Presupuesto no encontrado' });
 
-    // Recalcular totales — función compartida (espejo de frontend)
-    const modoIvaValidado = (['off','agregar','discriminar'].includes(modo_iva) ? modo_iva : 'discriminar');
-    const calc = calcularTotalesIVA(items, descuento_global, recargo_global, modoIvaValidado);
-
-    const subtotal_total = calc.sumaSubtotales;
-    const iva_total      = calc.ivaTotal;
-    const total_pres     = calc.total;
-
-    const itemsCalc = items.map((it, idx) => ({
-      ...it,
-      cantidad: parseFloat(it.cantidad) || 0,
-      precio:   parseFloat(it.precio_unitario) || 0,
-      dto_pct:  parseFloat(it.descuento_porcentaje) || 0,
-      iva_pct:  parseFloat(it.alicuota_iva),
-      orden:    idx + 1,
-    }));
+    // Recalcular totales
+    let subtotal_total = 0, iva_total = 0;
+    const itemsCalc = items.map((it, idx) => {
+      const cantidad  = parseFloat(it.cantidad) || 0;
+      const precio    = parseFloat(it.precio_unitario) || 0;
+      const dto_pct   = parseFloat(it.descuento_porcentaje) || 0;
+      const iva_pct   = parseFloat(it.alicuota_iva) || 21;
+      const desc_glob = parseFloat(descuento_global) || 0;
+      const bruto     = cantidad * precio;
+      const dto_monto = bruto * (dto_pct / 100);
+      const neto      = (bruto - dto_monto) * (1 - desc_glob / 100);
+      const iva_monto = neto * (iva_pct / 100);
+      subtotal_total += neto; iva_total += iva_monto;
+      return { ...it, cantidad, precio, dto_pct, dto_monto, neto, iva_pct, iva_monto, total_item: neto + iva_monto, orden: idx + 1 };
+    });
+    const total_pres  = subtotal_total + iva_total;
     const diasInt     = parseInt(dias_validez, 10) || 15;
     const fechaVenc   = new Date(); fechaVenc.setDate(fechaVenc.getDate() + diasInt);
     const fechaVencStr = fechaVenc.toISOString().slice(0, 10);
@@ -613,29 +628,20 @@ router.put('/:cliente_id/:id', async (req, res) => {
          comprador_nombre=$1, comprador_cuit=$2, lista_precio_id=$3,
          dias_validez=$4, fecha_vencimiento=$5,
          condiciones=$6, observaciones=$7,
-         subtotal=$8, iva_monto=$9, total=$10,
-         descuento_global=$11, recargo_global=$12,
-         precio_con_iva=$13, modo_iva=$14,
-         estado=$15, modificado_en=now()
-       WHERE id=$16 AND cliente_id=$17`,
+         subtotal=$8, iva_monto=$9, total=$10, descuento_global=$11,
+         estado=$12, modificado_en=now()
+       WHERE id=$13 AND cliente_id=$14`,
       [
         comprador_nombre, comprador_cuit, lista_precio_id,
         diasInt, fechaVencStr, condiciones, observaciones,
         subtotal_total.toFixed(4), iva_total.toFixed(4), total_pres.toFixed(4),
-        (parseFloat(descuento_global) || 0).toFixed(4),
-        (parseFloat(recargo_global) || 0).toFixed(4),
-        (modoIvaValidado === 'discriminar'),
-        modoIvaValidado,
-        estado, id, cliente_id,
+        parseFloat(descuento_global).toFixed(4), estado, id, cliente_id,
       ]
     );
 
     // Reemplazar items
     await pool.query(`DELETE FROM presupuestos_items WHERE presupuesto_id=$1`, [id]);
-    for (let i = 0; i < itemsCalc.length; i++) {
-      const it  = itemsCalc[i];
-      const det = calc.itemsDetalle[i];
-      const dto_monto = it.precio * it.cantidad * (it.dto_pct / 100);
+    for (const it of itemsCalc) {
       await pool.query(
         `INSERT INTO presupuestos_items
            (presupuesto_id, cliente_id, producto_id, es_libre,
@@ -650,9 +656,9 @@ router.put('/:cliente_id/:id', async (req, res) => {
           it.descripcion_libre || null,
           it.descripcion || '',
           it.cantidad, it.precio,
-          it.dto_pct, dto_monto.toFixed(4),
-          it.iva_pct, det.iva_monto.toFixed(4),
-          det.neto_ajustado.toFixed(4), det.total_item.toFixed(4),
+          it.dto_pct, it.dto_monto.toFixed(4),
+          it.iva_pct, it.iva_monto.toFixed(4),
+          it.neto.toFixed(4), it.total_item.toFixed(4),
           it.orden,
         ]
       );
