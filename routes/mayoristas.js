@@ -36,7 +36,8 @@ router.get('/:id/configuracion', async (req, res) => {
               habilitar_medios_de_pago, medios_de_pago, habilitar_notificaciones,
               habilitar_calculadora_venta, habilitar_historial_ventas,
               habilitar_cotizaciones, habilitar_novedades,
-              dto_pago_termino
+              dto_pago_termino,
+              precio_incluye_iva
        FROM mayoristas WHERE id=$1`, [id]
     );
     if (!resultado.rows[0]) return res.status(404).json({ mensaje: 'Mayorista no encontrado' });

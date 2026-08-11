@@ -231,6 +231,24 @@ router.get('/:mayorista_id/cross-selling', async (req, res) => {
   }
 });
 
+// GET — precios custom del cliente logueado
+router.get('/:mayorista_id/mis-precios-custom', async (req, res) => {
+  try {
+    const { mayorista_id } = req.params;
+    const cuit = req.query.cuit;
+    if (!cuit) return res.status(400).json({ mensaje: 'Falta cuit' });
+    const result = await pool.query(
+      'SELECT producto_id, precio_venta FROM precios_cliente_custom WHERE mayorista_id = $1 AND cliente_cuit = $2',
+      [mayorista_id, cuit]
+    );
+    const mapa = {};
+    for (const row of result.rows) {
+      mapa[row.producto_id] = parseFloat(row.precio_venta);
+    }
+    res.json(mapa);
+  } catch (error) { res.status(500).json({ mensaje: 'Error del servidor' }); }
+});
+
 router.get('/:mayorista_id', async (req, res) => {
   try {
     const { mayorista_id } = req.params;
