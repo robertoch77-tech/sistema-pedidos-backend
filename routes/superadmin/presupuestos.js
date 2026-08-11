@@ -58,6 +58,20 @@ async function asegurarTablas() {
     await pool.query(`ALTER TABLE presupuestos ADD COLUMN IF NOT EXISTS recargo_global NUMERIC DEFAULT 0`).catch(() => {});
     await pool.query(`ALTER TABLE presupuestos ADD COLUMN IF NOT EXISTS precio_con_iva BOOLEAN DEFAULT true`).catch(() => {});
 
+    // Historial de ediciones
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS presupuestos_historial (
+        id BIGSERIAL PRIMARY KEY,
+        presupuesto_id BIGINT NOT NULL,
+        cliente_id BIGINT NOT NULL,
+        usuario TEXT DEFAULT 'portal',
+        accion TEXT NOT NULL,
+        datos_anteriores JSONB,
+        datos_nuevos JSONB,
+        creado_en TIMESTAMPTZ DEFAULT now()
+      )
+    `).catch(() => {});
+
     // analytics_eventos puede no existir — ignorar silenciosamente
     await pool.query(`
       CREATE TABLE IF NOT EXISTS analytics_eventos (
@@ -596,12 +610,18 @@ router.put('/:cliente_id/:id', async (req, res) => {
   }
 
   try {
-    // Verificar que existe
+    // Verificar que existe + validar estado
     const check = await pool.query(
-      `SELECT id FROM presupuestos WHERE id=$1 AND cliente_id=$2`,
+      `SELECT id, estado, convertido_a_venta FROM presupuestos WHERE id=$1 AND cliente_id=$2`,
       [id, cliente_id]
     );
     if (!check.rows[0]) return res.status(404).json({ mensaje: 'Presupuesto no encontrado' });
+    if (check.rows[0].convertido_a_venta) {
+      return res.status(400).json({ mensaje: 'No se puede editar un presupuesto convertido a venta' });
+    }
+    if (check.rows[0].estado === 'enviado') {
+      return res.status(400).json({ mensaje: 'No se puede editar un presupuesto enviado. Cambiá el estado a borrador primero.' });
+    }
 
     // Recalcular totales
     let subtotal_total = 0, iva_total = 0;
@@ -622,6 +642,27 @@ router.put('/:cliente_id/:id', async (req, res) => {
     const diasInt     = parseInt(dias_validez, 10) || 15;
     const fechaVenc   = new Date(); fechaVenc.setDate(fechaVenc.getDate() + diasInt);
     const fechaVencStr = fechaVenc.toISOString().slice(0, 10);
+
+    // Guardar snapshot del estado anterior para historial
+    const snapAnterior = await pool.query(
+      `SELECT comprador_nombre, comprador_cuit, subtotal, iva_monto, total,
+              descuento_global, recargo_global, modo_iva, condiciones, observaciones, estado
+       FROM presupuestos WHERE id=$1`,
+      [id]
+    );
+    const itemsAnteriores = await pool.query(
+      'SELECT descripcion, cantidad, precio_unitario, descuento_porcentaje FROM presupuestos_items WHERE presupuesto_id=$1 ORDER BY orden',
+      [id]
+    );
+    await pool.query(
+      `INSERT INTO presupuestos_historial (presupuesto_id, cliente_id, accion, datos_anteriores, datos_nuevos)
+       VALUES ($1, $2, 'edicion', $3, $4)`,
+      [
+        id, cliente_id,
+        JSON.stringify({ presupuesto: snapAnterior.rows[0], items: itemsAnteriores.rows }),
+        JSON.stringify({ comprador_nombre, comprador_cuit, items: items.length, descuento_global, recargo_global, modo_iva })
+      ]
+    ).catch(e => console.error('Error guardando historial:', e.message));
 
     await pool.query(
       `UPDATE presupuestos SET

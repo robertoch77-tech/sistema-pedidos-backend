@@ -22,7 +22,7 @@ router.get('/mayoristas', checkAdmin, async (req, res) => {
               habilitar_banners, habilitar_mensajes, habilitar_notificaciones, habilitar_cotizaciones,
               habilitar_pedido_sugerido, habilitar_cross_selling, habilitar_lector_barras,
               habilitar_mis_promociones, habilitar_estados_avanzados, habilitar_medios_de_pago,
-              habilitar_analiticas, dto_pago_termino
+              habilitar_analiticas, dto_pago_termino, precio_incluye_iva
        FROM mayoristas
        WHERE (tipo_fuente IS NULL OR tipo_fuente != 'roberto')
        ORDER BY nombre`
@@ -565,6 +565,59 @@ router.delete('/mayoristas/:id/limpiar-pruebas', checkAdmin, async (req, res) =>
   }
 });
 
+// PUT — toggle precio_incluye_iva
+router.put('/mayoristas/:id/toggle-precio-incluye-iva', checkAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const resultado = await pool.query(
+      'UPDATE mayoristas SET precio_incluye_iva = NOT precio_incluye_iva WHERE id=$1 RETURNING id, nombre, precio_incluye_iva', [id]
+    );
+    res.json(resultado.rows[0]);
+  } catch (error) { res.status(500).json({ mensaje: 'Error del servidor' }); }
+});
+
+// GET — precios custom de un cliente
+router.get('/mayoristas/:id/precios-custom/:cuit', checkAdmin, async (req, res) => {
+  try {
+    const { id, cuit } = req.params;
+    const result = await pool.query(
+      'SELECT producto_id, precio_venta FROM precios_cliente_custom WHERE mayorista_id = $1 AND cliente_cuit = $2',
+      [id, cuit]
+    );
+    res.json(result.rows);
+  } catch (error) { res.status(500).json({ mensaje: 'Error del servidor' }); }
+});
+
+// PUT — guardar/actualizar precio custom de un producto
+router.put('/mayoristas/:id/precios-custom/:cuit/:productoId', checkAdmin, async (req, res) => {
+  try {
+    const { id, cuit, productoId } = req.params;
+    const { precio_venta } = req.body;
+    if (!precio_venta || isNaN(precio_venta)) return res.status(400).json({ mensaje: 'Precio inválido' });
+    const result = await pool.query(
+      `INSERT INTO precios_cliente_custom (mayorista_id, cliente_cuit, producto_id, precio_venta)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (mayorista_id, cliente_cuit, producto_id)
+       DO UPDATE SET precio_venta = $4, modificado_en = now()
+       RETURNING *`,
+      [id, cuit, productoId, precio_venta]
+    );
+    res.json(result.rows[0]);
+  } catch (error) { res.status(500).json({ mensaje: 'Error del servidor' }); }
+});
+
+// DELETE — quitar precio custom (vuelve a usar ganancia global)
+router.delete('/mayoristas/:id/precios-custom/:cuit/:productoId', checkAdmin, async (req, res) => {
+  try {
+    const { id, cuit, productoId } = req.params;
+    await pool.query(
+      'DELETE FROM precios_cliente_custom WHERE mayorista_id = $1 AND cliente_cuit = $2 AND producto_id = $3',
+      [id, cuit, productoId]
+    );
+    res.json({ ok: true });
+  } catch (error) { res.status(500).json({ mensaje: 'Error del servidor' }); }
+});
+
 module.exports = router;
 
 /*
@@ -576,6 +629,7 @@ de arriba fallarán (columnas inexistentes).
 
 -- Módulo 9: flags nuevos en mayoristas. Todos arrancan en false, así
 -- que los mayoristas existentes no ganan ninguna función nueva sola.
+ALTER TABLE mayoristas ADD COLUMN IF NOT EXISTS precio_incluye_iva boolean DEFAULT false;
 ALTER TABLE mayoristas ADD COLUMN IF NOT EXISTS habilitar_descuentos_por_cliente boolean DEFAULT false;
 ALTER TABLE mayoristas ADD COLUMN IF NOT EXISTS habilitar_banners boolean DEFAULT false;
 ALTER TABLE mayoristas ADD COLUMN IF NOT EXISTS habilitar_mensajes boolean DEFAULT false;
@@ -601,4 +655,16 @@ ALTER TABLE claves_clientes ALTER COLUMN clave DROP NOT NULL;
 -- Tab 👥 Clientes: fecha de registro. Los registros existentes quedan con la
 -- fecha de HOY (no hay forma de recuperar la fecha real de alta retroactivamente).
 ALTER TABLE claves_clientes ADD COLUMN IF NOT EXISTS creada_en timestamptz DEFAULT now();
+
+-- Bobinar: precios custom por producto por cliente
+CREATE TABLE IF NOT EXISTS precios_cliente_custom (
+  id BIGSERIAL PRIMARY KEY,
+  mayorista_id BIGINT NOT NULL,
+  cliente_cuit TEXT NOT NULL,
+  producto_id BIGINT NOT NULL,
+  precio_venta NUMERIC NOT NULL,
+  creado_en TIMESTAMPTZ DEFAULT now(),
+  modificado_en TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(mayorista_id, cliente_cuit, producto_id)
+);
 */
