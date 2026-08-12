@@ -155,8 +155,10 @@ router.get('/:cliente_id', async (req, res) => {
       pool.query(
         `SELECT id, comprador_nombre, comprador_cuit, comprador_razon_social,
                 comprador_email, comprador_telefono, comprador_whatsapp,
+                comprador_direccion, comprador_ciudad, condicion_iva,
                 lista_precio_id, saldo, saldo_vencido, bloqueado, activo,
-                ultima_compra, creado_en, modificado_en
+                ultima_compra, creado_en, modificado_en,
+                limite_credito, plazo_pago_dias, descuento_especial
          FROM cuentas_corrientes_clientes
          WHERE ${whereStr}
          ORDER BY comprador_nombre ASC

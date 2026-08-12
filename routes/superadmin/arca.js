@@ -318,6 +318,14 @@ router.post('/config/:cliente_id/test', async (req, res) => {
   }
 });
 
+function alicuotaAfipId(pct) {
+  if (pct === 0)    return 3;
+  if (pct === 10.5) return 4;
+  if (pct === 21)   return 5;
+  if (pct === 27)   return 6;
+  return 5;
+}
+
 // ─── POST /facturar/:cliente_id ───────────────────────────────
 router.post('/facturar/:cliente_id', async (req, res) => {
   const { cliente_id } = req.params;
@@ -350,7 +358,7 @@ router.post('/facturar/:cliente_id', async (req, res) => {
     // Leer venta
     const pventa = parseInt(punto_venta) || config.punto_venta || 1;
     let importe_neto = 100, importe_iva = 21, importe_total = 121;
-    let importe_neto_105 = 0, importe_iva_105 = 0;
+    let alicuotas = [{ alicuota: 21, base: 100, iva: 21 }];
 
     if (venta_id) {
       try {
@@ -358,8 +366,36 @@ router.post('/facturar/:cliente_id', async (req, res) => {
         if (ventaRes.rows.length > 0) {
           const venta = ventaRes.rows[0];
           importe_total = n(venta.total ?? venta.monto_total ?? 0);
-          importe_neto  = n(venta.subtotal ?? importe_total / 1.21);
-          importe_iva   = importe_total - importe_neto;
+
+          const itemsAgrup = await pool.query(
+            `SELECT
+               COALESCE(alicuota_iva, 21) AS alicuota,
+               SUM(subtotal::numeric)     AS base_imp,
+               SUM(iva_monto::numeric)    AS iva_monto
+             FROM ventas_items
+             WHERE venta_id = $1
+             GROUP BY COALESCE(alicuota_iva, 21)
+             ORDER BY alicuota`,
+            [venta_id]
+          );
+
+          if (itemsAgrup.rows.length > 0) {
+            importe_neto = 0;
+            importe_iva  = 0;
+            alicuotas = [];
+            for (const row of itemsAgrup.rows) {
+              const alic = parseFloat(row.alicuota);
+              const base = n(row.base_imp);
+              const iva  = n(row.iva_monto);
+              importe_neto += base;
+              importe_iva  += iva;
+              alicuotas.push({ alicuota: alic, base, iva });
+            }
+          } else {
+            importe_neto = n(venta.subtotal ?? importe_total / 1.21);
+            importe_iva  = importe_total - importe_neto;
+            alicuotas = [{ alicuota: 21, base: importe_neto, iva: importe_iva }];
+          }
         }
       } catch { /* venta sin tabla — usar valores por defecto */ }
     }
@@ -392,6 +428,32 @@ router.post('/facturar/:cliente_id', async (req, res) => {
 
     // Llamar FECAESolicitar
     const fechaHoy = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+
+    const alicGravadas = alicuotas.filter(a => a.alicuota > 0);
+    const alicExentas  = alicuotas.filter(a => a.alicuota === 0);
+    const impOpEx      = alicExentas.reduce((s, a) => s + a.base, 0);
+    const impNetoGrav  = alicGravadas.reduce((s, a) => s + a.base, 0);
+    const impIVA       = alicGravadas.reduce((s, a) => s + a.iva, 0);
+
+    const esFacturaA = [1, 2, 3].includes(cbteTipo);
+    const tieneCuit  = receptor_cuit && receptor_cuit !== '0' && receptor_cuit.replace(/-/g,'').length >= 11;
+    const docTipo    = esFacturaA ? 80 : (tieneCuit ? 80 : 99);
+    const docNro     = docTipo === 80 ? receptor_cuit.replace(/-/g, '') : '0';
+
+    let alicIvaXml = '';
+    for (const a of alicGravadas) {
+      alicIvaXml += `
+              <ar:AlicIva>
+                <ar:Id>${alicuotaAfipId(a.alicuota)}</ar:Id>
+                <ar:BaseImp>${a.base.toFixed(2)}</ar:BaseImp>
+                <ar:Importe>${a.iva.toFixed(2)}</ar:Importe>
+              </ar:AlicIva>`;
+    }
+    const bloqueIva = alicGravadas.length > 0
+      ? `<ar:Iva>${alicIvaXml}
+            </ar:Iva>`
+      : '';
+
     const soapCAE = `<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ar="http://ar.gov.afip.dif.FEV1/">
   <soap:Body>
@@ -402,26 +464,20 @@ router.post('/facturar/:cliente_id', async (req, res) => {
         <ar:FeDetReq>
           <ar:FECAEDetRequest>
             <ar:Concepto>1</ar:Concepto>
-            <ar:DocTipo>80</ar:DocTipo>
-            <ar:DocNro>${receptor_cuit.replace(/-/g,'') || '0'}</ar:DocNro>
+            <ar:DocTipo>${docTipo}</ar:DocTipo>
+            <ar:DocNro>${docNro}</ar:DocNro>
             <ar:CbteDesde>${nuevoNum}</ar:CbteDesde>
             <ar:CbteHasta>${nuevoNum}</ar:CbteHasta>
             <ar:CbteFch>${fechaHoy}</ar:CbteFch>
             <ar:ImpTotal>${importe_total.toFixed(2)}</ar:ImpTotal>
             <ar:ImpTotConc>0.00</ar:ImpTotConc>
-            <ar:ImpNeto>${importe_neto.toFixed(2)}</ar:ImpNeto>
-            <ar:ImpOpEx>0.00</ar:ImpOpEx>
-            <ar:ImpIVA>${importe_iva.toFixed(2)}</ar:ImpIVA>
+            <ar:ImpNeto>${impNetoGrav.toFixed(2)}</ar:ImpNeto>
+            <ar:ImpOpEx>${impOpEx.toFixed(2)}</ar:ImpOpEx>
+            <ar:ImpIVA>${impIVA.toFixed(2)}</ar:ImpIVA>
             <ar:ImpTrib>0.00</ar:ImpTrib>
             <ar:MonId>PES</ar:MonId>
             <ar:MonCotiz>1</ar:MonCotiz>
-            <ar:Iva>
-              <ar:AlicIva>
-                <ar:Id>5</ar:Id>
-                <ar:BaseImp>${importe_neto.toFixed(2)}</ar:BaseImp>
-                <ar:Importe>${importe_iva.toFixed(2)}</ar:Importe>
-              </ar:AlicIva>
-            </ar:Iva>
+            ${bloqueIva}
           </ar:FECAEDetRequest>
         </ar:FeDetReq>
       </ar:FeCAEReq>
@@ -478,13 +534,15 @@ router.post('/facturar/:cliente_id', async (req, res) => {
     }
 
     // INSERT libros_iva_ventas
+    const iva21  = alicuotas.filter(a => a.alicuota === 21).reduce((s, a) => s + a.iva, 0);
+    const iva105 = alicuotas.filter(a => a.alicuota === 10.5).reduce((s, a) => s + a.iva, 0);
     await pool.query(
       `INSERT INTO libros_iva_ventas
          (cliente_id, comprobante_id, venta_id, tipo_comprobante, numero_completo,
-          cuit_receptor, nombre_receptor, importe_neto, importe_iva_21, importe_total, cae)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+          cuit_receptor, nombre_receptor, importe_neto, importe_iva_21, importe_iva_105, importe_total, cae)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
       [cliente_id, comp_id, venta_id || null, String(cbteTipo), numero_completo,
-       receptor_cuit, receptor_nombre, importe_neto, importe_iva, importe_total, cae]
+       receptor_cuit, receptor_nombre, impNetoGrav + impOpEx, iva21, iva105, importe_total, cae]
     );
 
     res.json({ ok: true, cae, numero_completo, tipo_factura: String(cbteTipo), vencimiento_cae: cae_vencimiento });
