@@ -87,6 +87,19 @@ async function asegurarTablas() {
       )
     `).catch(() => {});
 
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS comprobantes_imagenes (
+        id BIGSERIAL PRIMARY KEY,
+        cliente_id BIGINT NOT NULL,
+        tipo TEXT NOT NULL,
+        referencia_id BIGINT,
+        numero_completo TEXT,
+        cloudinary_url TEXT NOT NULL,
+        cloudinary_public_id TEXT NOT NULL DEFAULT '',
+        creado_en TIMESTAMPTZ DEFAULT now()
+      )
+    `).catch(() => {});
+
   } catch (err) {
     console.error('presupuestos: error asegurando tablas:', err.message);
   }
@@ -411,7 +424,8 @@ router.put('/:cliente_id/:id/convertir', async (req, res) => {
     const numero_v          = parseInt(numRes.rows[0].siguiente, 10);
     const numero_completo_v = `V-${String(numero_v).padStart(5, '0')}`;
 
-    // 3. INSERT venta
+    // 3. INSERT venta (estado automático según cuenta corriente)
+    const vaCC = pres.va_a_cuenta_corriente || false;
     const ventaRes = await pool.query(
       `INSERT INTO ventas
          (cliente_id, numero, numero_completo, prefijo, tipo_comprobante,
@@ -419,14 +433,16 @@ router.put('/:cliente_id/:id/convertir', async (req, res) => {
           subtotal, iva_monto, total, saldo,
           estado, cobrada, anulada,
           va_a_cuenta_corriente, observaciones, fecha, creado_en, modificado_en)
-       VALUES ($1,$2,$3,'V','VENTA',$4,$5,$6,$7,$8,$8,'pendiente',false,false,$9,$10,now(),now(),now())
+       VALUES ($1,$2,$3,'V','VENTA',$4,$5,$6,$7,$8,$8,$11,$12,false,$9,$10,now(),now(),now())
        RETURNING id`,
       [
         cliente_id, numero_v, numero_completo_v,
         pres.comprador_nombre, pres.comprador_cuit,
         pres.subtotal, pres.iva_monto, pres.total,
-        pres.va_a_cuenta_corriente || false,
+        vaCC,
         pres.observaciones || '',
+        vaCC ? 'pendiente' : 'cobrada',
+        !vaCC,
       ]
     );
     const venta_id = ventaRes.rows[0].id;
@@ -704,6 +720,77 @@ router.put('/:cliente_id/:id', async (req, res) => {
   } catch (err) {
     console.error('PUT /presupuestos/:id error:', err.message);
     res.status(500).json({ mensaje: 'Error al actualizar presupuesto', detalle: err.message });
+  }
+});
+
+// POST — guardar imagen de comprobante + auto-limpieza
+router.post('/:cliente_id/comprobante-imagen', async (req, res) => {
+  try {
+    const { cliente_id } = req.params;
+    const { tipo, referencia_id, numero_completo, cloudinary_url, cloudinary_public_id } = req.body;
+
+    await pool.query(
+      `INSERT INTO comprobantes_imagenes (cliente_id, tipo, referencia_id, numero_completo, cloudinary_url, cloudinary_public_id)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [cliente_id, tipo, referencia_id || null, numero_completo || '', cloudinary_url, cloudinary_public_id || '']
+    );
+
+    // Auto-limpieza: más de 50 → borrar las 20 más viejas
+    const count = await pool.query(
+      'SELECT COUNT(*) FROM comprobantes_imagenes WHERE cliente_id = $1', [cliente_id]
+    );
+    const total = parseInt(count.rows[0].count);
+
+    let limpiar = [];
+    if (total > 50) {
+      const viejas = await pool.query(
+        `DELETE FROM comprobantes_imagenes
+         WHERE id IN (
+           SELECT id FROM comprobantes_imagenes
+           WHERE cliente_id = $1
+           ORDER BY creado_en ASC
+           LIMIT 20
+         )
+         RETURNING cloudinary_public_id`,
+        [cliente_id]
+      );
+      limpiar = viejas.rows
+        .filter(r => r.cloudinary_public_id)
+        .map(r => r.cloudinary_public_id);
+
+      console.log(`[LIMPIEZA] cliente_id=${cliente_id}: borradas ${limpiar.length} imágenes antiguas de comprobantes`);
+    }
+
+    res.json({ guardada: true, limpiar });
+  } catch (error) {
+    console.error('Error guardando imagen comprobante:', error.message);
+    res.status(500).json({ mensaje: 'Error del servidor' });
+  }
+});
+
+// GET — verificar si comprobantes tienen imagen (para indicador en tabla)
+router.get('/:cliente_id/comprobante-imagen/estado', async (req, res) => {
+  try {
+    const { cliente_id } = req.params;
+    const { tipo, ids } = req.query;
+    if (!ids || !tipo) return res.json({ estados: {} });
+
+    const idsArr = String(ids).split(',').map(Number).filter(n => !isNaN(n));
+    if (idsArr.length === 0) return res.json({ estados: {} });
+
+    const result = await pool.query(
+      `SELECT referencia_id, cloudinary_url
+       FROM comprobantes_imagenes
+       WHERE cliente_id = $1 AND tipo = $2 AND referencia_id = ANY($3::bigint[])`,
+      [cliente_id, tipo, idsArr]
+    );
+
+    const estados = {};
+    result.rows.forEach(r => { estados[r.referencia_id] = r.cloudinary_url; });
+    res.json({ estados });
+  } catch (error) {
+    console.error('Error consultando estado imágenes:', error.message);
+    res.status(500).json({ mensaje: 'Error del servidor' });
   }
 });
 

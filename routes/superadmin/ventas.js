@@ -180,7 +180,7 @@ router.post('/:cliente_id', async (req, res) => {
           descuento_global, recargo_global, precio_con_iva,
           forma_pago, monto_recibido, vuelto, modo_iva,
           fecha, creado_en, modificado_en)
-       VALUES ($1,$2,$3,'V','VENTA',$4,$5,$6,$7,$8,$9,$10,$11,$12,$12,'pendiente',false,false,$13,$14,$15,$16,$17,$18,$19,$20,$21,now(),now(),now())
+       VALUES ($1,$2,$3,'V','VENTA',$4,$5,$6,$7,$8,$9,$10,$11,$12,$12,$22,$23,false,$13,$14,$15,$16,$17,$18,$19,$20,$21,now(),now(),now())
        RETURNING id`,
       [
         cliente_id, numero, numero_completo,
@@ -193,6 +193,8 @@ router.post('/:cliente_id', async (req, res) => {
         parseFloat(monto_recibido) || 0,
         parseFloat(vuelto) || 0,
         modoIvaValidado,
+        va_a_cuenta_corriente ? 'pendiente' : 'cobrada',
+        !va_a_cuenta_corriente,
       ]
     );
     const venta_id = ventaRes.rows[0].id;
@@ -456,6 +458,220 @@ router.get('/:cliente_id/:id', async (req, res) => {
   } catch (err) {
     console.error('GET /ventas/:id error:', err.message);
     res.status(500).json({ mensaje: 'Error al obtener venta', detalle: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// PUT /:cliente_id/:id/cobrar — marcar venta como cobrada
+// ═══════════════════════════════════════════════════════════════
+router.put('/:cliente_id/:id/cobrar', async (req, res) => {
+  try {
+    const { cliente_id, id } = req.params;
+    const venta = await pool.query('SELECT estado, anulada FROM ventas WHERE id=$1 AND cliente_id=$2', [id, cliente_id]);
+    if (!venta.rows.length) return res.status(404).json({ mensaje: 'Venta no encontrada' });
+    if (venta.rows[0].anulada) return res.status(400).json({ mensaje: 'No se puede cobrar una venta anulada' });
+    if (venta.rows[0].estado === 'cobrada') return res.status(400).json({ mensaje: 'La venta ya está cobrada' });
+
+    await pool.query(
+      `UPDATE ventas SET estado = 'cobrada', cobrada = true, modificado_en = now() WHERE id = $1 AND cliente_id = $2`,
+      [id, cliente_id]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('PUT cobrar error:', err.message);
+    res.status(500).json({ mensaje: 'Error del servidor' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// PUT /:cliente_id/:id/anular — anular venta
+// ═══════════════════════════════════════════════════════════════
+router.put('/:cliente_id/:id/anular', async (req, res) => {
+  try {
+    const { cliente_id, id } = req.params;
+    const venta = await pool.query(
+      'SELECT estado, anulada, numero_completo, total, va_a_cuenta_corriente, comprador_cuit, comprador_nombre FROM ventas WHERE id=$1 AND cliente_id=$2',
+      [id, cliente_id]
+    );
+    if (!venta.rows.length) return res.status(404).json({ mensaje: 'Venta no encontrada' });
+    if (venta.rows[0].anulada) return res.status(400).json({ mensaje: 'La venta ya está anulada' });
+
+    await pool.query(
+      `UPDATE ventas SET estado = 'anulada', anulada = true, modificado_en = now() WHERE id = $1 AND cliente_id = $2`,
+      [id, cliente_id]
+    );
+
+    const v = venta.rows[0];
+    if (v.va_a_cuenta_corriente) {
+      const ccRes = await pool.query(
+        `SELECT id, saldo FROM cuentas_corrientes_clientes
+         WHERE cliente_id = $1 AND (
+           (comprador_cuit != '' AND comprador_cuit = $2) OR comprador_nombre = $3
+         ) AND activo = true LIMIT 1`,
+        [cliente_id, v.comprador_cuit || '', v.comprador_nombre]
+      );
+      if (ccRes.rows.length > 0) {
+        const cc = ccRes.rows[0];
+        const nuevoSaldo = (parseFloat(cc.saldo) || 0) - parseFloat(v.total);
+        await pool.query(
+          `INSERT INTO movimientos_cuentas_corrientes
+             (cuenta_corriente_id, cliente_id, tipo, debe, haber, saldo_acumulado, descripcion, numero_comprobante, venta_id, estado)
+           VALUES ($1,$2,'anulacion',0,$3,$4,$5,$6,$7,'procesado')`,
+          [cc.id, cliente_id, parseFloat(v.total).toFixed(4), nuevoSaldo.toFixed(4),
+           `Anulación ${v.numero_completo}`, v.numero_completo, id]
+        );
+        await pool.query(
+          `UPDATE cuentas_corrientes_clientes SET saldo = $1 WHERE id = $2`,
+          [nuevoSaldo.toFixed(4), cc.id]
+        );
+      }
+    }
+
+    const itemsRes = await pool.query('SELECT producto_id, cantidad FROM ventas_items WHERE venta_id=$1 AND producto_id IS NOT NULL', [id]);
+    for (const it of itemsRes.rows) {
+      await pool.query(
+        `UPDATE productos_propios SET stock_actual = COALESCE(stock_actual, 0) + $1, modificado_en = now() WHERE id = $2 AND cliente_id = $3`,
+        [it.cantidad, it.producto_id, cliente_id]
+      );
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('PUT anular error:', err.message);
+    res.status(500).json({ mensaje: 'Error del servidor' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// PUT /:cliente_id/:id — editar venta pendiente
+// ═══════════════════════════════════════════════════════════════
+router.put('/:cliente_id/:id', async (req, res) => {
+  const { cliente_id, id } = req.params;
+  const {
+    comprador_nombre = '', comprador_cuit = '',
+    comprador_telefono = '', comprador_email = '',
+    comprador_direccion = '', comprador_ciudad = '',
+    items = [],
+    observaciones = '',
+    descuento_global = 0,
+    recargo_global   = 0,
+    precio_con_iva   = true,
+    forma_pago       = 'efectivo',
+    monto_recibido   = 0,
+    vuelto           = 0,
+    modo_iva         = 'off',
+  } = req.body;
+
+  if (!items.length) {
+    return res.status(400).json({ mensaje: 'La venta debe tener al menos un ítem' });
+  }
+
+  try {
+    const check = await pool.query(
+      `SELECT id, estado, anulada FROM ventas WHERE id=$1 AND cliente_id=$2`,
+      [id, cliente_id]
+    );
+    if (!check.rows[0]) return res.status(404).json({ mensaje: 'Venta no encontrada' });
+    if (check.rows[0].anulada) return res.status(400).json({ mensaje: 'No se puede editar una venta anulada' });
+    if (check.rows[0].estado !== 'pendiente') return res.status(400).json({ mensaje: 'Solo se pueden editar ventas pendientes' });
+
+    const modoIvaValidado = (['off','agregar','discriminar'].includes(modo_iva) ? modo_iva : 'discriminar');
+    const calc = calcularTotalesIVA(items, descuento_global, recargo_global, modoIvaValidado);
+
+    const sumaSubtotales = calc.sumaSubtotales;
+    const iva_total      = calc.ivaTotal;
+    const total_venta    = calc.total;
+
+    const itemsCalculados = items.map((it, idx) => ({
+      ...it,
+      cantidad: parseFloat(it.cantidad) || 0,
+      precio:   parseFloat(it.precio_unitario) || 0,
+      dto_pct:  parseFloat(it.descuento_porcentaje) || 0,
+      iva_pct:  parseFloat(it.alicuota_iva),
+      orden:    idx + 1,
+    }));
+
+    // Revertir stock de items anteriores
+    const oldItems = await pool.query(
+      'SELECT producto_id, cantidad FROM ventas_items WHERE venta_id=$1 AND producto_id IS NOT NULL',
+      [id]
+    );
+    for (const oi of oldItems.rows) {
+      await pool.query(
+        `UPDATE productos_propios SET stock_actual = COALESCE(stock_actual, 0) + $1, modificado_en = now() WHERE id = $2 AND cliente_id = $3`,
+        [oi.cantidad, oi.producto_id, cliente_id]
+      );
+    }
+
+    // Actualizar venta
+    await pool.query(
+      `UPDATE ventas SET
+         comprador_nombre=$1, comprador_cuit=$2,
+         comprador_telefono=$3, comprador_email=$4,
+         comprador_direccion=$5, comprador_ciudad=$6,
+         subtotal=$7, iva_monto=$8, total=$9, saldo=$9,
+         descuento_global=$10, recargo_global=$11,
+         precio_con_iva=$12, modo_iva=$13,
+         forma_pago=$14, monto_recibido=$15, vuelto=$16,
+         observaciones=$17, modificado_en=now()
+       WHERE id=$18 AND cliente_id=$19`,
+      [
+        comprador_nombre, comprador_cuit,
+        comprador_telefono, comprador_email,
+        comprador_direccion, comprador_ciudad,
+        sumaSubtotales.toFixed(4), iva_total.toFixed(4), total_venta.toFixed(4),
+        parseFloat(descuento_global) || 0, parseFloat(recargo_global) || 0,
+        (modoIvaValidado === 'discriminar'), modoIvaValidado,
+        forma_pago,
+        parseFloat(monto_recibido) || 0,
+        parseFloat(vuelto) || 0,
+        observaciones,
+        id, cliente_id,
+      ]
+    );
+
+    // Reemplazar items
+    await pool.query(`DELETE FROM ventas_items WHERE venta_id=$1`, [id]);
+    for (let i = 0; i < itemsCalculados.length; i++) {
+      const it  = itemsCalculados[i];
+      const det = calc.itemsDetalle[i];
+      const dto_monto  = it.precio * it.cantidad * (it.dto_pct / 100);
+      const neto_item  = det.neto_ajustado;
+      const iva_item   = det.iva_monto;
+      const total_item = det.total_item;
+
+      await pool.query(
+        `INSERT INTO ventas_items
+           (venta_id, cliente_id, producto_id, es_libre, descripcion_libre,
+            cantidad, precio_unitario, descuento_porcentaje, descuento_monto,
+            alicuota_iva, iva_monto, subtotal, total, orden, creado_en)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,now())`,
+        [
+          id, cliente_id,
+          it.es_libre ? null : (it.producto_id || null),
+          !!it.es_libre,
+          it.descripcion_libre || null,
+          it.cantidad, it.precio,
+          it.dto_pct, dto_monto.toFixed(4),
+          it.iva_pct, iva_item.toFixed(4),
+          neto_item.toFixed(4), total_item.toFixed(4),
+          it.orden,
+        ]
+      );
+
+      // Descontar stock nuevo
+      if (!it.es_libre && it.producto_id) {
+        await pool.query(
+          `UPDATE productos_propios SET stock_actual = COALESCE(stock_actual, 0) - $1, modificado_en=now() WHERE id=$2 AND cliente_id=$3`,
+          [it.cantidad, it.producto_id, cliente_id]
+        );
+      }
+    }
+
+    res.json({ ok: true, venta_id: parseInt(id) });
+  } catch (err) {
+    console.error('PUT editar venta error:', err.message);
+    res.status(500).json({ mensaje: 'Error al editar venta', detalle: err.message });
   }
 });
 
