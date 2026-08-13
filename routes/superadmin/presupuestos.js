@@ -1,7 +1,7 @@
 const express = require('express');
 const router  = express.Router();
 const pool    = require('../../db');
-const { verificarCualquierToken } = require('./authMiddleware');
+const { verificarCualquierToken, verificarClienteId } = require('./authMiddleware');
 const { calcularTotalesIVA } = require('../../utils/calcularTotalesIVA');
 
 // ── Asegurar tablas ────────────────────────────────────────────
@@ -59,6 +59,7 @@ async function asegurarTablas() {
     await pool.query(`ALTER TABLE presupuestos ADD COLUMN IF NOT EXISTS recargo_global NUMERIC DEFAULT 0`).catch(() => {});
     await pool.query(`ALTER TABLE presupuestos ADD COLUMN IF NOT EXISTS precio_con_iva BOOLEAN DEFAULT true`).catch(() => {});
     await pool.query(`ALTER TABLE presupuestos ADD COLUMN IF NOT EXISTS modo_iva TEXT DEFAULT 'discriminar'`).catch(() => {});
+    await pool.query(`ALTER TABLE presupuestos ADD COLUMN IF NOT EXISTS condicion_iva TEXT DEFAULT 'Consumidor Final'`).catch(() => {});
     console.log('Migracion modo_iva en presupuestos: OK');
 
     // Historial de ediciones
@@ -111,7 +112,7 @@ router.use(verificarCualquierToken);
 // ═══════════════════════════════════════════════════════════════
 // GET /:cliente_id/dashboard — métricas del mes
 // ═══════════════════════════════════════════════════════════════
-router.get('/:cliente_id/dashboard', async (req, res) => {
+router.get('/:cliente_id/dashboard', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
 
@@ -154,7 +155,7 @@ router.get('/:cliente_id/dashboard', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // GET /:cliente_id — listar con filtros y paginación
 // ═══════════════════════════════════════════════════════════════
-router.get('/:cliente_id', async (req, res) => {
+router.get('/:cliente_id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const {
@@ -225,10 +226,11 @@ router.get('/:cliente_id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // POST /:cliente_id — crear presupuesto
 // ═══════════════════════════════════════════════════════════════
-router.post('/:cliente_id', async (req, res) => {
+router.post('/:cliente_id', verificarClienteId, async (req, res) => {
   const { cliente_id } = req.params;
   const {
     comprador_nombre = '', comprador_cuit = '',
+    condicion_iva = 'Consumidor Final',
     lista_precio_id = 1,
     dias_validez = 15,
     items = [],
@@ -277,9 +279,9 @@ router.post('/:cliente_id', async (req, res) => {
           condiciones, observaciones,
           subtotal, iva_monto, total,
           descuento_global, recargo_global,
-          precio_con_iva, modo_iva, estado,
+          precio_con_iva, modo_iva, condicion_iva, estado,
           fecha, creado_en, modificado_en)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,now(),now(),now())
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,now(),now(),now())
        RETURNING id`,
       [
         cliente_id, numero, numero_completo,
@@ -291,6 +293,7 @@ router.post('/:cliente_id', async (req, res) => {
         (parseFloat(recargo_global) || 0).toFixed(4),
         (modoIvaValidado === 'discriminar'),
         modoIvaValidado,
+        condicion_iva,
         estado,
       ]
     );
@@ -332,7 +335,7 @@ router.post('/:cliente_id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // GET /:cliente_id/:id — detalle con items
 // ═══════════════════════════════════════════════════════════════
-router.get('/:cliente_id/:id', async (req, res) => {
+router.get('/:cliente_id/:id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, id } = req.params;
 
@@ -365,7 +368,7 @@ router.get('/:cliente_id/:id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // PUT /:cliente_id/:id/estado — cambiar estado
 // ═══════════════════════════════════════════════════════════════
-router.put('/:cliente_id/:id/estado', async (req, res) => {
+router.put('/:cliente_id/:id/estado', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, id } = req.params;
     const { estado } = req.body;
@@ -392,7 +395,7 @@ router.put('/:cliente_id/:id/estado', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // PUT /:cliente_id/:id/convertir — convertir en venta
 // ═══════════════════════════════════════════════════════════════
-router.put('/:cliente_id/:id/convertir', async (req, res) => {
+router.put('/:cliente_id/:id/convertir', verificarClienteId, async (req, res) => {
   const { cliente_id, id } = req.params;
 
   try {
@@ -429,11 +432,11 @@ router.put('/:cliente_id/:id/convertir', async (req, res) => {
     const ventaRes = await pool.query(
       `INSERT INTO ventas
          (cliente_id, numero, numero_completo, prefijo, tipo_comprobante,
-          comprador_nombre, comprador_cuit,
+          comprador_nombre, comprador_cuit, condicion_iva,
           subtotal, iva_monto, total, saldo,
           estado, cobrada, anulada,
           va_a_cuenta_corriente, observaciones, fecha, creado_en, modificado_en)
-       VALUES ($1,$2,$3,'V','VENTA',$4,$5,$6,$7,$8,$8,$11,$12,false,$9,$10,now(),now(),now())
+       VALUES ($1,$2,$3,'V','VENTA',$4,$5,$13,$6,$7,$8,$8,$11,$12,false,$9,$10,now(),now(),now())
        RETURNING id`,
       [
         cliente_id, numero_v, numero_completo_v,
@@ -443,6 +446,7 @@ router.put('/:cliente_id/:id/convertir', async (req, res) => {
         pres.observaciones || '',
         vaCC ? 'pendiente' : 'cobrada',
         !vaCC,
+        pres.condicion_iva || 'Consumidor Final',
       ]
     );
     const venta_id = ventaRes.rows[0].id;
@@ -595,7 +599,7 @@ router.put('/:cliente_id/:id/convertir', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // PUT /:cliente_id/:id — actualizar presupuesto
 // ═══════════════════════════════════════════════════════════════
-router.put('/:cliente_id/:id', async (req, res) => {
+router.put('/:cliente_id/:id', verificarClienteId, async (req, res) => {
   const { cliente_id, id } = req.params;
   const {
     comprador_nombre = '', comprador_cuit = '',
@@ -724,7 +728,7 @@ router.put('/:cliente_id/:id', async (req, res) => {
 });
 
 // POST — guardar imagen de comprobante + auto-limpieza
-router.post('/:cliente_id/comprobante-imagen', async (req, res) => {
+router.post('/:cliente_id/comprobante-imagen', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const { tipo, referencia_id, numero_completo, cloudinary_url, cloudinary_public_id } = req.body;
@@ -769,7 +773,7 @@ router.post('/:cliente_id/comprobante-imagen', async (req, res) => {
 });
 
 // GET — verificar si comprobantes tienen imagen (para indicador en tabla)
-router.get('/:cliente_id/comprobante-imagen/estado', async (req, res) => {
+router.get('/:cliente_id/comprobante-imagen/estado', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const { tipo, ids } = req.query;

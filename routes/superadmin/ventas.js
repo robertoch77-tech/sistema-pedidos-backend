@@ -1,7 +1,7 @@
 const express = require('express');
 const router  = express.Router();
 const pool    = require('../../db');
-const { verificarCualquierToken } = require('./authMiddleware');
+const { verificarCualquierToken, verificarClienteId } = require('./authMiddleware');
 const { calcularTotalesIVA } = require('../../utils/calcularTotalesIVA');
 
 // ── Asegurar tablas ───────────────────────────────────────────
@@ -24,6 +24,7 @@ async function asegurarTablas() {
     await pool.query(`ALTER TABLE ventas ADD COLUMN IF NOT EXISTS monto_recibido   NUMERIC DEFAULT 0`).catch(() => {});
     await pool.query(`ALTER TABLE ventas ADD COLUMN IF NOT EXISTS vuelto           NUMERIC DEFAULT 0`).catch(() => {});
     await pool.query(`ALTER TABLE ventas ADD COLUMN IF NOT EXISTS modo_iva         TEXT DEFAULT 'off'`).catch(() => {});
+    await pool.query(`ALTER TABLE ventas ADD COLUMN IF NOT EXISTS condicion_iva    TEXT DEFAULT 'Consumidor Final'`).catch(() => {});
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS cuenta_corriente (
@@ -53,7 +54,7 @@ router.use(verificarCualquierToken);
 // ═══════════════════════════════════════════════════════════════
 // GET /:cliente_id — listar ventas con filtros
 // ═══════════════════════════════════════════════════════════════
-router.get('/:cliente_id', async (req, res) => {
+router.get('/:cliente_id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const {
@@ -119,12 +120,13 @@ router.get('/:cliente_id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // POST /:cliente_id — crear venta
 // ═══════════════════════════════════════════════════════════════
-router.post('/:cliente_id', async (req, res) => {
+router.post('/:cliente_id', verificarClienteId, async (req, res) => {
   const { cliente_id } = req.params;
   const {
     comprador_nombre = '', comprador_cuit = '',
     comprador_telefono = '', comprador_email = '',
     comprador_direccion = '', comprador_ciudad = '',
+    condicion_iva = 'Consumidor Final',
     items = [],
     va_a_cuenta_corriente = false,
     observaciones = '',
@@ -178,9 +180,9 @@ router.post('/:cliente_id', async (req, res) => {
           estado, cobrada, anulada,
           va_a_cuenta_corriente, observaciones,
           descuento_global, recargo_global, precio_con_iva,
-          forma_pago, monto_recibido, vuelto, modo_iva,
+          forma_pago, monto_recibido, vuelto, modo_iva, condicion_iva,
           fecha, creado_en, modificado_en)
-       VALUES ($1,$2,$3,'V','VENTA',$4,$5,$6,$7,$8,$9,$10,$11,$12,$12,$22,$23,false,$13,$14,$15,$16,$17,$18,$19,$20,$21,now(),now(),now())
+       VALUES ($1,$2,$3,'V','VENTA',$4,$5,$6,$7,$8,$9,$10,$11,$12,$12,$22,$23,false,$13,$14,$15,$16,$17,$18,$19,$20,$21,$24,now(),now(),now())
        RETURNING id`,
       [
         cliente_id, numero, numero_completo,
@@ -195,6 +197,7 @@ router.post('/:cliente_id', async (req, res) => {
         modoIvaValidado,
         va_a_cuenta_corriente ? 'pendiente' : 'cobrada',
         !va_a_cuenta_corriente,
+        condicion_iva,
       ]
     );
     const venta_id = ventaRes.rows[0].id;
@@ -358,7 +361,7 @@ router.post('/:cliente_id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // GET /buscar-ean/:cliente_id/:ean — busca producto por código EAN
 // ═══════════════════════════════════════════════════════════════
-router.get('/buscar-ean/:cliente_id/:ean', async (req, res) => {
+router.get('/buscar-ean/:cliente_id/:ean', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, ean } = req.params;
     const result = await pool.query(
@@ -386,7 +389,7 @@ router.get('/buscar-ean/:cliente_id/:ean', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // GET /:cliente_id/dashboard — estadísticas de ventas
 // ═══════════════════════════════════════════════════════════════
-router.get('/:cliente_id/dashboard', async (req, res) => {
+router.get('/:cliente_id/dashboard', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const result = await pool.query(
@@ -431,7 +434,7 @@ router.get('/:cliente_id/dashboard', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // GET /:cliente_id/:id — detalle con items
 // ═══════════════════════════════════════════════════════════════
-router.get('/:cliente_id/:id', async (req, res) => {
+router.get('/:cliente_id/:id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, id } = req.params;
 
@@ -464,7 +467,7 @@ router.get('/:cliente_id/:id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // PUT /:cliente_id/:id/cobrar — marcar venta como cobrada
 // ═══════════════════════════════════════════════════════════════
-router.put('/:cliente_id/:id/cobrar', async (req, res) => {
+router.put('/:cliente_id/:id/cobrar', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, id } = req.params;
     const venta = await pool.query('SELECT estado, anulada FROM ventas WHERE id=$1 AND cliente_id=$2', [id, cliente_id]);
@@ -486,7 +489,7 @@ router.put('/:cliente_id/:id/cobrar', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // PUT /:cliente_id/:id/anular — anular venta
 // ═══════════════════════════════════════════════════════════════
-router.put('/:cliente_id/:id/anular', async (req, res) => {
+router.put('/:cliente_id/:id/anular', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, id } = req.params;
     const venta = await pool.query(
@@ -545,7 +548,7 @@ router.put('/:cliente_id/:id/anular', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // PUT /:cliente_id/:id — editar venta pendiente
 // ═══════════════════════════════════════════════════════════════
-router.put('/:cliente_id/:id', async (req, res) => {
+router.put('/:cliente_id/:id', verificarClienteId, async (req, res) => {
   const { cliente_id, id } = req.params;
   const {
     comprador_nombre = '', comprador_cuit = '',
