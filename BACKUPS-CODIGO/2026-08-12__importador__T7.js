@@ -1653,8 +1653,8 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
                 nuevos++;
               }
             } else {
-              // CASO 3 — código nuevo (no existe en DB): insertar SIN prefijo
-              const codigoFinal = codigo;
+              // CASO 3 — código nuevo: insertar con prefijo si hay proveedor
+              const codigoFinal = prefix ? `${prefix}-${codigo}` : codigo;
               const ins = await client.query(
                 `INSERT INTO productos_propios
                  (cliente_id,proveedor_id,codigo,descripcion,precio_costo,precio_venta_1,precio_venta_2,
@@ -1840,64 +1840,20 @@ router.put('/actualizar-masivo', async (req, res) => {
       `SELECT id, codigo, descripcion, ${campo} as valor_actual FROM productos_propios WHERE id=ANY($1) AND cliente_id=$2`,
       [ids, cliente_id]
     );
-    const CAMPOS_PRECIO = ['dto_1','dto_2','dto_3','utilidad_1','utilidad_2','utilidad_3','precio_costo','alicuota_iva'];
-    const afectaPrecio = CAMPOS_PRECIO.includes(campo);
-
-    if (afectaPrecio) {
-      // Recalcular precios de venta para cada producto afectado
-      const prodsRes = await pool.query(
-        `SELECT id, precio_costo, dto_1, dto_2, dto_3, imp_1, imp_2, alicuota_iva, utilidad_1, utilidad_2, utilidad_3
-         FROM productos_propios WHERE id=ANY($1) AND cliente_id=$2`,
-        [ids, cliente_id]
-      );
-      let actualizados = 0;
-      for (const p of prodsRes.rows) {
-        // Aplicar el nuevo valor al campo correspondiente
-        const vals = { ...p, [campo]: valor };
-        const pc  = parseFloat(vals.precio_costo) || 0;
-        const d1  = parseFloat(vals.dto_1) || 0, d2 = parseFloat(vals.dto_2) || 0, d3 = parseFloat(vals.dto_3) || 0;
-        const i1  = parseFloat(vals.imp_1) || 0, i2 = parseFloat(vals.imp_2) || 0;
-        const iva = parseFloat(vals.alicuota_iva) || 0;
-        const u1  = parseFloat(vals.utilidad_1) || 0, u2 = parseFloat(vals.utilidad_2) || 0, u3 = parseFloat(vals.utilidad_3) || 0;
-        const pcF = pc * (1-d1/100) * (1-d2/100) * (1-d3/100);
-        const pv1 = pcF * (1+i1/100) * (1+i2/100) * (1+iva/100) * (u1>0 ? (1+u1/100) : 1);
-        const pv2 = pcF * (1+i1/100) * (1+i2/100) * (1+iva/100) * (u2>0 ? (1+u2/100) : 1);
-        const pv3 = pcF * (1+i1/100) * (1+i2/100) * (1+iva/100) * (u3>0 ? (1+u3/100) : 1);
-        await pool.query(
-          `UPDATE productos_propios SET ${campo}=$1, precio_costo_final=$2,
-             precio_venta_1=$3, precio_venta_2=$4, precio_venta_3=$5, precio_venta_final=$3,
-             modificado_en=now()
-           WHERE id=$6 AND cliente_id=$7`,
-          [valor, pcF, pv1, pv2, pv3, p.id, cliente_id]
-        );
-        actualizados++;
-      }
-      for (const prev of prevRes.rows) {
-        registrarCambios({
-          cliente_id, producto_id: prev.id,
-          codigo: prev.codigo, descripcion: prev.descripcion,
-          cambios: { [campo]: { anterior: prev.valor_actual, nuevo: valor } },
-          tipo_operacion: 'edicion_masiva',
-          origen: `Acción masiva: ${campo}`
-        });
-      }
-      res.json({ ok: true, actualizados });
-    } else {
-      const r = await pool.query(
-        `UPDATE productos_propios SET ${campo}=$1, modificado_en=now() WHERE id=ANY($2) AND cliente_id=$3`,
-        [valor, ids, cliente_id]
-      );
-      for (const prev of prevRes.rows) {
-        registrarCambios({
-          cliente_id, producto_id: prev.id,
-          codigo: prev.codigo, descripcion: prev.descripcion,
-          cambios: { [campo]: { anterior: prev.valor_actual, nuevo: valor } },
-          tipo_operacion: 'edicion_masiva',
-          origen: `Acción masiva: ${campo}`
-        });
-      }
-      res.json({ ok: true, actualizados: r.rowCount });
+    const r = await pool.query(
+      `UPDATE productos_propios SET ${campo}=$1, modificado_en=now() WHERE id=ANY($2) AND cliente_id=$3`,
+      [valor, ids, cliente_id]
+    );
+    for (const prev of prevRes.rows) {
+      registrarCambios({
+        cliente_id, producto_id: prev.id,
+        codigo: prev.codigo, descripcion: prev.descripcion,
+        cambios: { [campo]: { anterior: prev.valor_actual, nuevo: valor } },
+        tipo_operacion: 'edicion_masiva',
+        origen: `Acción masiva: ${campo}`
+      });
     }
+    res.json({ ok: true, actualizados: r.rowCount });
   } catch (err) {
     console.error('PUT /actualizar-masivo error:', err.message);
     res.status(500).json({ mensaje: 'Error', detalle: err.message });
