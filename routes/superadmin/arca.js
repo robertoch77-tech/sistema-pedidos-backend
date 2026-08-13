@@ -845,4 +845,215 @@ router.post('/padron/:cliente_id/consultar', async (req, res) => {
   }
 });
 
+// ─── EMITIR NOTA DE CRÉDITO EN ARCA ──────────────────────────
+router.post('/emitir-nc/:cliente_id', async (req, res) => {
+  const { cliente_id } = req.params;
+  try {
+    const {
+      nota_id,
+      tipo_factura_origen,
+      numero_factura_origen,
+      punto_venta_origen,
+      receptor_cuit = '0',
+      receptor_nombre = 'Consumidor Final',
+      items = [],
+    } = req.body;
+
+    const cfgRes = await pool.query('SELECT * FROM arca_configuracion WHERE cliente_id=$1', [cliente_id]);
+    if (cfgRes.rows.length === 0) throw new Error('Sin configuración ARCA');
+    const config = cfgRes.rows[0];
+
+    let tokenData;
+    try {
+      tokenData = await obtenerToken(config);
+    } catch (e) {
+      throw new Error('Error WSAA: ' + e.message);
+    }
+    await pool.query(
+      'UPDATE arca_configuracion SET token_wsaa=$1, sign_wsaa=$2, token_expira=$3 WHERE cliente_id=$4',
+      [tokenData.token, tokenData.sign, tokenData.expira ?? config.token_expira, cliente_id]
+    );
+
+    const tipoOrigen = parseInt(tipo_factura_origen) || 6;
+    let cbteTipo;
+    if ([1, 2, 3].includes(tipoOrigen))   cbteTipo = 3;
+    else if ([6, 7, 8].includes(tipoOrigen)) cbteTipo = 8;
+    else                                     cbteTipo = 13;
+
+    const pventa = parseInt(punto_venta_origen) || config.punto_venta || 1;
+    const wsfeUrl = config.modo === 'produccion' ? WSFE_PROD : WSFE_HOMO;
+
+    let alicuotas = [];
+    const alicMap = {};
+    for (const it of items) {
+      const base = it.cantidad * it.precio_unitario * (1 - (it.descuento_pct || 0) / 100);
+      const alic = parseFloat(it.alicuota_iva) || 21;
+      const iva  = base * (alic / 100);
+      if (!alicMap[alic]) alicMap[alic] = { alicuota: alic, base: 0, iva: 0 };
+      alicMap[alic].base += base;
+      alicMap[alic].iva  += iva;
+    }
+    alicuotas = Object.values(alicMap);
+
+    const alicGravadas = alicuotas.filter(a => a.alicuota > 0);
+    const alicExentas  = alicuotas.filter(a => a.alicuota === 0);
+    const impNetoGrav  = alicGravadas.reduce((s, a) => s + a.base, 0);
+    const impIVA       = alicGravadas.reduce((s, a) => s + a.iva, 0);
+    const impOpEx      = alicExentas.reduce((s, a) => s + a.base, 0);
+    const importe_total = impNetoGrav + impIVA + impOpEx;
+    const importe_neto  = impNetoGrav + impOpEx;
+
+    const esNCA = cbteTipo === 3;
+    const tieneCuit = receptor_cuit && receptor_cuit !== '0' && receptor_cuit.replace(/-/g, '').length >= 11;
+    const docTipo = esNCA ? 80 : (tieneCuit ? 80 : 99);
+    const docNro  = docTipo === 80 ? receptor_cuit.replace(/-/g, '') : '0';
+
+    let ultimoNum = 0;
+    const soapUltimo = `<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ar="http://ar.gov.afip.dif.FEV1/">
+  <soap:Body>
+    <ar:FECompUltimoAutorizado>
+      <ar:Auth><ar:Token>${tokenData.token}</ar:Token><ar:Sign>${tokenData.sign}</ar:Sign><ar:Cuit>${config.cuit}</ar:Cuit></ar:Auth>
+      <ar:PtoVta>${pventa}</ar:PtoVta>
+      <ar:CbteTipo>${cbteTipo}</ar:CbteTipo>
+    </ar:FECompUltimoAutorizado>
+  </soap:Body>
+</soap:Envelope>`;
+
+    try {
+      const rU = await axios.post(wsfeUrl, soapUltimo, { headers: { 'Content-Type': 'text/xml', 'SOAPAction': '' }, timeout: 10000 });
+      const pU = await xml2js.parseStringPromise(rU.data, { explicitArray: false });
+      const m = JSON.stringify(pU).match(/"CbteNro"\s*:\s*"?(\d+)"?/);
+      if (m) ultimoNum = parseInt(m[1]);
+    } catch { /* usar 0 */ }
+
+    const nuevoNum = ultimoNum + 1;
+    const fechaHoy = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+
+    let alicIvaXml = '';
+    for (const a of alicGravadas) {
+      alicIvaXml += `
+              <ar:AlicIva>
+                <ar:Id>${alicuotaAfipId(a.alicuota)}</ar:Id>
+                <ar:BaseImp>${a.base.toFixed(2)}</ar:BaseImp>
+                <ar:Importe>${a.iva.toFixed(2)}</ar:Importe>
+              </ar:AlicIva>`;
+    }
+    const bloqueIva = alicGravadas.length > 0 ? `<ar:Iva>${alicIvaXml}\n            </ar:Iva>` : '';
+
+    const nroOrigen = parseInt(numero_factura_origen) || 0;
+    const cbtesAsocXml = `
+            <ar:CbtesAsoc>
+              <ar:CbteAsoc>
+                <ar:Tipo>${tipoOrigen}</ar:Tipo>
+                <ar:PtoVta>${pventa}</ar:PtoVta>
+                <ar:Nro>${nroOrigen}</ar:Nro>
+              </ar:CbteAsoc>
+            </ar:CbtesAsoc>`;
+
+    const soapCAE = `<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ar="http://ar.gov.afip.dif.FEV1/">
+  <soap:Body>
+    <ar:FECAESolicitar>
+      <ar:Auth><ar:Token>${tokenData.token}</ar:Token><ar:Sign>${tokenData.sign}</ar:Sign><ar:Cuit>${config.cuit}</ar:Cuit></ar:Auth>
+      <ar:FeCAEReq>
+        <ar:FeCabReq><ar:CantReg>1</ar:CantReg><ar:PtoVta>${pventa}</ar:PtoVta><ar:CbteTipo>${cbteTipo}</ar:CbteTipo></ar:FeCabReq>
+        <ar:FeDetReq>
+          <ar:FECAEDetRequest>
+            <ar:Concepto>1</ar:Concepto>
+            <ar:DocTipo>${docTipo}</ar:DocTipo>
+            <ar:DocNro>${docNro}</ar:DocNro>
+            <ar:CbteDesde>${nuevoNum}</ar:CbteDesde>
+            <ar:CbteHasta>${nuevoNum}</ar:CbteHasta>
+            <ar:CbteFch>${fechaHoy}</ar:CbteFch>
+            <ar:ImpTotal>${importe_total.toFixed(2)}</ar:ImpTotal>
+            <ar:ImpTotConc>0.00</ar:ImpTotConc>
+            <ar:ImpNeto>${impNetoGrav.toFixed(2)}</ar:ImpNeto>
+            <ar:ImpOpEx>${impOpEx.toFixed(2)}</ar:ImpOpEx>
+            <ar:ImpIVA>${impIVA.toFixed(2)}</ar:ImpIVA>
+            <ar:ImpTrib>0.00</ar:ImpTrib>
+            <ar:MonId>PES</ar:MonId>
+            <ar:MonCotiz>1</ar:MonCotiz>
+            ${cbtesAsocXml}
+            ${bloqueIva}
+          </ar:FECAEDetRequest>
+        </ar:FeDetReq>
+      </ar:FeCAEReq>
+    </ar:FECAESolicitar>
+  </soap:Body>
+</soap:Envelope>`;
+
+    let cae = '', cae_vencimiento = null, resultadoOk = false;
+
+    try {
+      const rCAE = await axios.post(wsfeUrl, soapCAE, { headers: { 'Content-Type': 'text/xml', 'SOAPAction': '' }, timeout: 15000 });
+      const pCAE = await xml2js.parseStringPromise(rCAE.data, { explicitArray: false });
+      const xmlStr = JSON.stringify(pCAE);
+      const mCAE = xmlStr.match(/"CAE"\s*:\s*"?(\d+)"?/);
+      const mVto = xmlStr.match(/"CAEFchVto"\s*:\s*"?(\d{8})"?/);
+      if (mCAE) { cae = mCAE[1]; resultadoOk = true; }
+      if (mVto) {
+        const v = mVto[1];
+        cae_vencimiento = `${v.slice(0,4)}-${v.slice(4,6)}-${v.slice(6,8)}`;
+      }
+      await logARCA(cliente_id, 'emitir_nc', resultadoOk, soapCAE.slice(0, 500), rCAE.data.slice(0, 500), '');
+    } catch (e) {
+      await logARCA(cliente_id, 'emitir_nc', false, soapCAE.slice(0, 500), '', e.message);
+      throw new Error('Error obteniendo CAE de ARCA: ' + e.message);
+    }
+
+    if (!resultadoOk) throw new Error('ARCA no devolvió CAE');
+
+    const prefijos = { 3: 'NCA', 8: 'NCB', 13: 'NCC' };
+    const prefijo = prefijos[cbteTipo] || 'NC';
+    const numero_completo = `${prefijo}-${String(pventa).padStart(4, '0')}-${String(nuevoNum).padStart(8, '0')}`;
+
+    const compRes = await pool.query(
+      `INSERT INTO arca_comprobantes
+         (cliente_id, tipo_comprobante, numero_completo, punto_venta, numero,
+          receptor_cuit, receptor_nombre,
+          importe_neto, importe_iva, importe_total, cae, cae_vencimiento)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       RETURNING id`,
+      [cliente_id, String(cbteTipo), numero_completo, pventa, nuevoNum,
+       receptor_cuit, receptor_nombre,
+       importe_neto, impIVA, importe_total, cae, cae_vencimiento || null]
+    );
+
+    const iva21  = alicuotas.filter(a => a.alicuota === 21).reduce((s, a) => s + a.iva, 0);
+    const iva105 = alicuotas.filter(a => a.alicuota === 10.5).reduce((s, a) => s + a.iva, 0);
+    await pool.query(
+      `INSERT INTO libros_iva_ventas
+         (cliente_id, comprobante_id, tipo_comprobante, numero_completo,
+          cuit_receptor, nombre_receptor, importe_neto, importe_iva_21, importe_iva_105, importe_total, cae)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+      [cliente_id, compRes.rows[0].id, String(cbteTipo), numero_completo,
+       receptor_cuit, receptor_nombre,
+       -(impNetoGrav + impOpEx), -iva21, -iva105, -importe_total, cae]
+    );
+
+    if (nota_id) {
+      await pool.query(
+        `UPDATE notas_credito SET
+           numero_completo=$1, estado='emitida',
+           tipo_comprobante_origen=$2, numero_comprobante_origen=$3,
+           actualizado_en=now()
+         WHERE id=$4 AND cliente_id=$5`,
+        [numero_completo, String(tipoOrigen), String(nroOrigen), nota_id, cliente_id]
+      );
+    }
+
+    res.json({
+      ok: true, cae, numero_completo,
+      tipo_nc: String(cbteTipo),
+      vencimiento_cae: cae_vencimiento,
+      importe_total: importe_total.toFixed(2),
+    });
+  } catch (err) {
+    console.error('arca emitir-nc:', err.message);
+    await logARCA(cliente_id, 'emitir_nc', false, '', '', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

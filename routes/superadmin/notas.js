@@ -227,6 +227,58 @@ router.get('/:cliente_id/resumen', async (req, res) => {
   }
 });
 
+// ─── GET /:cliente_id/facturas-emitidas ── buscar facturas para vincular N/C
+router.get('/:cliente_id/facturas-emitidas', async (req, res) => {
+  try {
+    const { cliente_id } = req.params;
+    const { buscar } = req.query;
+
+    let query = `
+      SELECT v.id AS venta_id, v.numero_arca, v.tipo_factura, v.cae, v.total AS monto_total,
+             v.comprador_nombre, v.comprador_cuit, v.creado_en,
+             ac.punto_venta, ac.numero
+      FROM ventas v
+      LEFT JOIN arca_comprobantes ac ON ac.venta_id = v.id AND ac.cliente_id = v.cliente_id
+      WHERE v.cliente_id = $1 AND v.facturado = true
+    `;
+    const params = [cliente_id];
+
+    if (buscar && buscar.trim()) {
+      params.push('%' + buscar.trim() + '%');
+      query += ` AND (v.numero_arca ILIKE $2 OR v.comprador_nombre ILIKE $2 OR v.comprador_cuit ILIKE $2)`;
+    }
+    query += ` ORDER BY v.creado_en DESC LIMIT 20`;
+
+    const r = await pool.query(query, params);
+    res.json({ facturas: r.rows });
+  } catch (err) {
+    console.error('facturas-emitidas error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── GET /:cliente_id/venta-items/:venta_id ── items de una venta para N/C
+router.get('/:cliente_id/venta-items/:venta_id', async (req, res) => {
+  try {
+    const { cliente_id, venta_id } = req.params;
+    const r = await pool.query(
+      `SELECT vi.producto_id, vi.descripcion, vi.cantidad, vi.precio_unitario,
+              COALESCE(vi.descuento, 0) AS descuento_pct,
+              COALESCE(vi.alicuota_iva, 21) AS alicuota_iva,
+              vi.subtotal, vi.iva_monto
+       FROM ventas_items vi
+       JOIN ventas v ON v.id = vi.venta_id
+       WHERE vi.venta_id = $1 AND v.cliente_id = $2
+       ORDER BY vi.id`,
+      [venta_id, cliente_id]
+    );
+    res.json({ items: r.rows });
+  } catch (err) {
+    console.error('venta-items error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── GET /:cliente_id/:tipo_nota/:id — detalle con items ─────
 router.get('/:cliente_id/:tipo_nota/:id', async (req, res) => {
   try {
