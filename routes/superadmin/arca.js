@@ -101,6 +101,9 @@ async function asegurarTablas() {
       ['estado_conexion', "TEXT DEFAULT 'sin_configurar'"],
       ['ultima_conexion', 'TIMESTAMPTZ'],
       ['ultimo_error',    "TEXT DEFAULT ''"],
+      ['token_padron',       "TEXT DEFAULT ''"],
+      ['sign_padron',        "TEXT DEFAULT ''"],
+      ['token_padron_expira','TIMESTAMPTZ'],
     ];
     for (const [col, tipo] of cols) {
       await pool.query(`ALTER TABLE arca_configuracion ADD COLUMN IF NOT EXISTS ${col} ${tipo}`).catch(() => {});
@@ -130,6 +133,8 @@ const WSAA_HOMO  = 'https://wsaahomo.afip.gov.ar/ws/services/LoginCms';
 const WSAA_PROD  = 'https://wsaa.afip.gov.ar/ws/services/LoginCms';
 const WSFE_HOMO  = 'https://wswhomo.afip.gov.ar/wsfev1/service.asmx';
 const WSFE_PROD  = 'https://servicios1.afip.gov.ar/wsfev1/service.asmx';
+const PADRON_HOMO = 'https://awshomo.afip.gov.ar/sr-padron/webservices/personaServiceA5';
+const PADRON_PROD = 'https://aws.afip.gov.ar/sr-padron/webservices/personaServiceA5';
 
 // ─── HELPERS ─────────────────────────────────────────────────
 function n(v) { return parseFloat(v) || 0; }
@@ -144,7 +149,7 @@ async function logARCA(cliente_id, tipo, exitoso, request, response, error) {
   } catch { /* silencioso */ }
 }
 
-function generarTRA(modo) {
+function generarTRA(modo, servicio = 'wsfe') {
   const ahora  = new Date();
   const desde  = new Date(ahora.getTime() - 60000);
   const hasta  = new Date(ahora.getTime() + 14 * 3600000);
@@ -156,7 +161,7 @@ function generarTRA(modo) {
     <generationTime>${desde.toISOString().slice(0,19)}</generationTime>
     <expirationTime>${hasta.toISOString().slice(0,19)}</expirationTime>
   </header>
-  <service>wsfe</service>
+  <service>${servicio}</service>
 </loginTicketRequest>`;
 }
 
@@ -214,6 +219,66 @@ async function obtenerToken(config) {
   const expStr = loginTicket?.header?.expirationTime || '';
 
   return { token, sign, expira: expStr ? new Date(expStr) : new Date(Date.now() + 12 * 3600000) };
+}
+
+async function obtenerTokenPadron(config) {
+  if (config.token_padron && config.token_padron_expira) {
+    const expira = new Date(config.token_padron_expira);
+    if (expira.getTime() - Date.now() > 5 * 60 * 1000) {
+      return { token: config.token_padron, sign: config.sign_padron };
+    }
+  }
+
+  const tra = generarTRA(config.modo, 'ws_sr_padron_a5');
+  const wsaaUrl = config.modo === 'produccion' ? WSAA_PROD : WSAA_HOMO;
+
+  let cms;
+  try {
+    const p7 = forge.pkcs7.createSignedData();
+    p7.content = forge.util.createBuffer(tra, 'utf8');
+    p7.addCertificate(config.certificado);
+    p7.addSigner({
+      key:             forge.pki.privateKeyFromPem(config.clave_privada),
+      certificate:     forge.pki.certificateFromPem(config.certificado),
+      digestAlgorithm: forge.pki.oids.sha256,
+    });
+    p7.sign({ detached: false });
+    const der = forge.asn1.toDer(p7.toAsn1()).getBytes();
+    cms = forge.util.encode64(der);
+  } catch (e) {
+    throw new Error('Error firmando TRA padron (CMS): ' + e.message);
+  }
+
+  const soapBody = `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:wsaa="http://wsaa.view.sua.dvadac.desein.afip.gov">
+  <soapenv:Body>
+    <wsaa:loginCms>
+      <wsaa:in0>${cms}</wsaa:in0>
+    </wsaa:loginCms>
+  </soapenv:Body>
+</soapenv:Envelope>`;
+
+  const resp = await axios.post(wsaaUrl, soapBody, {
+    headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': 'loginCms' },
+    timeout: 15000,
+  });
+
+  const parsed = await xml2js.parseStringPromise(resp.data, { explicitArray: false });
+  const loginResp = parsed?.['soapenv:Envelope']?.['soapenv:Body']?.['loginCmsReturn'] ||
+                    parsed?.['S:Envelope']?.['S:Body']?.['ns2:loginCmsResponse']?.['return'] || {};
+  const loginTicket = loginResp?.loginTicketResponse || {};
+
+  const token  = loginTicket?.credentials?.token || loginResp?.token  || '';
+  const sign   = loginTicket?.credentials?.sign  || loginResp?.sign   || '';
+  const expStr = loginTicket?.header?.expirationTime || '';
+  const expira = expStr ? new Date(expStr) : new Date(Date.now() + 12 * 3600000);
+
+  await pool.query(
+    `UPDATE arca_configuracion SET token_padron=$1, sign_padron=$2, token_padron_expira=$3 WHERE cliente_id=$4`,
+    [token, sign, expira, config.cliente_id]
+  );
+
+  return { token, sign };
 }
 
 // ─── GET /config/:cliente_id ──────────────────────────────────
@@ -673,6 +738,110 @@ router.get('/:cliente_id/superadmin-config', async (req, res) => {
     res.json({ configurado: true, ...r.rows[0] });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── CONSULTA PADRÓN ARCA ────────────────────────────────────
+router.post('/padron/:cliente_id/consultar', async (req, res) => {
+  const { cliente_id } = req.params;
+  const { cuit } = req.body;
+
+  if (!cuit || cuit.replace(/\D/g, '').length !== 11) {
+    return res.status(400).json({ error: 'CUIT inválido (debe tener 11 dígitos)' });
+  }
+  const cuitLimpio = cuit.replace(/\D/g, '');
+
+  try {
+    const cfgRes = await pool.query('SELECT * FROM arca_configuracion WHERE cliente_id=$1', [cliente_id]);
+    if (cfgRes.rows.length === 0) return res.status(400).json({ error: 'ARCA no configurado para este cliente' });
+    const config = cfgRes.rows[0];
+
+    if (!config.certificado || !config.clave_privada) {
+      return res.status(400).json({ error: 'Certificado o clave privada no cargados' });
+    }
+
+    const { token, sign } = await obtenerTokenPadron(config);
+
+    const padronUrl = config.modo === 'produccion' ? PADRON_PROD : PADRON_HOMO;
+
+    const soapReq = `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+                  xmlns:a5="http://a5.soap.ws.server.puc.sr/">
+  <soapenv:Body>
+    <a5:getPersona>
+      <token>${token}</token>
+      <sign>${sign}</sign>
+      <cuitRepresentada>${config.cuit}</cuitRepresentada>
+      <idPersona>${cuitLimpio}</idPersona>
+    </a5:getPersona>
+  </soapenv:Body>
+</soapenv:Envelope>`;
+
+    const resp = await axios.post(padronUrl, soapReq, {
+      headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': '' },
+      timeout: 15000,
+    });
+
+    await logARCA(cliente_id, 'padron_consulta', true, `CUIT: ${cuitLimpio}`, resp.data.slice(0, 2000), '');
+
+    const parsed = await xml2js.parseStringPromise(resp.data, { explicitArray: false });
+    const body = parsed?.['soap:Envelope']?.['soap:Body'] ||
+                 parsed?.['soapenv:Envelope']?.['soapenv:Body'] ||
+                 parsed?.['S:Envelope']?.['S:Body'] || {};
+    const personaResp = body?.['ns2:getPersonaResponse'] ||
+                        body?.['getPersonaResponse'] || {};
+    const persona = personaResp?.personaReturn || {};
+
+    if (persona.errorConstancia) {
+      const errMsg = persona.errorConstancia?.error || 'CUIT no encontrado en padrón';
+      return res.status(404).json({ error: typeof errMsg === 'string' ? errMsg : JSON.stringify(errMsg) });
+    }
+
+    const dg = persona.datosGenerales || {};
+    const dom = dg.domicilioFiscal || {};
+    const drg = persona.datosRegimenGeneral || {};
+    const dm = persona.datosMonotributo || {};
+
+    let condicion_iva = 'Consumidor Final';
+    const impuestosRG = Array.isArray(drg.impuesto) ? drg.impuesto : (drg.impuesto ? [drg.impuesto] : []);
+    const impuestosMT = Array.isArray(dm.impuesto) ? dm.impuesto : (dm.impuesto ? [dm.impuesto] : []);
+
+    if (impuestosMT.some(i => String(i.idImpuesto) === '20')) {
+      condicion_iva = 'Monotributista';
+    } else if (impuestosRG.some(i => String(i.idImpuesto) === '30')) {
+      condicion_iva = 'Responsable Inscripto';
+    } else if (impuestosRG.some(i => String(i.idImpuesto) === '32')) {
+      condicion_iva = 'Exento';
+    }
+
+    let razon_social = '';
+    if (dg.tipoPersona === 'JURIDICA') {
+      razon_social = dg.razonSocial || '';
+    } else {
+      const apellido = dg.apellido || '';
+      const nombre = dg.nombre || '';
+      razon_social = apellido && nombre ? `${apellido}, ${nombre}` : (apellido || nombre || '');
+    }
+
+    const direccion = dom.direccion || '';
+    const ciudad = [dom.localidad, dom.descripcionProvincia].filter(Boolean).join(', ');
+
+    res.json({
+      ok: true,
+      datos: {
+        razon_social,
+        condicion_iva,
+        direccion,
+        ciudad,
+        tipo_persona: dg.tipoPersona || '',
+        estado_clave: dg.estadoClave || '',
+        cod_postal: dom.codPostal || '',
+      }
+    });
+  } catch (err) {
+    console.error('padron consulta error:', err.message);
+    await logARCA(cliente_id, 'padron_consulta', false, `CUIT: ${cuitLimpio}`, '', err.message);
+    res.status(500).json({ error: 'Error al consultar padrón: ' + err.message });
   }
 });
 
