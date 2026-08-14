@@ -159,6 +159,32 @@ const PADRON_PROD = 'https://aws.afip.gov.ar/sr-padron/webservices/personaServic
 // ─── HELPERS ─────────────────────────────────────────────────
 function n(v) { return parseFloat(v) || 0; }
 
+function normalizarPem(valor) {
+  return String(valor || '')
+    .replace(/^\uFEFF/, '')
+    .replace(/\r\n/g, '\n')
+    .trim();
+}
+
+function leerCredencialesArca(config) {
+  const certificado = normalizarPem(config.certificado);
+  const clavePrivada = normalizarPem(config.clave_privada);
+
+  try {
+    forge.pki.certificateFromPem(certificado);
+  } catch (err) {
+    throw new Error('Certificado .crt inválido o incompleto: ' + err.message);
+  }
+
+  try {
+    forge.pki.privateKeyFromPem(clavePrivada);
+  } catch (err) {
+    throw new Error('Clave privada .key inválida o incompleta: ' + err.message);
+  }
+
+  return { certificado, clavePrivada };
+}
+
 async function logARCA(cliente_id, tipo, exitoso, request, response, error) {
   try {
     await pool.query(
@@ -196,16 +222,17 @@ async function obtenerToken(config) {
 
   const tra   = generarTRA(config.modo);
   const wsaaUrl = config.modo === 'produccion' ? WSAA_PROD : WSAA_HOMO;
+  const credenciales = leerCredencialesArca(config);
 
   // Firmar TRA con clave privada + certificado — CMS/PKCS7 real
   let cms;
   try {
     const p7 = forge.pkcs7.createSignedData();
     p7.content = forge.util.createBuffer(tra, 'utf8');
-    p7.addCertificate(config.certificado);
+    p7.addCertificate(credenciales.certificado);
     p7.addSigner({
-      key:             forge.pki.privateKeyFromPem(config.clave_privada),
-      certificate:     forge.pki.certificateFromPem(config.certificado),
+      key:             forge.pki.privateKeyFromPem(credenciales.clavePrivada),
+      certificate:     forge.pki.certificateFromPem(credenciales.certificado),
       digestAlgorithm: forge.pki.oids.sha256,
     });
     p7.sign({ detached: false });
@@ -251,15 +278,16 @@ async function obtenerTokenPadron(config) {
 
   const tra = generarTRA(config.modo, 'ws_sr_padron_a5');
   const wsaaUrl = config.modo === 'produccion' ? WSAA_PROD : WSAA_HOMO;
+  const credenciales = leerCredencialesArca(config);
 
   let cms;
   try {
     const p7 = forge.pkcs7.createSignedData();
     p7.content = forge.util.createBuffer(tra, 'utf8');
-    p7.addCertificate(config.certificado);
+    p7.addCertificate(credenciales.certificado);
     p7.addSigner({
-      key:             forge.pki.privateKeyFromPem(config.clave_privada),
-      certificate:     forge.pki.certificateFromPem(config.certificado),
+      key:             forge.pki.privateKeyFromPem(credenciales.clavePrivada),
+      certificate:     forge.pki.certificateFromPem(credenciales.certificado),
       digestAlgorithm: forge.pki.oids.sha256,
     });
     p7.sign({ detached: false });
