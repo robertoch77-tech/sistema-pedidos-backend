@@ -185,6 +185,23 @@ function leerCredencialesArca(config) {
   return { certificado, clavePrivada };
 }
 
+// Devuelve el motivo que informa ARCA/WSAA sin exponer certificados, claves ni el CMS firmado.
+function detalleErrorWSAA(error) {
+  const estado = error?.response?.status;
+  const cuerpo = typeof error?.response?.data === 'string' ? error.response.data : '';
+  const fault = cuerpo.match(/<(?:\w+:)?faultstring[^>]*>([\s\S]*?)<\/(?:\w+:)?faultstring>/i) ||
+                cuerpo.match(/<(?:\w+:)?error[^>]*>([\s\S]*?)<\/(?:\w+:)?error>/i);
+  const detalle = (fault?.[1] || cuerpo)
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 800);
+
+  if (estado && detalle) return `ARCA/WSAA respondi\u00f3 ${estado}: ${detalle}`;
+  if (estado) return `ARCA/WSAA respondi\u00f3 ${estado}: ${error.message}`;
+  return error.message;
+}
+
 async function logARCA(cliente_id, tipo, exitoso, request, response, error) {
   try {
     await pool.query(
@@ -251,10 +268,15 @@ async function obtenerToken(config) {
   </soapenv:Body>
 </soapenv:Envelope>`;
 
-  const resp = await axios.post(wsaaUrl, soapBody, {
-    headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': 'loginCms' },
-    timeout: 15000,
-  });
+  let resp;
+  try {
+    resp = await axios.post(wsaaUrl, soapBody, {
+      headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': 'loginCms' },
+      timeout: 15000,
+    });
+  } catch (error) {
+    throw new Error(detalleErrorWSAA(error));
+  }
 
   const parsed = await xml2js.parseStringPromise(resp.data, { explicitArray: false });
   const loginResp = parsed?.['soapenv:Envelope']?.['soapenv:Body']?.['loginCmsReturn'] ||
@@ -306,10 +328,15 @@ async function obtenerTokenPadron(config) {
   </soapenv:Body>
 </soapenv:Envelope>`;
 
-  const resp = await axios.post(wsaaUrl, soapBody, {
-    headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': 'loginCms' },
-    timeout: 15000,
-  });
+  let resp;
+  try {
+    resp = await axios.post(wsaaUrl, soapBody, {
+      headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': 'loginCms' },
+      timeout: 15000,
+    });
+  } catch (error) {
+    throw new Error(detalleErrorWSAA(error));
+  }
 
   const parsed = await xml2js.parseStringPromise(resp.data, { explicitArray: false });
   const loginResp = parsed?.['soapenv:Envelope']?.['soapenv:Body']?.['loginCmsReturn'] ||
