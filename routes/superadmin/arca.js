@@ -224,6 +224,16 @@ function fechaHoraARCA(fecha) {
   return `${partes.year}-${partes.month}-${partes.day}T${partes.hour}:${partes.minute}:${partes.second}`;
 }
 
+function fechaComprobanteARCA(fecha = new Date()) {
+  return fechaHoraARCA(fecha).slice(0, 10).replace(/-/g, '');
+}
+
+function facturaHabilitada(config, tipo) {
+  return (tipo === 1 && config.emite_factura_a) ||
+         (tipo === 6 && config.emite_factura_b) ||
+         (tipo === 11 && config.emite_factura_c);
+}
+
 function generarTRA(modo, servicio = 'wsfe') {
   const ahora  = new Date();
   const desde  = new Date(ahora.getTime() - 60000);
@@ -493,6 +503,15 @@ router.post('/facturar/:cliente_id', verificarClienteId, async (req, res) => {
     if (cfgRes.rows.length === 0) throw new Error('Sin configuración ARCA');
     const config = cfgRes.rows[0];
 
+    const ventaId = Number(venta_id);
+    const cbteTipo = parseInt(tipo_factura, 10);
+    if (!Number.isInteger(ventaId) || ventaId <= 0) {
+      throw new Error('Debés seleccionar una venta válida antes de facturar');
+    }
+    if (![1, 6, 11].includes(cbteTipo) || !facturaHabilitada(config, cbteTipo)) {
+      throw new Error('El tipo de factura solicitado no está habilitado para este cliente');
+    }
+
     // Obtener/renovar token
     let tokenData;
     try {
@@ -509,15 +528,19 @@ router.post('/facturar/:cliente_id', verificarClienteId, async (req, res) => {
 
     // Leer venta
     const pventa = parseInt(punto_venta) || config.punto_venta || 1;
-    let importe_neto = 100, importe_iva = 21, importe_total = 121;
-    let alicuotas = [{ alicuota: 21, base: 100, iva: 21 }];
+    let importe_neto = 0, importe_iva = 0, importe_total = 0, totalVenta = 0;
+    let alicuotas = [];
 
     if (venta_id) {
       try {
-        const ventaRes = await pool.query(`SELECT * FROM ventas WHERE id=$1`, [venta_id]);
+        const ventaRes = await pool.query(
+          `SELECT * FROM ventas WHERE id=$1 AND cliente_id=$2`, [ventaId, cliente_id]
+        );
         if (ventaRes.rows.length > 0) {
           const venta = ventaRes.rows[0];
+          if (venta.facturado) throw new Error('Esta venta ya tiene un comprobante emitido');
           importe_total = n(venta.total ?? venta.monto_total ?? 0);
+          totalVenta = importe_total;
 
           const itemsAgrup = await pool.query(
             `SELECT
@@ -544,24 +567,26 @@ router.post('/facturar/:cliente_id', verificarClienteId, async (req, res) => {
               alicuotas.push({ alicuota: alic, base, iva });
             }
           } else {
-            importe_neto = n(venta.subtotal ?? importe_total / 1.21);
-            importe_iva  = importe_total - importe_neto;
-            alicuotas = [{ alicuota: 21, base: importe_neto, iva: importe_iva }];
+            throw new Error('La venta no tiene ítems fiscales; no se puede inventar un importe para facturar');
           }
         }
-      } catch { /* venta sin tabla — usar valores por defecto */ }
+      } catch (err) { throw err; }
     }
 
     // Obtener último número
+    if (alicuotas.length === 0) throw new Error('La venta no existe o no pertenece a este cliente');
+    if (importe_total <= 0 || Math.abs(totalVenta - importe_total) > 0.02) {
+      throw new Error('Los importes de la venta no coinciden con sus ítems; revisala antes de facturar');
+    }
+
     const wsfeUrl = config.modo === 'produccion' ? WSFE_PROD : WSFE_HOMO;
-    const cbteTipo = parseInt(tipo_factura) || 6;
     let ultimoNum = 0;
 
     const soapUltimo = `<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ar="http://ar.gov.afip.dif.FEV1/">
   <soap:Body>
     <ar:FECompUltimoAutorizado>
-      <ar:Auth><ar:Token>${config.token_wsaa}</ar:Token><ar:Sign>${config.sign_wsaa}</ar:Sign><ar:Cuit>${config.cuit}</ar:Cuit></ar:Auth>
+      <ar:Auth><ar:Token>${tokenData.token}</ar:Token><ar:Sign>${tokenData.sign}</ar:Sign><ar:Cuit>${config.cuit}</ar:Cuit></ar:Auth>
       <ar:PtoVta>${pventa}</ar:PtoVta>
       <ar:CbteTipo>${cbteTipo}</ar:CbteTipo>
     </ar:FECompUltimoAutorizado>
@@ -574,12 +599,14 @@ router.post('/facturar/:cliente_id', verificarClienteId, async (req, res) => {
       const nroStr = JSON.stringify(pUltimo);
       const m = nroStr.match(/"CbteNro"\s*:\s*"?(\d+)"?/);
       if (m) ultimoNum = parseInt(m[1]);
-    } catch { /* sin conectividad real en homologación — usar 0 */ }
+    } catch (e) {
+      throw new Error('No se pudo consultar el último comprobante autorizado: ' + e.message);
+    }
 
     const nuevoNum = ultimoNum + 1;
 
     // Llamar FECAESolicitar
-    const fechaHoy = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const fechaHoy = fechaComprobanteARCA();
 
     const alicGravadas = alicuotas.filter(a => a.alicuota > 0);
     const alicExentas  = alicuotas.filter(a => a.alicuota === 0);
@@ -610,7 +637,7 @@ router.post('/facturar/:cliente_id', verificarClienteId, async (req, res) => {
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ar="http://ar.gov.afip.dif.FEV1/">
   <soap:Body>
     <ar:FECAESolicitar>
-      <ar:Auth><ar:Token>${config.token_wsaa || ''}</ar:Token><ar:Sign>${config.sign_wsaa || ''}</ar:Sign><ar:Cuit>${config.cuit}</ar:Cuit></ar:Auth>
+      <ar:Auth><ar:Token>${tokenData.token}</ar:Token><ar:Sign>${tokenData.sign}</ar:Sign><ar:Cuit>${config.cuit}</ar:Cuit></ar:Auth>
       <ar:FeCAEReq>
         <ar:FeCabReq><ar:CantReg>1</ar:CantReg><ar:PtoVta>${pventa}</ar:PtoVta><ar:CbteTipo>${cbteTipo}</ar:CbteTipo></ar:FeCabReq>
         <ar:FeDetReq>
@@ -650,12 +677,14 @@ router.post('/facturar/:cliente_id', verificarClienteId, async (req, res) => {
         const v = mVto[1];
         cae_vencimiento = `${v.slice(0,4)}-${v.slice(4,6)}-${v.slice(6,8)}`;
       }
-      await logARCA(cliente_id, 'fecaesolicitar', resultadoOk, soapCAE.slice(0, 500), rCAE.data.slice(0, 500), '');
+      await logARCA(cliente_id, 'fecaesolicitar', resultadoOk, 'Solicitud de CAE enviada', 'Respuesta de ARCA recibida', '');
     } catch (e) {
       errorCAE = e.message;
-      await logARCA(cliente_id, 'fecaesolicitar', false, soapCAE.slice(0, 500), '', e.message);
+      await logARCA(cliente_id, 'fecaesolicitar', false, 'Solicitud de CAE enviada', '', e.message);
       throw new Error('Error obteniendo CAE de AFIP: ' + (e.message || 'Sin respuesta del servidor'));
     }
+
+    if (!resultadoOk) throw new Error('ARCA no devolvió CAE; no se registró ningún comprobante');
 
     const prefijos = { 1:'FA', 2:'NDA', 3:'NCA', 6:'FB', 7:'NDB', 8:'NCB', 11:'FC', 12:'NDC', 13:'NCC' };
     const prefijo = prefijos[cbteTipo] || 'F';
@@ -965,6 +994,21 @@ router.post('/emitir-nc/:cliente_id', verificarClienteId, async (req, res) => {
     );
 
     const tipoOrigen = parseInt(tipo_factura_origen) || 6;
+    if (!config.emite_nota_credito) {
+      throw new Error('Las notas de crédito no están habilitadas para este cliente');
+    }
+    if (!Number.isInteger(Number(nota_id)) || Number(nota_id) <= 0 || !Array.isArray(items) || items.length === 0) {
+      throw new Error('La nota de crédito debe tener un registro e ítems válidos');
+    }
+    if (!Number.isInteger(Number(numero_factura_origen)) || Number(numero_factura_origen) <= 0) {
+      throw new Error('La nota de crédito debe estar asociada a un comprobante válido');
+    }
+    const notaRes = await pool.query(
+      `SELECT estado FROM notas_credito WHERE id=$1 AND cliente_id=$2`, [nota_id, cliente_id]
+    );
+    if (notaRes.rows.length === 0) throw new Error('La nota de crédito no existe o no pertenece a este cliente');
+    if (notaRes.rows[0].estado === 'emitida') throw new Error('Esta nota de crédito ya fue emitida');
+
     let cbteTipo;
     if ([1, 2, 3].includes(tipoOrigen))   cbteTipo = 3;
     else if ([6, 7, 8].includes(tipoOrigen)) cbteTipo = 8;
@@ -1015,10 +1059,12 @@ router.post('/emitir-nc/:cliente_id', verificarClienteId, async (req, res) => {
       const pU = await xml2js.parseStringPromise(rU.data, { explicitArray: false });
       const m = JSON.stringify(pU).match(/"CbteNro"\s*:\s*"?(\d+)"?/);
       if (m) ultimoNum = parseInt(m[1]);
-    } catch { /* usar 0 */ }
+    } catch (e) {
+      throw new Error('No se pudo consultar el último comprobante autorizado: ' + e.message);
+    }
 
     const nuevoNum = ultimoNum + 1;
-    const fechaHoy = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const fechaHoy = fechaComprobanteARCA();
 
     let alicIvaXml = '';
     for (const a of alicGravadas) {
@@ -1086,9 +1132,9 @@ router.post('/emitir-nc/:cliente_id', verificarClienteId, async (req, res) => {
         const v = mVto[1];
         cae_vencimiento = `${v.slice(0,4)}-${v.slice(4,6)}-${v.slice(6,8)}`;
       }
-      await logARCA(cliente_id, 'emitir_nc', resultadoOk, soapCAE.slice(0, 500), rCAE.data.slice(0, 500), '');
+      await logARCA(cliente_id, 'emitir_nc', resultadoOk, 'Solicitud de nota de crédito enviada', 'Respuesta de ARCA recibida', '');
     } catch (e) {
-      await logARCA(cliente_id, 'emitir_nc', false, soapCAE.slice(0, 500), '', e.message);
+      await logARCA(cliente_id, 'emitir_nc', false, 'Solicitud de nota de crédito enviada', '', e.message);
       throw new Error('Error obteniendo CAE de ARCA: ' + e.message);
     }
 
