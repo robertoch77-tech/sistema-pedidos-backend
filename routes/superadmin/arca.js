@@ -1,7 +1,7 @@
 const express = require('express');
 const router  = express.Router();
 const pool    = require('../../db');
-const { verificarCualquierToken } = require('./authMiddleware');
+const { verificarCualquierToken, verificarClienteId } = require('./authMiddleware');
 const axios   = require('axios');
 const xml2js  = require('xml2js');
 const forge   = require('node-forge');
@@ -101,6 +101,7 @@ async function asegurarTablas() {
       ['estado_conexion', "TEXT DEFAULT 'sin_configurar'"],
       ['ultima_conexion', 'TIMESTAMPTZ'],
       ['ultimo_error',    "TEXT DEFAULT ''"],
+      ['actualizado_en',  'TIMESTAMPTZ DEFAULT now()'],
       ['token_padron',       "TEXT DEFAULT ''"],
       ['sign_padron',        "TEXT DEFAULT ''"],
       ['token_padron_expira','TIMESTAMPTZ'],
@@ -282,7 +283,7 @@ async function obtenerTokenPadron(config) {
 }
 
 // ─── GET /config/:cliente_id ──────────────────────────────────
-router.get('/config/:cliente_id', async (req, res) => {
+router.get('/config/:cliente_id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const r = await pool.query(
@@ -304,7 +305,7 @@ router.get('/config/:cliente_id', async (req, res) => {
 });
 
 // ─── PUT /config/:cliente_id ──────────────────────────────────
-router.put('/config/:cliente_id', async (req, res) => {
+router.put('/config/:cliente_id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const {
@@ -340,7 +341,7 @@ router.put('/config/:cliente_id', async (req, res) => {
 });
 
 // ─── POST /config/:cliente_id/test ────────────────────────────
-router.post('/config/:cliente_id/test', async (req, res) => {
+router.post('/config/:cliente_id/test', verificarClienteId, async (req, res) => {
   const { cliente_id } = req.params;
   try {
     const cfgRes = await pool.query(
@@ -392,7 +393,7 @@ function alicuotaAfipId(pct) {
 }
 
 // ─── POST /facturar/:cliente_id ───────────────────────────────
-router.post('/facturar/:cliente_id', async (req, res) => {
+router.post('/facturar/:cliente_id', verificarClienteId, async (req, res) => {
   const { cliente_id } = req.params;
   try {
     const {
@@ -619,7 +620,7 @@ router.post('/facturar/:cliente_id', async (req, res) => {
 });
 
 // ─── GET /pendientes/:cliente_id — ventas sin facturar ───────
-router.get('/pendientes/:cliente_id', async (req, res) => {
+router.get('/pendientes/:cliente_id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const result = await pool.query(
@@ -640,7 +641,7 @@ router.get('/pendientes/:cliente_id', async (req, res) => {
 });
 
 // ─── GET /historial/:cliente_id ───────────────────────────────
-router.get('/historial/:cliente_id', async (req, res) => {
+router.get('/historial/:cliente_id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const { tipo_comprobante, fecha_desde, fecha_hasta, buscar, page = 1, limit = 25 } = req.query;
@@ -665,7 +666,7 @@ router.get('/historial/:cliente_id', async (req, res) => {
 });
 
 // ─── GET /logs/:cliente_id ────────────────────────────────────
-router.get('/logs/:cliente_id', async (req, res) => {
+router.get('/logs/:cliente_id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const { exitoso, fecha_desde, fecha_hasta, page = 1, limit = 25 } = req.query;
@@ -689,7 +690,7 @@ router.get('/logs/:cliente_id', async (req, res) => {
 });
 
 // ─── POST /comprobante/:cliente_id/:id/pdf ────────────────────
-router.post('/comprobante/:cliente_id/:id/pdf', async (req, res) => {
+router.post('/comprobante/:cliente_id/:id/pdf', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, id } = req.params;
     const r = await pool.query(`SELECT * FROM arca_comprobantes WHERE id=$1 AND cliente_id=$2`, [id, cliente_id]);
@@ -716,10 +717,13 @@ router.post('/comprobante/:cliente_id/:id/pdf', async (req, res) => {
 });
 
 // ─── ENDPOINTS SUPERADMIN (alias para Roberto) ────────────────
-router.get('/superadmin/arca/:cliente_roberto_id',       (req, res) => { req.params.cliente_id = req.params.cliente_roberto_id; return router.handle(Object.assign(req, { url: `/config/${req.params.cliente_roberto_id}`, method: 'GET' }), res, () => {}); });
+router.get('/superadmin/arca/:cliente_roberto_id', (req, res, next) => {
+  req.params.cliente_id = req.params.cliente_roberto_id;
+  verificarClienteId(req, res, next);
+}, (req, res) => router.handle(Object.assign(req, { url: `/config/${req.params.cliente_roberto_id}`, method: 'GET' }), res, () => {}));
 
 // Variante directa más simple:
-router.get('/:cliente_id/superadmin-config', async (req, res) => {
+router.get('/:cliente_id/superadmin-config', verificarClienteId, async (req, res) => {
   req.params.cliente_id = req.params.cliente_id;
   // redirigir internamente — usar la lógica de /config
   try {
@@ -742,7 +746,7 @@ router.get('/:cliente_id/superadmin-config', async (req, res) => {
 });
 
 // ─── CONSULTA PADRÓN ARCA ────────────────────────────────────
-router.post('/padron/:cliente_id/consultar', async (req, res) => {
+router.post('/padron/:cliente_id/consultar', verificarClienteId, async (req, res) => {
   const { cliente_id } = req.params;
   const { cuit } = req.body;
 
@@ -846,7 +850,7 @@ router.post('/padron/:cliente_id/consultar', async (req, res) => {
 });
 
 // ─── EMITIR NOTA DE CRÉDITO EN ARCA ──────────────────────────
-router.post('/emitir-nc/:cliente_id', async (req, res) => {
+router.post('/emitir-nc/:cliente_id', verificarClienteId, async (req, res) => {
   const { cliente_id } = req.params;
   try {
     const {
