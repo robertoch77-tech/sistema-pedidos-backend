@@ -212,6 +212,18 @@ async function logARCA(cliente_id, tipo, exitoso, request, response, error) {
   } catch { /* silencioso */ }
 }
 
+function fechaHoraARCA(fecha) {
+  const partes = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).formatToParts(fecha).reduce((resultado, parte) => {
+    resultado[parte.type] = parte.value;
+    return resultado;
+  }, {});
+  return `${partes.year}-${partes.month}-${partes.day}T${partes.hour}:${partes.minute}:${partes.second}`;
+}
+
 function generarTRA(modo, servicio = 'wsfe') {
   const ahora  = new Date();
   const desde  = new Date(ahora.getTime() - 60000);
@@ -221,8 +233,8 @@ function generarTRA(modo, servicio = 'wsfe') {
 <loginTicketRequest version="1.0">
   <header>
     <uniqueId>${uniRef}</uniqueId>
-    <generationTime>${desde.toISOString().slice(0,19)}</generationTime>
-    <expirationTime>${hasta.toISOString().slice(0,19)}</expirationTime>
+    <generationTime>${fechaHoraARCA(desde)}</generationTime>
+    <expirationTime>${fechaHoraARCA(hasta)}</expirationTime>
   </header>
   <service>${servicio}</service>
 </loginTicketRequest>`;
