@@ -1,7 +1,7 @@
 const express = require('express');
 const router  = express.Router();
 const pool    = require('../../db');
-const { verificarCualquierToken } = require('./authMiddleware');
+const { verificarCualquierToken, verificarClienteId } = require('./authMiddleware');
 
 // ── Asegurar tablas ───────────────────────────────────────────
 async function asegurarTablas() {
@@ -42,6 +42,19 @@ async function asegurarTablas() {
       )
     `).catch(() => {});
 
+    // Columnas de percepciones en compras
+    await pool.query(`ALTER TABLE compras ADD COLUMN IF NOT EXISTS descuento_pct NUMERIC DEFAULT 0`).catch(() => {});
+    await pool.query(`ALTER TABLE compras ADD COLUMN IF NOT EXISTS descuento_monto NUMERIC DEFAULT 0`).catch(() => {});
+    await pool.query(`ALTER TABLE compras ADD COLUMN IF NOT EXISTS perc_iva_pct NUMERIC DEFAULT 0`).catch(() => {});
+    await pool.query(`ALTER TABLE compras ADD COLUMN IF NOT EXISTS perc_iva_monto NUMERIC DEFAULT 0`).catch(() => {});
+    await pool.query(`ALTER TABLE compras ADD COLUMN IF NOT EXISTS iibb_pct NUMERIC DEFAULT 0`).catch(() => {});
+    await pool.query(`ALTER TABLE compras ADD COLUMN IF NOT EXISTS iibb_monto NUMERIC DEFAULT 0`).catch(() => {});
+    await pool.query(`ALTER TABLE compras ADD COLUMN IF NOT EXISTS municipal_pct NUMERIC DEFAULT 0`).catch(() => {});
+    await pool.query(`ALTER TABLE compras ADD COLUMN IF NOT EXISTS municipal_monto NUMERIC DEFAULT 0`).catch(() => {});
+    await pool.query(`ALTER TABLE compras ADD COLUMN IF NOT EXISTS percepciones_total NUMERIC DEFAULT 0`).catch(() => {});
+    // Columna dto en items
+    await pool.query(`ALTER TABLE compras_items ADD COLUMN IF NOT EXISTS dto NUMERIC DEFAULT 0`).catch(() => {});
+
     // Columna compra_id en movimientos de proveedores (si no existe)
     await pool.query(
       `ALTER TABLE cuentas_corrientes_proveedores_movimientos
@@ -61,7 +74,7 @@ function n(v) { return parseFloat(v) || 0; }
 // ═══════════════════════════════════════════════════════════════
 // POST /:cliente_id — cargar factura proveedor
 // ═══════════════════════════════════════════════════════════════
-router.post('/:cliente_id', async (req, res) => {
+router.post('/:cliente_id', verificarClienteId, async (req, res) => {
   const { cliente_id } = req.params;
   const {
     proveedor_id   = null,
@@ -74,6 +87,15 @@ router.post('/:cliente_id', async (req, res) => {
     total          = 0,
     observaciones  = '',
     items          = [],
+    descuento_pct      = 0,
+    descuento_monto    = 0,
+    perc_iva_pct       = 0,
+    perc_iva_monto     = 0,
+    iibb_pct           = 0,
+    iibb_monto         = 0,
+    municipal_pct      = 0,
+    municipal_monto    = 0,
+    percepciones_total = 0,
   } = req.body;
 
   if (!n(total)) {
@@ -86,8 +108,14 @@ router.post('/:cliente_id', async (req, res) => {
       `INSERT INTO compras
          (cliente_id, proveedor_id, proveedor_nombre, numero_factura,
           tipo, fecha, subtotal, iva_monto, total, estado, observaciones,
+          descuento_pct, descuento_monto,
+          perc_iva_pct, perc_iva_monto,
+          iibb_pct, iibb_monto,
+          municipal_pct, municipal_monto,
+          percepciones_total,
           creado_en, modificado_en)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pendiente',$10,now(),now())
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pendiente',$10,
+               $11,$12,$13,$14,$15,$16,$17,$18,$19,now(),now())
        RETURNING id`,
       [
         cliente_id,
@@ -100,6 +128,15 @@ router.post('/:cliente_id', async (req, res) => {
         n(iva_monto).toFixed(4),
         n(total).toFixed(4),
         observaciones,
+        n(descuento_pct).toFixed(4),
+        n(descuento_monto).toFixed(4),
+        n(perc_iva_pct).toFixed(4),
+        n(perc_iva_monto).toFixed(4),
+        n(iibb_pct).toFixed(4),
+        n(iibb_monto).toFixed(4),
+        n(municipal_pct).toFixed(4),
+        n(municipal_monto).toFixed(4),
+        n(percepciones_total).toFixed(4),
       ]
     );
     const compra_id = compraRes.rows[0].id;
@@ -109,23 +146,25 @@ router.post('/:cliente_id', async (req, res) => {
       for (const it of items) {
         const cantidad      = n(it.cantidad);
         const precio        = n(it.precio_unitario);
+        const dto           = n(it.dto);
         const alicuota      = n(it.alicuota_iva) || 21;
-        const iva_item      = precio * cantidad * (alicuota / 100);
-        const subtotal_item = precio * cantidad;
+        const neto          = precio * cantidad * (1 - dto / 100);
+        const iva_item      = neto * (alicuota / 100);
+        const subtotal_item = neto;
         const total_item    = subtotal_item + iva_item;
 
         await pool.query(
           `INSERT INTO compras_items
              (compra_id, cliente_id, producto_id, es_libre,
-              descripcion, cantidad, precio_unitario,
+              descripcion, cantidad, precio_unitario, dto,
               alicuota_iva, iva_monto, subtotal, total)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
           [
             compra_id, cliente_id,
             it.producto_id || null,
             !!it.es_libre,
             it.descripcion || '',
-            cantidad, precio, alicuota,
+            cantidad, precio, dto, alicuota,
             iva_item.toFixed(4),
             subtotal_item.toFixed(4),
             total_item.toFixed(4),
@@ -225,7 +264,7 @@ router.post('/:cliente_id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // GET /:cliente_id — lista paginada con filtros
 // ═══════════════════════════════════════════════════════════════
-router.get('/:cliente_id', async (req, res) => {
+router.get('/:cliente_id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const {
@@ -273,6 +312,11 @@ router.get('/:cliente_id', async (req, res) => {
       pool.query(
         `SELECT id, proveedor_id, proveedor_nombre, numero_factura,
                 tipo, fecha, subtotal, iva_monto, total, estado, observaciones,
+                descuento_pct, descuento_monto,
+                perc_iva_pct, perc_iva_monto,
+                iibb_pct, iibb_monto,
+                municipal_pct, municipal_monto,
+                percepciones_total,
                 creado_en
          FROM compras
          WHERE ${whereStr}
@@ -299,7 +343,7 @@ router.get('/:cliente_id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // GET /:cliente_id/:id — detalle con ítems
 // ═══════════════════════════════════════════════════════════════
-router.get('/:cliente_id/:id', async (req, res) => {
+router.get('/:cliente_id/:id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, id } = req.params;
 
@@ -332,7 +376,7 @@ router.get('/:cliente_id/:id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // PUT /:cliente_id/:id/estado — cambiar estado
 // ═══════════════════════════════════════════════════════════════
-router.put('/:cliente_id/:id/estado', async (req, res) => {
+router.put('/:cliente_id/:id/estado', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, id } = req.params;
     const { estado } = req.body;
