@@ -110,6 +110,25 @@ async function asegurarTablas() {
       await pool.query(`ALTER TABLE arca_configuracion ADD COLUMN IF NOT EXISTS ${col} ${tipo}`).catch(() => {});
     }
 
+    // Las instalaciones anteriores podían tener la tabla sin la unicidad por
+    // cliente. ON CONFLICT (cliente_id) necesita esta regla para poder guardar.
+    await pool.query(`
+      DO $$ BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint c
+          JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
+          WHERE c.conrelid = 'arca_configuracion'::regclass
+            AND c.contype = 'u'
+            AND array_length(c.conkey, 1) = 1
+            AND a.attname = 'cliente_id'
+        ) THEN
+          ALTER TABLE arca_configuracion
+            ADD CONSTRAINT arca_configuracion_cliente_id_uq UNIQUE (cliente_id);
+        END IF;
+      END $$;
+    `).catch(err => console.error('arca: no se pudo asegurar unicidad por cliente:', err.message));
+
     // Columnas ARCA en tabla ventas
     const colsVentas = [
       ['cae',             "TEXT DEFAULT ''"],
