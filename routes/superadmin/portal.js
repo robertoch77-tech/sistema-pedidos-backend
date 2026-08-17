@@ -37,7 +37,7 @@ async function verificarTokenPortal(req, res, next) {
       return res.status(401).json({ error: 'Sesión inválida' });
     }
 
-    if (sesion.rows[0].expira_en < Date.now()) {
+    if (Number(sesion.rows[0].expira_en) < Date.now()) {
       await pool.query(
         'DELETE FROM sesiones_portal WHERE token=$1',
         [token]
@@ -45,6 +45,7 @@ async function verificarTokenPortal(req, res, next) {
       return res.status(401).json({ error: 'Sesión expirada' });
     }
 
+    req.clienteId = Number(sesion.rows[0].cliente_id);
     next();
   } catch (err) {
     console.error('verificarTokenPortal:', err.message);
@@ -112,6 +113,10 @@ router.get('/:codigo', async (req, res) => {
 // GET /dashboard/:cliente_id — métricas del dashboard
 router.get('/dashboard/:cliente_id', verificarTokenPortal, async (req, res) => {
   const { cliente_id } = req.params;
+
+  if (!Number.isInteger(Number(cliente_id)) || Number(cliente_id) !== req.clienteId) {
+    return res.status(403).json({ error: 'No tenés acceso a este cliente' });
+  }
 
   const safeQuery = async (sql, params) => {
     try {

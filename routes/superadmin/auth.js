@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const pool = require('../../db');
 
 pool.query(`
@@ -85,7 +86,7 @@ router.post('/auth/login', async (req, res) => {
       [usuario.id]
     ).catch(() => {});
 
-    const token = `sa_${usuario.id}_${Date.now()}`;
+    const token = `sa_${crypto.randomBytes(32).toString('hex')}`;
     const expira = Date.now() + (7 * 24 * 60 * 60 * 1000);
 
     await pool.query(
