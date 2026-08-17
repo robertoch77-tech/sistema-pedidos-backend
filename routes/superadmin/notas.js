@@ -1,7 +1,7 @@
 const express = require('express');
 const router  = express.Router();
 const pool    = require('../../db');
-const { verificarCualquierToken } = require('./authMiddleware');
+const { verificarCualquierToken, verificarClienteId } = require('./authMiddleware');
 
 async function asegurarTablas() {
   try {
@@ -136,7 +136,7 @@ function calcTotales(items) {
 }
 
 // ─── GET /:cliente_id — lista con filtros ─────────────────────
-router.get('/:cliente_id', async (req, res) => {
+router.get('/:cliente_id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const { tipo_nota = 'credito', tipo, estado, fecha_desde, fecha_hasta, buscar, page = 1, limit = 25 } = req.query;
@@ -180,7 +180,7 @@ router.get('/:cliente_id', async (req, res) => {
 });
 
 // ─── GET /:cliente_id/resumen ─────────────────────────────────
-router.get('/:cliente_id/resumen', async (req, res) => {
+router.get('/:cliente_id/resumen', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
 
@@ -228,7 +228,7 @@ router.get('/:cliente_id/resumen', async (req, res) => {
 });
 
 // ─── GET /:cliente_id/facturas-emitidas ── buscar facturas para vincular N/C
-router.get('/:cliente_id/facturas-emitidas', async (req, res) => {
+router.get('/:cliente_id/facturas-emitidas', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const { buscar } = req.query;
@@ -258,7 +258,7 @@ router.get('/:cliente_id/facturas-emitidas', async (req, res) => {
 });
 
 // ─── GET /:cliente_id/venta-items/:venta_id ── items de una venta para N/C
-router.get('/:cliente_id/venta-items/:venta_id', async (req, res) => {
+router.get('/:cliente_id/venta-items/:venta_id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, venta_id } = req.params;
     const r = await pool.query(
@@ -280,7 +280,7 @@ router.get('/:cliente_id/venta-items/:venta_id', async (req, res) => {
 });
 
 // ─── GET /:cliente_id/:tipo_nota/:id — detalle con items ─────
-router.get('/:cliente_id/:tipo_nota/:id', async (req, res) => {
+router.get('/:cliente_id/:tipo_nota/:id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, tipo_nota, id } = req.params;
     const tabla      = tipo_nota === 'debito' ? 'notas_debito'       : 'notas_credito';
@@ -298,7 +298,7 @@ router.get('/:cliente_id/:tipo_nota/:id', async (req, res) => {
 });
 
 // ─── POST /:cliente_id/credito ────────────────────────────────
-router.post('/:cliente_id/credito', async (req, res) => {
+router.post('/:cliente_id/credito', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const {
@@ -393,7 +393,7 @@ router.post('/:cliente_id/credito', async (req, res) => {
 });
 
 // ─── POST /:cliente_id/debito ─────────────────────────────────
-router.post('/:cliente_id/debito', async (req, res) => {
+router.post('/:cliente_id/debito', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const {
@@ -475,7 +475,7 @@ router.post('/:cliente_id/debito', async (req, res) => {
 });
 
 // ─── PUT /:cliente_id/:tipo_nota/:id/estado ───────────────────
-router.put('/:cliente_id/:tipo_nota/:id/estado', async (req, res) => {
+router.put('/:cliente_id/:tipo_nota/:id/estado', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, tipo_nota, id } = req.params;
     const { estado } = req.body;
@@ -492,7 +492,7 @@ router.put('/:cliente_id/:tipo_nota/:id/estado', async (req, res) => {
 });
 
 // ─── PUT /:cliente_id/:tipo_nota/:id/anular ───────────────────
-router.put('/:cliente_id/:tipo_nota/:id/anular', async (req, res) => {
+router.put('/:cliente_id/:tipo_nota/:id/anular', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, tipo_nota, id } = req.params;
     const { motivo_anulacion } = req.body;

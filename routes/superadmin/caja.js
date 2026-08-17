@@ -1,7 +1,7 @@
 const express = require('express');
 const router  = express.Router();
 const pool    = require('../../db');
-const { verificarCualquierToken } = require('./authMiddleware');
+const { verificarCualquierToken, verificarClienteId } = require('./authMiddleware');
 
 // ─── TABLAS ───────────────────────────────────────────────────
 async function asegurarTablas() {
@@ -79,7 +79,7 @@ router.use(verificarCualquierToken);
 function n(v) { return parseFloat(v) || 0; }
 
 // ─── GET /:cliente_id/estado ──────────────────────────────────
-router.get('/:cliente_id/estado', async (req, res) => {
+router.get('/:cliente_id/estado', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const cajaRes = await pool.query(
@@ -108,7 +108,7 @@ router.get('/:cliente_id/estado', async (req, res) => {
 });
 
 // ─── GET /:cliente_id/desglose/:caja_id ──────────────────────
-router.get('/:cliente_id/desglose/:caja_id', async (req, res) => {
+router.get('/:cliente_id/desglose/:caja_id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, caja_id } = req.params;
     const rows = await pool.query(
@@ -141,7 +141,7 @@ router.get('/:cliente_id/desglose/:caja_id', async (req, res) => {
 });
 
 // ─── POST /:cliente_id/abrir ──────────────────────────────────
-router.post('/:cliente_id/abrir', async (req, res) => {
+router.post('/:cliente_id/abrir', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const { sucursal_id, saldo_inicial = 0, turno = 'Único', observaciones } = req.body;
@@ -178,7 +178,7 @@ router.post('/:cliente_id/abrir', async (req, res) => {
 });
 
 // ─── POST /:cliente_id/movimiento ─────────────────────────────
-router.post('/:cliente_id/movimiento', async (req, res) => {
+router.post('/:cliente_id/movimiento', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const {
@@ -225,7 +225,7 @@ router.post('/:cliente_id/movimiento', async (req, res) => {
 });
 
 // ─── GET /:cliente_id/:caja_id/movimientos ────────────────────
-router.get('/:cliente_id/:caja_id/movimientos', async (req, res) => {
+router.get('/:cliente_id/:caja_id/movimientos', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, caja_id } = req.params;
     const { tipo, page = 1, limit = 50 } = req.query;
@@ -258,7 +258,7 @@ router.get('/:cliente_id/:caja_id/movimientos', async (req, res) => {
 });
 
 // ─── POST /:cliente_id/cerrar ─────────────────────────────────
-router.post('/:cliente_id/cerrar', async (req, res) => {
+router.post('/:cliente_id/cerrar', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const { caja_id, saldo_final_real, motivo_diferencia, observaciones } = req.body;
@@ -328,7 +328,7 @@ router.post('/:cliente_id/cerrar', async (req, res) => {
 });
 
 // ─── GET /:cliente_id/historial ───────────────────────────────
-router.get('/:cliente_id/historial', async (req, res) => {
+router.get('/:cliente_id/historial', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const { fecha_desde, fecha_hasta, page = 1, limit = 25 } = req.query;

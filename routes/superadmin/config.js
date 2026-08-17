@@ -1,7 +1,7 @@
 const express = require('express');
 const router  = express.Router();
 const pool    = require('../../db');
-const { verificarCualquierToken } = require('./authMiddleware');
+const { verificarCualquierToken, verificarClienteId } = require('./authMiddleware');
 
 // ── Asegurar tablas ───────────────────────────────────────────
 async function asegurarTablas() {
@@ -51,7 +51,7 @@ const CONFIG_DEFAULT = {
 // ═══════════════════════════════════════════════════════════════
 // GET /:cliente_id — obtener config del negocio
 // ═══════════════════════════════════════════════════════════════
-router.get('/:cliente_id', async (req, res) => {
+router.get('/:cliente_id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const result = await pool.query(
@@ -73,7 +73,7 @@ router.get('/:cliente_id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // PUT /:cliente_id — guardar config (upsert)
 // ═══════════════════════════════════════════════════════════════
-router.put('/:cliente_id', async (req, res) => {
+router.put('/:cliente_id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const {

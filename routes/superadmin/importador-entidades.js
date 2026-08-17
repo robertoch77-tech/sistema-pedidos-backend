@@ -3,7 +3,7 @@ const router  = express.Router();
 const multer  = require('multer');
 const XLSX    = require('xlsx');
 const pool    = require('../../db');
-const { verificarCualquierToken } = require('./authMiddleware');
+const { verificarCualquierToken, verificarClienteId } = require('./authMiddleware');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -68,7 +68,7 @@ function analizarArchivo(buffer, filaEncabezadoManual = null) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 // POST /clientes/:clienteId/analizar
-router.post('/clientes/:clienteId/analizar', upload.single('archivo'), (req, res) => {
+router.post('/clientes/:clienteId/analizar', verificarClienteId, upload.single('archivo'), (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ mensaje: 'No se recibió archivo' });
     const { columnas, muestra, total_filas } = analizarArchivo(req.file.buffer);
@@ -79,7 +79,7 @@ router.post('/clientes/:clienteId/analizar', upload.single('archivo'), (req, res
 });
 
 // POST /clientes/:clienteId/importar
-router.post('/clientes/:clienteId/importar', upload.single('archivo'), async (req, res) => {
+router.post('/clientes/:clienteId/importar', verificarClienteId, upload.single('archivo'), async (req, res) => {
   const { clienteId } = req.params;
   let mapeo, conflicto;
   try {
@@ -190,7 +190,7 @@ router.post('/clientes/:clienteId/importar', upload.single('archivo'), async (re
 // ══════════════════════════════════════════════════════════════════════════════
 
 // POST /proveedores/:clienteId/analizar
-router.post('/proveedores/:clienteId/analizar', upload.single('archivo'), (req, res) => {
+router.post('/proveedores/:clienteId/analizar', verificarClienteId, upload.single('archivo'), (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ mensaje: 'No se recibió archivo' });
     const { columnas, muestra, total_filas } = analizarArchivo(req.file.buffer);
@@ -201,7 +201,7 @@ router.post('/proveedores/:clienteId/analizar', upload.single('archivo'), (req, 
 });
 
 // POST /proveedores/:clienteId/importar
-router.post('/proveedores/:clienteId/importar', upload.single('archivo'), async (req, res) => {
+router.post('/proveedores/:clienteId/importar', verificarClienteId, upload.single('archivo'), async (req, res) => {
   const { clienteId } = req.params;
   let mapeo, conflicto;
   try {

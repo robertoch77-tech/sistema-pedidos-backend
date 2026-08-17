@@ -1,7 +1,7 @@
 const express = require('express');
 const router  = express.Router();
 const pool    = require('../../db');
-const { verificarCualquierToken } = require('./authMiddleware');
+const { verificarCualquierToken, verificarClienteId } = require('./authMiddleware');
 
 async function asegurarTablas() {
   try {
@@ -87,7 +87,7 @@ asegurarTablas();
 router.use(verificarCualquierToken);
 
 // ─── DASHBOARD ────────────────────────────────────────────────
-router.get('/:cliente_id/dashboard', async (req, res) => {
+router.get('/:cliente_id/dashboard', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
 
@@ -124,7 +124,7 @@ router.get('/:cliente_id/dashboard', async (req, res) => {
 });
 
 // ─── GET LISTA ────────────────────────────────────────────────
-router.get('/:cliente_id', async (req, res) => {
+router.get('/:cliente_id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const { buscar = '', activo, con_deuda, page = '1', limit = '25' } = req.query;
@@ -179,7 +179,7 @@ router.get('/:cliente_id', async (req, res) => {
 });
 
 // ─── GET DETALLE ──────────────────────────────────────────────
-router.get('/:cliente_id/:id', async (req, res) => {
+router.get('/:cliente_id/:id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, id } = req.params;
     const r = await pool.query(
@@ -194,7 +194,7 @@ router.get('/:cliente_id/:id', async (req, res) => {
 });
 
 // ─── POST CREAR ───────────────────────────────────────────────
-router.post('/:cliente_id', async (req, res) => {
+router.post('/:cliente_id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const {
@@ -240,7 +240,7 @@ router.post('/:cliente_id', async (req, res) => {
 });
 
 // ─── PUT ACTUALIZAR ───────────────────────────────────────────
-router.put('/:cliente_id/:id', async (req, res) => {
+router.put('/:cliente_id/:id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, id } = req.params;
     const {
@@ -285,7 +285,7 @@ router.put('/:cliente_id/:id', async (req, res) => {
 });
 
 // ─── DELETE BAJA LÓGICA ───────────────────────────────────────
-router.delete('/:cliente_id/:id', async (req, res) => {
+router.delete('/:cliente_id/:id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, id } = req.params;
     await pool.query(
@@ -300,7 +300,7 @@ router.delete('/:cliente_id/:id', async (req, res) => {
 });
 
 // ─── GET MOVIMIENTOS ──────────────────────────────────────────
-router.get('/:cliente_id/:id/movimientos', async (req, res) => {
+router.get('/:cliente_id/:id/movimientos', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, id } = req.params;
     const { fecha_desde, fecha_hasta, tipo, buscar = '', page = '1', limit = '25' } = req.query;
@@ -345,7 +345,7 @@ router.get('/:cliente_id/:id/movimientos', async (req, res) => {
 });
 
 // ─── POST MOVIMIENTO ──────────────────────────────────────────
-router.post('/:cliente_id/:id/movimiento', async (req, res) => {
+router.post('/:cliente_id/:id/movimiento', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, id } = req.params;
     const {
@@ -409,7 +409,7 @@ router.post('/:cliente_id/:id/movimiento', async (req, res) => {
 });
 
 // ─── PUT BLOQUEAR/DESBLOQUEAR ─────────────────────────────────
-router.put('/:cliente_id/:id/bloquear', async (req, res) => {
+router.put('/:cliente_id/:id/bloquear', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, id } = req.params;
     const { bloqueado = true, motivo_bloqueo = '' } = req.body;

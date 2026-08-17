@@ -1,12 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../../db');
-const { verificarCualquierToken } = require('./authMiddleware');
+const { verificarCualquierToken, verificarClienteId } = require('./authMiddleware');
 
 router.use(verificarCualquierToken);
 
 // ─── GET /:cid/pedidos ────────────────────────────────────────
-router.get('/:cid/pedidos', async (req, res) => {
+router.get('/:cid/pedidos', verificarClienteId, async (req, res) => {
   try {
     const { cid } = req.params;
     const { estado, page = 1, limit = 20 } = req.query;
@@ -39,7 +39,7 @@ router.get('/:cid/pedidos', async (req, res) => {
 });
 
 // ─── GET /:cid/pedidos/:id ────────────────────────────────────
-router.get('/:cid/pedidos/:id', async (req, res) => {
+router.get('/:cid/pedidos/:id', verificarClienteId, async (req, res) => {
   try {
     const { cid, id } = req.params;
     const r = await pool.query(
@@ -55,7 +55,7 @@ router.get('/:cid/pedidos/:id', async (req, res) => {
 });
 
 // ─── PUT /:cid/pedidos/:id/estado ────────────────────────────
-router.put('/:cid/pedidos/:id/estado', async (req, res) => {
+router.put('/:cid/pedidos/:id/estado', verificarClienteId, async (req, res) => {
   try {
     const { cid, id } = req.params;
     const { estado } = req.body;
@@ -76,7 +76,7 @@ router.put('/:cid/pedidos/:id/estado', async (req, res) => {
 });
 
 // ─── GET /:cid/config ─────────────────────────────────────────
-router.get('/:cid/config', async (req, res) => {
+router.get('/:cid/config', verificarClienteId, async (req, res) => {
   try {
     const { cid } = req.params;
     const r = await pool.query(
@@ -102,7 +102,7 @@ router.get('/:cid/config', async (req, res) => {
 });
 
 // ─── PUT /:cid/config ─────────────────────────────────────────
-router.put('/:cid/config', async (req, res) => {
+router.put('/:cid/config', verificarClienteId, async (req, res) => {
   try {
     const { cid } = req.params;
     const { tipo, activo, mostrar_stock, whatsapp, banners,
@@ -147,7 +147,7 @@ router.put('/:cid/config', async (req, res) => {
 });
 
 // ─── PUT /:cid/productos/:prod_id/destacado ───────────────────
-router.put('/:cid/productos/:prod_id/destacado', async (req, res) => {
+router.put('/:cid/productos/:prod_id/destacado', verificarClienteId, async (req, res) => {
   try {
     const { cid, prod_id } = req.params;
     const r = await pool.query(
@@ -166,7 +166,7 @@ router.put('/:cid/productos/:prod_id/destacado', async (req, res) => {
 });
 
 // ─── PUT /:cid/autos/:auto_id/destacado ──────────────────────
-router.put('/:cid/autos/:auto_id/destacado', async (req, res) => {
+router.put('/:cid/autos/:auto_id/destacado', verificarClienteId, async (req, res) => {
   try {
     const { cid, auto_id } = req.params;
     const r = await pool.query(

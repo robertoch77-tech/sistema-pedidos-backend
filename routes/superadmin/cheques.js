@@ -1,7 +1,7 @@
 const express = require('express');
 const router  = express.Router();
 const pool    = require('../../db');
-const { verificarCualquierToken } = require('./authMiddleware');
+const { verificarCualquierToken, verificarClienteId } = require('./authMiddleware');
 
 async function asegurarTablas() {
   try {
@@ -75,7 +75,7 @@ router.use(verificarCualquierToken);
 function n(v) { return parseFloat(v) || 0; }
 
 // ─── GET /:cliente_id — lista con filtros ─────────────────────
-router.get('/:cliente_id', async (req, res) => {
+router.get('/:cliente_id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const { tipo, origen, estado, fecha_cobro_desde, fecha_cobro_hasta, banco, buscar, page = 1, limit = 25 } = req.query;
@@ -116,7 +116,7 @@ router.get('/:cliente_id', async (req, res) => {
 });
 
 // ─── GET /:cliente_id/resumen ─────────────────────────────────
-router.get('/:cliente_id/resumen', async (req, res) => {
+router.get('/:cliente_id/resumen', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
 
@@ -166,7 +166,7 @@ router.get('/:cliente_id/resumen', async (req, res) => {
 });
 
 // ─── GET /:cliente_id/:id — detalle ──────────────────────────
-router.get('/:cliente_id/:id', async (req, res) => {
+router.get('/:cliente_id/:id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, id } = req.params;
     const r = await pool.query(
@@ -182,7 +182,7 @@ router.get('/:cliente_id/:id', async (req, res) => {
 });
 
 // ─── POST /:cliente_id — crear cheque ────────────────────────
-router.post('/:cliente_id', async (req, res) => {
+router.post('/:cliente_id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const {
@@ -214,7 +214,7 @@ router.post('/:cliente_id', async (req, res) => {
 });
 
 // ─── PUT /:cliente_id/:id/estado ──────────────────────────────
-router.put('/:cliente_id/:id/estado', async (req, res) => {
+router.put('/:cliente_id/:id/estado', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, id } = req.params;
     const {
@@ -265,7 +265,7 @@ router.put('/:cliente_id/:id/estado', async (req, res) => {
 });
 
 // ─── DELETE /:cliente_id/:id ──────────────────────────────────
-router.delete('/:cliente_id/:id', async (req, res) => {
+router.delete('/:cliente_id/:id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, id } = req.params;
     const check = await pool.query(

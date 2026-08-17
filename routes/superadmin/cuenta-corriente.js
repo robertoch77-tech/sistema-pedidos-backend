@@ -1,7 +1,7 @@
 const express = require('express');
 const router  = express.Router();
 const pool    = require('../../db');
-const { verificarCualquierToken } = require('./authMiddleware');
+const { verificarCualquierToken, verificarClienteId } = require('./authMiddleware');
 
 // ─── TABLAS ───────────────────────────────────────────────────
 async function asegurarTablas() {
@@ -105,7 +105,7 @@ router.use(verificarCualquierToken);
 function n(v) { return parseFloat(v) || 0; }
 
 // ─── GET /resumen/:cliente_id ─────────────────────────────────
-router.get('/resumen/:cliente_id', async (req, res) => {
+router.get('/resumen/:cliente_id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
 
@@ -147,7 +147,7 @@ router.get('/resumen/:cliente_id', async (req, res) => {
 });
 
 // ─── GET /clientes/:cliente_id ────────────────────────────────
-router.get('/clientes/:cliente_id', async (req, res) => {
+router.get('/clientes/:cliente_id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const { buscar, con_deuda, vencida, fecha_desde, fecha_hasta,
@@ -198,7 +198,7 @@ router.get('/clientes/:cliente_id', async (req, res) => {
 });
 
 // ─── GET /proveedores/:cliente_id ─────────────────────────────
-router.get('/proveedores/:cliente_id', async (req, res) => {
+router.get('/proveedores/:cliente_id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const { buscar, con_deuda, vencida,
@@ -241,7 +241,7 @@ router.get('/proveedores/:cliente_id', async (req, res) => {
 });
 
 // ─── GET /clientes/:cliente_id/:cuenta_id/movimientos ─────────
-router.get('/clientes/:cliente_id/:cuenta_id/movimientos', async (req, res) => {
+router.get('/clientes/:cliente_id/:cuenta_id/movimientos', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, cuenta_id } = req.params;
     const { fecha_desde, fecha_hasta, tipo, page = 1, limit = 50 } = req.query;
@@ -291,7 +291,7 @@ router.get('/clientes/:cliente_id/:cuenta_id/movimientos', async (req, res) => {
 });
 
 // ─── GET /proveedores/:cliente_id/:proveedor_id/movimientos ───
-router.get('/proveedores/:cliente_id/:proveedor_id/movimientos', async (req, res) => {
+router.get('/proveedores/:cliente_id/:proveedor_id/movimientos', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, proveedor_id } = req.params;
     const { fecha_desde, fecha_hasta, tipo, page = 1, limit = 50 } = req.query;
@@ -340,7 +340,7 @@ router.get('/proveedores/:cliente_id/:proveedor_id/movimientos', async (req, res
 });
 
 // ─── POST /clientes/:cliente_id/cobro ─────────────────────────
-router.post('/clientes/:cliente_id/cobro', async (req, res) => {
+router.post('/clientes/:cliente_id/cobro', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const { cuenta_corriente_id, monto_total, fecha, medios_pago = [], cancela = [], observaciones } = req.body;
@@ -474,7 +474,7 @@ router.post('/clientes/:cliente_id/cobro', async (req, res) => {
 });
 
 // ─── POST /proveedores/:cliente_id/pago ───────────────────────
-router.post('/proveedores/:cliente_id/pago', async (req, res) => {
+router.post('/proveedores/:cliente_id/pago', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const { proveedor_id, monto_total, fecha, medios_pago = [], cancela = [], observaciones } = req.body;
@@ -563,7 +563,7 @@ router.post('/proveedores/:cliente_id/pago', async (req, res) => {
 });
 
 // ─── POST /clientes/:cliente_id/nota-credito ──────────────────
-router.post('/clientes/:cliente_id/nota-credito', async (req, res) => {
+router.post('/clientes/:cliente_id/nota-credito', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const { cuenta_corriente_id, monto, descripcion, numero_comprobante } = req.body;
@@ -592,7 +592,7 @@ router.post('/clientes/:cliente_id/nota-credito', async (req, res) => {
 });
 
 // ─── POST /clientes/:cliente_id/nota-debito ───────────────────
-router.post('/clientes/:cliente_id/nota-debito', async (req, res) => {
+router.post('/clientes/:cliente_id/nota-debito', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const { cuenta_corriente_id, monto, descripcion, numero_comprobante } = req.body;

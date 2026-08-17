@@ -1,7 +1,7 @@
 const express = require('express');
 const router  = express.Router();
 const pool    = require('../../db');
-const { verificarCualquierToken } = require('./authMiddleware');
+const { verificarCualquierToken, verificarClienteId } = require('./authMiddleware');
 
 // ── Asegurar tablas ────────────────────────────────────────────
 async function asegurarTablas() {
@@ -84,7 +84,7 @@ router.use(verificarCualquierToken);
 // ═══════════════════════════════════════════════════════════════
 // GET /:cliente_id/dashboard — métricas
 // ═══════════════════════════════════════════════════════════════
-router.get('/:cliente_id/dashboard', async (req, res) => {
+router.get('/:cliente_id/dashboard', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
 
@@ -123,7 +123,7 @@ router.get('/:cliente_id/dashboard', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // GET /:cliente_id — listar con filtros y paginación
 // ═══════════════════════════════════════════════════════════════
-router.get('/:cliente_id', async (req, res) => {
+router.get('/:cliente_id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const {
@@ -192,7 +192,7 @@ router.get('/:cliente_id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // POST /:cliente_id — crear remito
 // ═══════════════════════════════════════════════════════════════
-router.post('/:cliente_id', async (req, res) => {
+router.post('/:cliente_id', verificarClienteId, async (req, res) => {
   const { cliente_id } = req.params;
   const {
     tipo = 'salida',
@@ -289,7 +289,7 @@ router.post('/:cliente_id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // GET /:cliente_id/:id — detalle con items
 // ═══════════════════════════════════════════════════════════════
-router.get('/:cliente_id/:id', async (req, res) => {
+router.get('/:cliente_id/:id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, id } = req.params;
 
@@ -326,7 +326,7 @@ router.get('/:cliente_id/:id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // PUT /:cliente_id/:id/estado — cambiar estado
 // ═══════════════════════════════════════════════════════════════
-router.put('/:cliente_id/:id/estado', async (req, res) => {
+router.put('/:cliente_id/:id/estado', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, id } = req.params;
     const { estado, firma_receptor = '', aclaracion_receptor = '' } = req.body;
@@ -353,7 +353,7 @@ router.put('/:cliente_id/:id/estado', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // PUT /:cliente_id/:id/confirmar-entrega
 // ═══════════════════════════════════════════════════════════════
-router.put('/:cliente_id/:id/confirmar-entrega', async (req, res) => {
+router.put('/:cliente_id/:id/confirmar-entrega', verificarClienteId, async (req, res) => {
   const { cliente_id, id } = req.params;
   const {
     firma_receptor = '',
@@ -428,7 +428,7 @@ router.put('/:cliente_id/:id/confirmar-entrega', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // PUT /:cliente_id/:id/convertir-factura
 // ═══════════════════════════════════════════════════════════════
-router.put('/:cliente_id/:id/convertir-factura', async (req, res) => {
+router.put('/:cliente_id/:id/convertir-factura', verificarClienteId, async (req, res) => {
   const { cliente_id, id } = req.params;
 
   try {

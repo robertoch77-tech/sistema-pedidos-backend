@@ -1,7 +1,7 @@
 const express = require('express');
 const router  = express.Router();
 const pool    = require('../../db');
-const { verificarCualquierToken } = require('./authMiddleware');
+const { verificarCualquierToken, verificarClienteId } = require('./authMiddleware');
 
 router.use(verificarCualquierToken);
 
@@ -20,7 +20,7 @@ function periodoAnterior(desde, hasta) {
 // ═══════════════════════════════════════════════════════════════
 // GET /ventas/:cliente_id
 // ═══════════════════════════════════════════════════════════════
-router.get('/ventas/:cliente_id', async (req, res) => {
+router.get('/ventas/:cliente_id', verificarClienteId, async (req, res) => {
   const { cliente_id } = req.params;
   const {
     fecha_desde   = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10),
@@ -136,7 +136,7 @@ router.get('/ventas/:cliente_id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // GET /stock/:cliente_id
 // ═══════════════════════════════════════════════════════════════
-router.get('/stock/:cliente_id', async (req, res) => {
+router.get('/stock/:cliente_id', verificarClienteId, async (req, res) => {
   const { cliente_id } = req.params;
   const { proveedor_id, rubro } = req.query;
 
@@ -246,7 +246,7 @@ router.get('/stock/:cliente_id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // GET /iva/:cliente_id
 // ═══════════════════════════════════════════════════════════════
-router.get('/iva/:cliente_id', async (req, res) => {
+router.get('/iva/:cliente_id', verificarClienteId, async (req, res) => {
   const { cliente_id } = req.params;
   const { periodo = new Date().toISOString().slice(0, 7) } = req.query; // YYYY-MM
 
@@ -350,7 +350,7 @@ router.get('/iva/:cliente_id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // GET /cobranzas/:cliente_id
 // ═══════════════════════════════════════════════════════════════
-router.get('/cobranzas/:cliente_id', async (req, res) => {
+router.get('/cobranzas/:cliente_id', verificarClienteId, async (req, res) => {
   const { cliente_id } = req.params;
   const {
     fecha_desde = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10),
@@ -449,7 +449,7 @@ router.get('/cobranzas/:cliente_id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // GET /rentabilidad/:cliente_id
 // ═══════════════════════════════════════════════════════════════
-router.get('/rentabilidad/:cliente_id', async (req, res) => {
+router.get('/rentabilidad/:cliente_id', verificarClienteId, async (req, res) => {
   const { cliente_id } = req.params;
   const {
     fecha_desde = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10),

@@ -1,7 +1,7 @@
 const express  = require('express');
 const router   = express.Router();
 const pool     = require('../../db');
-const { verificarCualquierToken } = require('./authMiddleware');
+const { verificarCualquierToken, verificarClienteId } = require('./authMiddleware');
 const multer   = require('multer');
 const xlsx     = require('xlsx');
 
@@ -106,7 +106,7 @@ function n(v) { return parseFloat(v) || 0; }
 // ═══════════════════════════════════════════════════════════════
 // GET /:cid/dashboard
 // ═══════════════════════════════════════════════════════════════
-router.get('/:cid/dashboard', async (req, res) => {
+router.get('/:cid/dashboard', verificarClienteId, async (req, res) => {
   try {
     const { cid } = req.params;
     const mesInicio = new Date();
@@ -158,7 +158,7 @@ router.get('/:cid/dashboard', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // GET /:cid/vehiculos — lista paginada con filtros
 // ═══════════════════════════════════════════════════════════════
-router.get('/:cid/vehiculos', async (req, res) => {
+router.get('/:cid/vehiculos', verificarClienteId, async (req, res) => {
   try {
     const { cid } = req.params;
     const {
@@ -220,7 +220,7 @@ router.get('/:cid/vehiculos', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // POST /:cid/vehiculos — crear vehículo
 // ═══════════════════════════════════════════════════════════════
-router.post('/:cid/vehiculos', async (req, res) => {
+router.post('/:cid/vehiculos', verificarClienteId, async (req, res) => {
   try {
     const { cid } = req.params;
     const {
@@ -268,7 +268,7 @@ router.post('/:cid/vehiculos', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // PUT /:cid/vehiculos/:id — editar vehículo
 // ═══════════════════════════════════════════════════════════════
-router.put('/:cid/vehiculos/:id', async (req, res) => {
+router.put('/:cid/vehiculos/:id', verificarClienteId, async (req, res) => {
   try {
     const { cid, id } = req.params;
     const {
@@ -331,7 +331,7 @@ router.put('/:cid/vehiculos/:id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // PUT /:cid/vehiculos/:id/estado
 // ═══════════════════════════════════════════════════════════════
-router.put('/:cid/vehiculos/:id/estado', async (req, res) => {
+router.put('/:cid/vehiculos/:id/estado', verificarClienteId, async (req, res) => {
   try {
     const { cid, id } = req.params;
     const { estado } = req.body;
@@ -358,7 +358,7 @@ router.put('/:cid/vehiculos/:id/estado', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // POST /:cid/ventas — registrar venta
 // ═══════════════════════════════════════════════════════════════
-router.post('/:cid/ventas', async (req, res) => {
+router.post('/:cid/ventas', verificarClienteId, async (req, res) => {
   const { cid } = req.params;
   const {
     vehiculo_id,
@@ -606,7 +606,7 @@ router.post('/:cid/ventas', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // GET /:cid/ventas — historial de ventas
 // ═══════════════════════════════════════════════════════════════
-router.get('/:cid/ventas', async (req, res) => {
+router.get('/:cid/ventas', verificarClienteId, async (req, res) => {
   try {
     const { cid } = req.params;
     const {
@@ -658,7 +658,7 @@ router.get('/:cid/ventas', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // GET /:cid/socios
 // ═══════════════════════════════════════════════════════════════
-router.get('/:cid/socios', async (req, res) => {
+router.get('/:cid/socios', verificarClienteId, async (req, res) => {
   try {
     const { cid } = req.params;
     const result = await pool.query(
@@ -683,7 +683,7 @@ router.get('/:cid/socios', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // POST /:cid/socios
 // ═══════════════════════════════════════════════════════════════
-router.post('/:cid/socios', async (req, res) => {
+router.post('/:cid/socios', verificarClienteId, async (req, res) => {
   try {
     const { cid } = req.params;
     const {
@@ -710,7 +710,7 @@ router.post('/:cid/socios', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // PUT /:cid/socios/:id
 // ═══════════════════════════════════════════════════════════════
-router.put('/:cid/socios/:id', async (req, res) => {
+router.put('/:cid/socios/:id', verificarClienteId, async (req, res) => {
   try {
     const { cid, id } = req.params;
     const { nombre, telefono, comision_default, tipo_comision, activo } = req.body;
@@ -742,7 +742,7 @@ router.put('/:cid/socios/:id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // GET /:cid/liquidaciones
 // ═══════════════════════════════════════════════════════════════
-router.get('/:cid/liquidaciones', async (req, res) => {
+router.get('/:cid/liquidaciones', verificarClienteId, async (req, res) => {
   try {
     const { cid } = req.params;
     const result = await pool.query(
@@ -764,7 +764,7 @@ router.get('/:cid/liquidaciones', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // PUT /:cid/liquidaciones/:id/pagar
 // ═══════════════════════════════════════════════════════════════
-router.put('/:cid/liquidaciones/:id/pagar', async (req, res) => {
+router.put('/:cid/liquidaciones/:id/pagar', verificarClienteId, async (req, res) => {
   const { cid, id } = req.params;
   try {
     const liqRes = await pool.query(
@@ -819,7 +819,7 @@ router.put('/:cid/liquidaciones/:id/pagar', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // POST /:cid/vehiculos/importar — importar desde Excel
 // ═══════════════════════════════════════════════════════════════
-router.post('/:cid/vehiculos/importar', upload.single('archivo'), async (req, res) => {
+router.post('/:cid/vehiculos/importar', verificarClienteId, upload.single('archivo'), async (req, res) => {
   const { cid } = req.params;
 
   if (!req.file) return res.status(400).json({ mensaje: 'Archivo requerido' });

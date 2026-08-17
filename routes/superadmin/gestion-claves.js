@@ -2,9 +2,10 @@ const express = require('express');
 const router  = express.Router();
 const bcrypt  = require('bcryptjs');
 const pool    = require('../../db');
-const { verificarCualquierToken } = require('./authMiddleware');
+const { verificarCualquierToken, verificarSoloSuperadmin } = require('./authMiddleware');
 
 router.use(verificarCualquierToken);
+router.use(verificarSoloSuperadmin);
 
 // Obtener usuario_id del superadmin a partir del token
 async function getSuperadminId(req) {

@@ -1,7 +1,7 @@
 const express = require('express');
 const router  = express.Router();
 const pool    = require('../../db');
-const { verificarCualquierToken } = require('./authMiddleware');
+const { verificarCualquierToken, verificarClienteId } = require('./authMiddleware');
 
 router.use(verificarCualquierToken);
 
@@ -12,7 +12,7 @@ function n(v) { return parseFloat(v) || 0; }
 // ═══════════════════════════════════════════════════════
 
 // GET /fijos/:cliente_id
-router.get('/fijos/:cliente_id', async (req, res) => {
+router.get('/fijos/:cliente_id', verificarClienteId, async (req, res) => {
   const { cliente_id } = req.params;
   const { mes, anio, categoria, activo } = req.query;
 
@@ -46,7 +46,7 @@ router.get('/fijos/:cliente_id', async (req, res) => {
 });
 
 // POST /fijos/:cliente_id
-router.post('/fijos/:cliente_id', async (req, res) => {
+router.post('/fijos/:cliente_id', verificarClienteId, async (req, res) => {
   const { cliente_id } = req.params;
   const { descripcion, monto, categoria, periodicidad, mes, anio, observaciones } = req.body;
 
@@ -66,7 +66,7 @@ router.post('/fijos/:cliente_id', async (req, res) => {
 });
 
 // PUT /fijos/:cliente_id/:id
-router.put('/fijos/:cliente_id/:id', async (req, res) => {
+router.put('/fijos/:cliente_id/:id', verificarClienteId, async (req, res) => {
   const { cliente_id, id } = req.params;
   const { descripcion, monto, categoria, periodicidad, mes, anio, observaciones, activo } = req.body;
 
@@ -93,7 +93,7 @@ router.put('/fijos/:cliente_id/:id', async (req, res) => {
 });
 
 // DELETE /fijos/:cliente_id/:id — soft delete
-router.delete('/fijos/:cliente_id/:id', async (req, res) => {
+router.delete('/fijos/:cliente_id/:id', verificarClienteId, async (req, res) => {
   const { cliente_id, id } = req.params;
 
   try {
@@ -114,7 +114,7 @@ router.delete('/fijos/:cliente_id/:id', async (req, res) => {
 // ═══════════════════════════════════════════════════════
 
 // GET /variables/:cliente_id
-router.get('/variables/:cliente_id', async (req, res) => {
+router.get('/variables/:cliente_id', verificarClienteId, async (req, res) => {
   const { cliente_id } = req.params;
   const {
     fecha_desde,
@@ -165,7 +165,7 @@ router.get('/variables/:cliente_id', async (req, res) => {
 });
 
 // POST /variables/:cliente_id
-router.post('/variables/:cliente_id', async (req, res) => {
+router.post('/variables/:cliente_id', verificarClienteId, async (req, res) => {
   const { cliente_id } = req.params;
   const { descripcion, monto, categoria, fecha, comprobante, proveedor_id, observaciones } = req.body;
 
@@ -185,7 +185,7 @@ router.post('/variables/:cliente_id', async (req, res) => {
 });
 
 // PUT /variables/:cliente_id/:id
-router.put('/variables/:cliente_id/:id', async (req, res) => {
+router.put('/variables/:cliente_id/:id', verificarClienteId, async (req, res) => {
   const { cliente_id, id } = req.params;
   const { descripcion, monto, categoria, fecha, comprobante, proveedor_id, observaciones } = req.body;
 
@@ -211,7 +211,7 @@ router.put('/variables/:cliente_id/:id', async (req, res) => {
 });
 
 // DELETE /variables/:cliente_id/:id — hard delete
-router.delete('/variables/:cliente_id/:id', async (req, res) => {
+router.delete('/variables/:cliente_id/:id', verificarClienteId, async (req, res) => {
   const { cliente_id, id } = req.params;
 
   try {
@@ -231,7 +231,7 @@ router.delete('/variables/:cliente_id/:id', async (req, res) => {
 // ═══════════════════════════════════════════════════════
 
 // GET /resumen/:cliente_id
-router.get('/resumen/:cliente_id', async (req, res) => {
+router.get('/resumen/:cliente_id', verificarClienteId, async (req, res) => {
   const { cliente_id } = req.params;
   const now = new Date();
   const {

@@ -3,7 +3,7 @@ const router   = express.Router();
 const multer   = require('multer');
 const XLSX     = require('xlsx');
 const pool     = require('../../db');
-const { verificarCualquierToken } = require('./authMiddleware');
+const { verificarCualquierToken, verificarClienteId, verificarClienteIdBody } = require('./authMiddleware');
 const { registrarCambios, registrarEvento } = require('./historial-helper');
 const { buildSearchConditions } = require('./search-helper');
 
@@ -269,7 +269,7 @@ router.post('/analizar', upload.single('archivo'), async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // ENDPOINT 2 — POST /mapear
 // ═══════════════════════════════════════════════════════════════
-router.post('/mapear', async (req, res) => {
+router.post('/mapear', verificarClienteIdBody, async (req, res) => {
   try {
     const { cliente_id, proveedor_nombre, mapeo, fila_encabezado = 0 } = req.body;
     if (!cliente_id || !proveedor_nombre || !mapeo) {
@@ -324,7 +324,7 @@ router.post('/mapear', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // ENDPOINT 3 — POST /comparar
 // ═══════════════════════════════════════════════════════════════
-router.post('/comparar', upload.single('archivo'), async (req, res) => {
+router.post('/comparar', upload.single('archivo'), verificarClienteIdBody, async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ mensaje: 'Se requiere un archivo Excel' });
 
@@ -434,7 +434,7 @@ router.post('/comparar', upload.single('archivo'), async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // ENDPOINT 4 — POST /aplicar
 // ═══════════════════════════════════════════════════════════════
-router.post('/aplicar', async (req, res) => {
+router.post('/aplicar', verificarClienteIdBody, async (req, res) => {
   try {
     const { cliente_id, proveedor_id, productos_aprobados = [] } = req.body;
     if (!cliente_id || !proveedor_id) {
@@ -584,7 +584,7 @@ router.post('/aplicar', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // ENDPOINT 5 — GET /productos/:cliente_id
 // ═══════════════════════════════════════════════════════════════
-router.get('/productos/:cliente_id', async (req, res) => {
+router.get('/productos/:cliente_id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const {
@@ -694,7 +694,7 @@ router.get('/productos/:cliente_id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // ENDPOINT 5b — GET /productos/:cliente_id/exportar
 // ═══════════════════════════════════════════════════════════════
-router.get('/productos/:cliente_id/exportar', async (req, res) => {
+router.get('/productos/:cliente_id/exportar', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const {
@@ -744,7 +744,7 @@ router.get('/productos/:cliente_id/exportar', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // ENDPOINT 6 — GET /productos/:cliente_id/filtros
 // ═══════════════════════════════════════════════════════════════
-router.get('/productos/:cliente_id/filtros', async (req, res) => {
+router.get('/productos/:cliente_id/filtros', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
 
@@ -786,7 +786,7 @@ router.get('/productos/:cliente_id/filtros', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // ENDPOINT 7 — POST /productos/:cliente_id  (crear producto)
 // ═══════════════════════════════════════════════════════════════
-router.post('/productos/:cliente_id', async (req, res) => {
+router.post('/productos/:cliente_id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const {
@@ -833,7 +833,7 @@ router.post('/productos/:cliente_id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // ENDPOINT 8 — PUT /productos/:cliente_id/:id  (editar producto)
 // ═══════════════════════════════════════════════════════════════
-router.put('/productos/:cliente_id/:id', async (req, res) => {
+router.put('/productos/:cliente_id/:id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, id } = req.params;
     const {
@@ -883,7 +883,7 @@ router.put('/productos/:cliente_id/:id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // ENDPOINT 9 — DELETE /productos/:cliente_id/:id  (desactivar)
 // ═══════════════════════════════════════════════════════════════
-router.delete('/productos/:cliente_id/:id', async (req, res) => {
+router.delete('/productos/:cliente_id/:id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, id } = req.params;
     const r = await pool.query(
@@ -902,7 +902,7 @@ router.delete('/productos/:cliente_id/:id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // ENDPOINT 10 — DELETE /productos  (eliminar masivo por IDs o filtros)
 // ═══════════════════════════════════════════════════════════════
-router.delete('/productos', async (req, res) => {
+router.delete('/productos', verificarClienteIdBody, async (req, res) => {
   try {
     const { cliente_id, ids, buscar, proveedor_id, marca, rubro, activo,
             fecha_desde, fecha_hasta, fecha_tipo } = req.body;
@@ -1024,7 +1024,7 @@ router.post('/analizar-libre', upload.single('archivo'), async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // ENDPOINT LIBRE 2 — GET /mapeo-proveedor/:cliente_id/:proveedor
 // ═══════════════════════════════════════════════════════════════
-router.get('/mapeo-proveedor/:cliente_id/:proveedor', async (req, res) => {
+router.get('/mapeo-proveedor/:cliente_id/:proveedor', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, proveedor } = req.params;
     const r = await pool.query(
@@ -1043,7 +1043,7 @@ router.get('/mapeo-proveedor/:cliente_id/:proveedor', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // ENDPOINT LIBRE 3 — POST /mapeo-proveedor/:cliente_id
 // ═══════════════════════════════════════════════════════════════
-router.post('/mapeo-proveedor/:cliente_id', async (req, res) => {
+router.post('/mapeo-proveedor/:cliente_id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const { proveedor, mapeo } = req.body;
@@ -1077,7 +1077,7 @@ router.post('/mapeo-proveedor/:cliente_id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // ENDPOINT LIBRE 3b — DELETE /mapeo-proveedor/:cliente_id/:clave
 // ═══════════════════════════════════════════════════════════════
-router.delete('/mapeo-proveedor/:cliente_id/:clave', async (req, res) => {
+router.delete('/mapeo-proveedor/:cliente_id/:clave', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, clave } = req.params;
     await pool.query(
@@ -1094,7 +1094,7 @@ router.delete('/mapeo-proveedor/:cliente_id/:clave', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // ENDPOINT LIBRE 4 — POST /aplicar-libre
 // ═══════════════════════════════════════════════════════════════
-router.post('/aplicar-libre', (req, res, next) => { req.setTimeout(300000); next(); }, async (req, res) => {
+router.post('/aplicar-libre', (req, res, next) => { req.setTimeout(300000); next(); }, verificarClienteIdBody, async (req, res) => {
   try {
     const { cliente_id, proveedor_nombre, archivo_base64, mapeo } = req.body;
     if (!cliente_id || !archivo_base64 || !mapeo) return res.status(400).json({ mensaje: 'Faltan datos obligatorios' });
@@ -1199,7 +1199,7 @@ router.post('/aplicar-libre', (req, res, next) => { req.setTimeout(300000); next
 // ═══════════════════════════════════════════════════════════════
 // ENDPOINT 10 — PUT /actualizar-precios  (batch price update)
 // ═══════════════════════════════════════════════════════════════
-router.put('/actualizar-precios', async (req, res) => {
+router.put('/actualizar-precios', verificarClienteIdBody, async (req, res) => {
   const { cliente_id, productos } = req.body;
   if (!cliente_id || !Array.isArray(productos) || productos.length === 0)
     return res.status(400).json({ mensaje: 'Datos incompletos' });
@@ -1256,7 +1256,7 @@ router.put('/actualizar-precios', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // GET /productos/:cliente_id/:id  — producto individual
 // ═══════════════════════════════════════════════════════════════
-router.get('/productos/:cliente_id/:id', async (req, res) => {
+router.get('/productos/:cliente_id/:id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, id } = req.params;
     const r = await pool.query(
@@ -1276,7 +1276,7 @@ router.get('/productos/:cliente_id/:id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // GET /productos/:cliente_id/:id/historial  — historial precios
 // ═══════════════════════════════════════════════════════════════
-router.get('/productos/:cliente_id/:id/historial', async (req, res) => {
+router.get('/productos/:cliente_id/:id/historial', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, id } = req.params;
     const r = await pool.query(
@@ -1295,7 +1295,7 @@ router.get('/productos/:cliente_id/:id/historial', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // POST /analizar-diff  — clasificar sin importar (paso 3 UI)
 // ═══════════════════════════════════════════════════════════════
-router.post('/analizar-diff', upload.single('archivo'), async (req, res) => {
+router.post('/analizar-diff', upload.single('archivo'), verificarClienteIdBody, async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ mensaje: 'Se requiere un archivo Excel' });
     const { cliente_id, proveedor } = req.body;
@@ -1511,7 +1511,7 @@ router.post('/analizar-v2', upload.single('archivo'), async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // POST /importar-v2  — importar con selección de hojas
 // ═══════════════════════════════════════════════════════════════
-router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next(); }, upload.single('archivo'), async (req, res) => {
+router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next(); }, upload.single('archivo'), verificarClienteIdBody, async (req, res) => {
   const client = await pool.connect();
   try {
     // Aceptar archivo subido O temp_id del análisis previo
@@ -1700,7 +1700,7 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
 // ═══════════════════════════════════════════════════════════════
 // PUT /actualizar-precios-v2
 // ═══════════════════════════════════════════════════════════════
-router.put('/actualizar-precios-v2', async (req, res) => {
+router.put('/actualizar-precios-v2', verificarClienteIdBody, async (req, res) => {
   try {
     const { cliente_id, productos } = req.body;
     if (!cliente_id || !Array.isArray(productos) || !productos.length)
@@ -1830,7 +1830,7 @@ router.put('/actualizar-precios-v2', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // PUT /actualizar-masivo
 // ═══════════════════════════════════════════════════════════════
-router.put('/actualizar-masivo', async (req, res) => {
+router.put('/actualizar-masivo', verificarClienteIdBody, async (req, res) => {
   try {
     const { cliente_id, ids, campo, valor } = req.body;
     const PERMITIDOS = ['marca','rubro','dto_1','dto_2','dto_3','utilidad_1','utilidad_2','utilidad_3','precio_costo','alicuota_iva','activo','unidad_medida','stock_minimo'];
@@ -1912,7 +1912,7 @@ router.put('/actualizar-masivo', async (req, res) => {
 // confirmar=false → solo calcular (sin guardar)
 // confirmar=true  → calcular y guardar
 // ═══════════════════════════════════════════════════════════════
-router.put('/ajuste-porcentaje', async (req, res) => {
+router.put('/ajuste-porcentaje', verificarClienteIdBody, async (req, res) => {
   try {
     const { cliente_id, ids, tipo, porcentaje, utilidad_anterior, utilidad_nueva, confirmar } = req.body;
 
@@ -2050,7 +2050,7 @@ router.put('/ajuste-porcentaje', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // POST /buscar-imagen-producto — búsqueda IA de imagen por producto
 // ═══════════════════════════════════════════════════════════════
-router.post('/buscar-imagen-producto', async (req, res) => {
+router.post('/buscar-imagen-producto', verificarClienteIdBody, async (req, res) => {
   try {
     const { descripcion, codigo, marca, cliente_id, productos: lote } = req.body;
 
@@ -2125,7 +2125,7 @@ function extraerUrlImagen(response) {
 // ═══════════════════════════════════════════════════════════════
 // DELETE /proveedor/:cliente_id/:proveedor_id — soft delete
 // ═══════════════════════════════════════════════════════════════
-router.delete('/proveedor/:cliente_id/:proveedor_id', async (req, res) => {
+router.delete('/proveedor/:cliente_id/:proveedor_id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, proveedor_id } = req.params;
     await pool.query(
@@ -2140,7 +2140,7 @@ router.delete('/proveedor/:cliente_id/:proveedor_id', async (req, res) => {
 });
 
 // PATCH /productos/:id/catalogo — toggle visible_catalogo
-router.patch('/productos/:id/catalogo', async (req, res) => {
+router.patch('/productos/:id/catalogo', verificarClienteIdBody, async (req, res) => {
   try {
     const { id } = req.params;
     const { visible_catalogo, cliente_id } = req.body;
@@ -2157,7 +2157,7 @@ router.patch('/productos/:id/catalogo', async (req, res) => {
 });
 
 // POST /productos/ocultar-sin-foto — oculta del catálogo todos los productos sin imagen
-router.post('/productos/ocultar-sin-foto', async (req, res) => {
+router.post('/productos/ocultar-sin-foto', verificarClienteIdBody, async (req, res) => {
   try {
     const { cliente_id } = req.body;
     if (!cliente_id) return res.status(400).json({ mensaje: 'cliente_id requerido' });
@@ -2174,7 +2174,7 @@ router.post('/productos/ocultar-sin-foto', async (req, res) => {
 });
 
 // GET /productos/:cliente_id/count-sin-foto — cuenta productos sin imagen visibles en catálogo
-router.get('/productos/:cliente_id/count-sin-foto', async (req, res) => {
+router.get('/productos/:cliente_id/count-sin-foto', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const r = await pool.query(

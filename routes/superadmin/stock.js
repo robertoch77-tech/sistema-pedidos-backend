@@ -1,7 +1,7 @@
 const express = require('express');
 const router  = express.Router();
 const pool    = require('../../db');
-const { verificarCualquierToken } = require('./authMiddleware');
+const { verificarCualquierToken, verificarClienteId } = require('./authMiddleware');
 
 // ── Asegurar tablas ────────────────────────────────────────────
 async function asegurarTablas() {
@@ -90,7 +90,7 @@ router.use(verificarCualquierToken);
 // ═══════════════════════════════════════════════════════════════
 // GET /:cliente_id/dashboard — métricas
 // ═══════════════════════════════════════════════════════════════
-router.get('/:cliente_id/dashboard', async (req, res) => {
+router.get('/:cliente_id/dashboard', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
 
@@ -138,7 +138,7 @@ router.get('/:cliente_id/dashboard', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // GET /:cliente_id — listar stock con filtros
 // ═══════════════════════════════════════════════════════════════
-router.get('/:cliente_id', async (req, res) => {
+router.get('/:cliente_id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const {
@@ -219,7 +219,7 @@ router.get('/:cliente_id', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // GET /:cliente_id/movimientos — historial
 // ═══════════════════════════════════════════════════════════════
-router.get('/:cliente_id/movimientos', async (req, res) => {
+router.get('/:cliente_id/movimientos', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const {
@@ -294,7 +294,7 @@ router.get('/:cliente_id/movimientos', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // POST /:cliente_id/ajuste — ajuste manual
 // ═══════════════════════════════════════════════════════════════
-router.post('/:cliente_id/ajuste', async (req, res) => {
+router.post('/:cliente_id/ajuste', verificarClienteId, async (req, res) => {
   const { cliente_id } = req.params;
   const {
     producto_id,
@@ -362,7 +362,7 @@ router.post('/:cliente_id/ajuste', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // POST /:cliente_id/transferencia — entre sucursales
 // ═══════════════════════════════════════════════════════════════
-router.post('/:cliente_id/transferencia', async (req, res) => {
+router.post('/:cliente_id/transferencia', verificarClienteId, async (req, res) => {
   const { cliente_id } = req.params;
   const {
     sucursal_origen_id  = null,
@@ -439,7 +439,7 @@ router.post('/:cliente_id/transferencia', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // GET /:cliente_id/valorizado — reporte valorizado
 // ═══════════════════════════════════════════════════════════════
-router.get('/:cliente_id/valorizado', async (req, res) => {
+router.get('/:cliente_id/valorizado', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
 
@@ -497,7 +497,7 @@ router.get('/:cliente_id/valorizado', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // GET /:cliente_id/proveedores — lista para filtros
 // ═══════════════════════════════════════════════════════════════
-router.get('/:cliente_id/proveedores', async (req, res) => {
+router.get('/:cliente_id/proveedores', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const r = await pool.query(
@@ -513,7 +513,7 @@ router.get('/:cliente_id/proveedores', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // GET /:cliente_id/rubros — lista para filtros
 // ═══════════════════════════════════════════════════════════════
-router.get('/:cliente_id/rubros', async (req, res) => {
+router.get('/:cliente_id/rubros', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const r = await pool.query(
