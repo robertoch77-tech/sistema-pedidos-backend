@@ -2,21 +2,112 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 const bcrypt = require('bcrypt');
+const crypto = require('crypto');
+const rateLimit = require('express-rate-limit');
 
-const checkAdmin = (req, res, next) => {
-  const secret = req.headers['x-admin-secret'];
-  if (!process.env.ADMIN_SECRET || secret !== process.env.ADMIN_SECRET) {
-    return res.status(401).json({ mensaje: 'No autorizado' });
-  }
-  next();
+const adminSessionLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { mensaje: 'Demasiados intentos. Esperá 15 minutos.' },
+});
+
+pool.query(`
+  CREATE TABLE IF NOT EXISTS sesiones_admin_ivan (
+    id BIGSERIAL PRIMARY KEY,
+    token_hash TEXT NOT NULL UNIQUE,
+    expira_en BIGINT NOT NULL,
+    creado_en TIMESTAMPTZ DEFAULT now()
+  )
+`).catch(() => {});
+
+pool.query('DELETE FROM sesiones_admin_ivan WHERE expira_en < $1', [Date.now()]).catch(() => {});
+
+pool.query(`
+  CREATE TABLE IF NOT EXISTS auditoria_admin_ivan (
+    id BIGSERIAL PRIMARY KEY,
+    metodo TEXT NOT NULL,
+    ruta TEXT NOT NULL,
+    estado INTEGER NOT NULL,
+    ip TEXT,
+    creado_en TIMESTAMPTZ DEFAULT now()
+  )
+`).catch(() => {});
+
+const hashToken = token => crypto.createHash('sha256').update(token).digest('hex');
+
+const secretValido = secret => {
+  const esperado = process.env.ADMIN_SECRET || '';
+  if (!secret || !esperado) return false;
+  const a = Buffer.from(String(secret));
+  const b = Buffer.from(esperado);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 };
+
+const checkAdmin = async (req, res, next) => {
+  const token = req.headers['x-admin-token'];
+  if (token) {
+    try {
+      const sesion = await pool.query(
+        'SELECT expira_en FROM sesiones_admin_ivan WHERE token_hash=$1',
+        [hashToken(String(token))]
+      );
+      if (sesion.rows[0] && Number(sesion.rows[0].expira_en) >= Date.now()) {
+        req.adminIvanAutenticado = true;
+        return next();
+      }
+      if (sesion.rows[0]) {
+        pool.query('DELETE FROM sesiones_admin_ivan WHERE token_hash=$1', [hashToken(String(token))]).catch(() => {});
+      }
+    } catch {
+      return res.status(500).json({ mensaje: 'Error de autenticación' });
+    }
+  }
+
+  // Compatibilidad temporal durante el despliegue manual del frontend.
+  // Desactivar en Render con ADMIN_LEGACY_SECRET_ENABLED=false tras validar.
+  const secret = req.headers['x-admin-secret'];
+  if (process.env.ADMIN_LEGACY_SECRET_ENABLED !== 'false' && secretValido(secret)) {
+    req.adminIvanAutenticado = true;
+    return next();
+  }
+  return res.status(401).json({ mensaje: 'No autorizado' });
+};
+
+router.post('/sesion', adminSessionLimiter, async (req, res) => {
+  try {
+    if (!secretValido(req.body?.clave)) return res.status(401).json({ mensaje: 'Clave incorrecta' });
+    const token = crypto.randomBytes(32).toString('hex');
+    const expira_en = Date.now() + 8 * 60 * 60 * 1000;
+    await pool.query(
+      'INSERT INTO sesiones_admin_ivan (token_hash, expira_en) VALUES ($1,$2)',
+      [hashToken(token), expira_en]
+    );
+    res.json({ token, expira_en });
+  } catch {
+    res.status(500).json({ mensaje: 'No se pudo iniciar la sesión' });
+  }
+});
+
+router.use((req, res, next) => {
+  res.on('finish', () => {
+    if (!req.adminIvanAutenticado || !['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return;
+    pool.query(
+      'INSERT INTO auditoria_admin_ivan (metodo, ruta, estado, ip) VALUES ($1,$2,$3,$4)',
+      [req.method, req.originalUrl, res.statusCode, req.ip || null]
+    ).catch(() => {});
+  });
+  next();
+});
 
 // GET — listar todos
 router.get('/mayoristas', checkAdmin, async (req, res) => {
   try {
     const resultado = await pool.query(
       // === MODIFICADO: se agregaron los flags nuevos (Módulo 9) ===
-      `SELECT id, nombre, email, codigo, activo, config_habilitada, db_connection, ivan_activo,
+      `SELECT id, nombre, email, codigo, activo, config_habilitada,
+              (db_connection IS NOT NULL AND trim(db_connection) <> '') AS db_connection_configurada, ivan_activo,
               habilitar_ctas_ctes, razon_social, habilitar_demanda, habilitar_ofertas,
               habilitar_productos_solicitados, habilitar_descuentos_por_cliente,
               habilitar_banners, habilitar_mensajes, habilitar_notificaciones, habilitar_cotizaciones,
@@ -78,8 +169,14 @@ router.put('/mayoristas/:id/datos', checkAdmin, async (req, res) => {
     if (!nombre || !email)
       return res.status(400).json({ mensaje: 'Nombre y email son obligatorios' });
     const resultado = await pool.query(
-      `UPDATE mayoristas SET nombre=$1, email=$2, db_connection=$3, razon_social=$4
-       WHERE id=$5 RETURNING id, nombre, email, codigo, activo, config_habilitada, db_connection, razon_social`,
+      `UPDATE mayoristas
+       SET nombre=$1, email=$2,
+           db_connection=CASE WHEN NULLIF(trim($3), '') IS NULL THEN db_connection ELSE $3 END,
+           razon_social=$4
+       WHERE id=$5
+       RETURNING id, nombre, email, codigo, activo, config_habilitada,
+                 (db_connection IS NOT NULL AND trim(db_connection) <> '') AS db_connection_configurada,
+                 razon_social`,
       [nombre.trim(), email.trim().toLowerCase(), db_connection || '', razon_social || null, id]
     );
     res.json(resultado.rows[0]);
