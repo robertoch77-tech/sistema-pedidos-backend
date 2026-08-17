@@ -5,6 +5,7 @@ const { Pool } = require('pg');
 
 // Cache de conexiones por mayorista
 const conexiones = {};
+const soporteObsProducto = {};
 
 async function getConexionMayorista(mayorista_id) {
   if (conexiones[mayorista_id]) return conexiones[mayorista_id];
@@ -54,6 +55,26 @@ function aplicarDto(productos, dtoPct) {
 // Reemplaza ñ, acentos y el caracter roto (�) por comodin _ (1 caracter cualquiera).
 function normalizar(texto) {
   return texto.replace(/[ñÑáéíóúÁÉÍÓÚ\uFFFD]/g, '_');
+}
+
+// Ivan todavía no expone obs_producto en todos los clientes. Se detecta una
+// vez por conexión y el catálogo continúa funcionando aunque la columna falte.
+async function tieneObsProducto(poolExterno, mayorista_id) {
+  const cache = soporteObsProducto[mayorista_id];
+  if (cache && (cache.disponible || Date.now() - cache.verificado_en < 5 * 60 * 1000)) {
+    return cache.disponible;
+  }
+  try {
+    const r = await poolExterno.query(
+      `SELECT 1 FROM information_schema.columns
+       WHERE table_name = 'viewProductos' AND column_name = 'obs_producto'
+       LIMIT 1`
+    );
+    soporteObsProducto[mayorista_id] = { disponible: r.rows.length > 0, verificado_en: Date.now() };
+  } catch {
+    soporteObsProducto[mayorista_id] = { disponible: false, verificado_en: Date.now() };
+  }
+  return soporteObsProducto[mayorista_id].disponible;
 }
 
 // Opciones para los selectores de marca / rubro / tipo
@@ -106,6 +127,7 @@ router.get('/:mayorista_id/todos', async (req, res) => {
     const busqueda = req.query.busqueda || '';
     const poolExterno = await getConexionMayorista(mayorista_id);
     if (!poolExterno) return res.status(404).json({ mensaje: 'Sin conexión configurada' });
+    const conObsProducto = await tieneObsProducto(poolExterno, mayorista_id);
 
     const condiciones = [];
     const params = [];
@@ -116,7 +138,8 @@ router.get('/:mayorista_id/todos', async (req, res) => {
         condiciones.push(`(cod_producto ILIKE $${i}
           OR des_producto ILIKE $${i}
           OR des_producto_marca ILIKE $${i}
-          OR des_producto_rubro ILIKE $${i})`);
+          OR des_producto_rubro ILIKE $${i}
+          ${conObsProducto ? `OR obs_producto ILIKE $${i}` : ''})`);
         params.push(`%${palabra}%`);
         i++;
       }
@@ -127,6 +150,7 @@ router.get('/:mayorista_id/todos', async (req, res) => {
       `SELECT id_producto, cod_producto, des_producto, imagen_producto,
               precio_producto, stock_temporal, des_producto_marca,
               des_producto_rubro, des_producto_tipo
+              ${conObsProducto ? ', obs_producto' : ''}
        FROM "viewProductos"
        ${where}
        ORDER BY des_producto`,
@@ -231,6 +255,46 @@ router.get('/:mayorista_id/cross-selling', async (req, res) => {
   }
 });
 
+// Alternativas equivalentes por el campo obs_producto de Ivan. Si la columna
+// todavía no fue conectada, responde [] y no afecta catálogo, precios ni stock.
+router.get('/:mayorista_id/equivalentes', async (req, res) => {
+  try {
+    const { mayorista_id } = req.params;
+    const codigos = String(req.query.codigos || '').split(',').map(c => c.trim()).filter(Boolean);
+    if (codigos.length === 0) return res.json([]);
+
+    const poolExterno = await getConexionMayorista(mayorista_id);
+    if (!poolExterno || !(await tieneObsProducto(poolExterno, mayorista_id))) return res.json([]);
+
+    const origen = await poolExterno.query(
+      `SELECT DISTINCT obs_producto
+       FROM "viewProductos"
+       WHERE cod_producto = ANY($1::text[])
+         AND obs_producto IS NOT NULL AND trim(obs_producto) <> ''`,
+      [codigos]
+    );
+    const observaciones = origen.rows.map(r => r.obs_producto).filter(Boolean);
+    if (observaciones.length === 0) return res.json([]);
+
+    const alternativas = await poolExterno.query(
+      `SELECT id_producto, cod_producto, des_producto, imagen_producto,
+              precio_producto, stock_temporal, des_producto_marca,
+              des_producto_rubro, des_producto_tipo, obs_producto
+       FROM "viewProductos"
+       WHERE obs_producto = ANY($1::text[])
+         AND cod_producto <> ALL($2::text[])
+       ORDER BY obs_producto, des_producto_marca, precio_producto
+       LIMIT 30`,
+      [observaciones, codigos]
+    );
+    const dtoPct = await getDtoPagoTermino(mayorista_id);
+    res.json(aplicarDto(alternativas.rows, dtoPct));
+  } catch (error) {
+    console.error('Error equivalentes:', error.message);
+    res.json([]);
+  }
+});
+
 // GET — precios custom del cliente logueado
 router.get('/:mayorista_id/mis-precios-custom', async (req, res) => {
   try {
@@ -262,6 +326,7 @@ router.get('/:mayorista_id', async (req, res) => {
 
     const poolExterno = await getConexionMayorista(mayorista_id);
     if (!poolExterno) return res.status(404).json({ mensaje: 'Sin conexión configurada' });
+    const conObsProducto = await tieneObsProducto(poolExterno, mayorista_id);
 
     const condiciones = [];
     const params = [];
@@ -273,7 +338,8 @@ router.get('/:mayorista_id', async (req, res) => {
         condiciones.push(`(cod_producto ILIKE $${i}
           OR des_producto ILIKE $${i}
           OR des_producto_marca ILIKE $${i}
-          OR des_producto_rubro ILIKE $${i})`);
+          OR des_producto_rubro ILIKE $${i}
+          ${conObsProducto ? `OR obs_producto ILIKE $${i}` : ''})`);
         params.push(`%${palabra}%`);
         i++;
       }
@@ -294,6 +360,7 @@ router.get('/:mayorista_id', async (req, res) => {
       `SELECT id_producto, cod_producto, des_producto, imagen_producto,
               precio_producto, stock_temporal, des_producto_marca,
               des_producto_rubro, des_producto_tipo
+              ${conObsProducto ? ', obs_producto' : ''}
        FROM "viewProductos"
        ${where}
        ORDER BY des_producto
