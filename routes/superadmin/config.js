@@ -7,6 +7,9 @@ const { verificarCualquierToken, verificarClienteId } = require('./authMiddlewar
 async function asegurarTablas() {
   try {
     await pool.query(`ALTER TABLE config_negocio ADD COLUMN IF NOT EXISTS iva_modo_defecto VARCHAR(20) DEFAULT 'discriminar'`).catch(() => {});
+    await pool.query(`ALTER TABLE config_negocio ADD COLUMN IF NOT EXISTS alias_pago TEXT DEFAULT ''`).catch(() => {});
+    await pool.query(`ALTER TABLE config_negocio ADD COLUMN IF NOT EXISTS cbu_pago TEXT DEFAULT ''`).catch(() => {});
+    await pool.query(`ALTER TABLE config_negocio ADD COLUMN IF NOT EXISTS banco_pago TEXT DEFAULT ''`).catch(() => {});
     await pool.query(`
       CREATE TABLE IF NOT EXISTS config_negocio (
         id                BIGSERIAL PRIMARY KEY,
@@ -46,6 +49,9 @@ const CONFIG_DEFAULT = {
   whatsapp_notif:   false,
   whatsapp_numero:  '',
   iva_modo_defecto: 'discriminar',
+  alias_pago:       '',
+  cbu_pago:         '',
+  banco_pago:       '',
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -88,14 +94,18 @@ router.put('/:cliente_id', verificarClienteId, async (req, res) => {
       whatsapp_notif   = false,
       whatsapp_numero  = '',
       iva_modo_defecto = 'discriminar',
+      alias_pago       = '',
+      cbu_pago         = '',
+      banco_pago       = '',
     } = req.body;
 
     const result = await pool.query(
       `INSERT INTO config_negocio
          (cliente_id, nombre_comercial, cuit, direccion, logo_url, membrete,
           tamano_defecto, tamano_tickets, campana, whatsapp_notif, whatsapp_numero,
-          iva_modo_defecto, creado_en, modificado_en)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,now(),now())
+          iva_modo_defecto, alias_pago, cbu_pago, banco_pago,
+          creado_en, modificado_en)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,now(),now())
        ON CONFLICT (cliente_id) DO UPDATE SET
          nombre_comercial = EXCLUDED.nombre_comercial,
          cuit             = EXCLUDED.cuit,
@@ -108,6 +118,9 @@ router.put('/:cliente_id', verificarClienteId, async (req, res) => {
          whatsapp_notif   = EXCLUDED.whatsapp_notif,
          whatsapp_numero  = EXCLUDED.whatsapp_numero,
          iva_modo_defecto = EXCLUDED.iva_modo_defecto,
+         alias_pago       = EXCLUDED.alias_pago,
+         cbu_pago         = EXCLUDED.cbu_pago,
+         banco_pago       = EXCLUDED.banco_pago,
          modificado_en    = now()
        RETURNING *`,
       [
@@ -115,6 +128,7 @@ router.put('/:cliente_id', verificarClienteId, async (req, res) => {
         nombre_comercial, cuit, direccion, logo_url, membrete,
         tamano_defecto, tamano_tickets,
         !!campana, !!whatsapp_notif, whatsapp_numero, iva_modo_defecto,
+        alias_pago, cbu_pago, banco_pago,
       ]
     );
 
