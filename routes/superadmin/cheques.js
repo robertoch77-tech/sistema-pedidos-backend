@@ -246,15 +246,48 @@ router.put('/:cliente_id/:id/estado', verificarClienteId, async (req, res) => {
     // Si rechazado y se pidió registrar cargo en CC cliente
     if (estado === 'rechazado' && registrar_cargo_cc && monto_cargo) {
       await pool.query(
-        `INSERT INTO cuentas_corrientes_clientes_movimientos
-           (cuenta_id, tipo, monto, descripcion, creado_en)
-         SELECT cc.id, 'debito', $1, 'Cheque rechazado nro ' || c.numero, now()
+        `INSERT INTO movimientos_cuentas_corrientes
+           (cuenta_corriente_id, cliente_id, tipo, debe, haber, saldo_acumulado, descripcion, estado)
+         SELECT cc.id, $3, 'cheque_rechazado', $1, 0,
+                COALESCE(cc.saldo, 0) + $1,
+                'Cheque rechazado nro ' || c.numero, 'procesado'
          FROM cheques c
          JOIN cuentas_corrientes_clientes cc ON cc.cliente_id = c.cliente_id
-         WHERE c.id=$2
+         WHERE c.id = $2
          LIMIT 1`,
-        [n(monto_cargo), id]
+        [n(monto_cargo), id, cliente_id]
       ).catch(() => {});
+      await pool.query(
+        `UPDATE cuentas_corrientes_clientes SET saldo = COALESCE(saldo, 0) + $1, modificado_en = now()
+         WHERE cliente_id = $2`,
+        [n(monto_cargo), cliente_id]
+      ).catch(() => {});
+    }
+
+    // Si cobrado → registrar ingreso en caja (si hay caja abierta)
+    if (estado === 'cobrado') {
+      try {
+        const chequeData = await pool.query(`SELECT monto, numero FROM cheques WHERE id=$1 AND cliente_id=$2`, [id, cliente_id]);
+        if (chequeData.rows.length > 0) {
+          const chq = chequeData.rows[0];
+          const cajaRes = await pool.query(
+            `SELECT id FROM cajas WHERE cliente_id=$1 AND estado='abierta' LIMIT 1`,
+            [cliente_id]
+          );
+          if (cajaRes.rows.length > 0) {
+            const caja_id = cajaRes.rows[0].id;
+            await pool.query(
+              `INSERT INTO caja_movimientos (caja_id, cliente_id, tipo, tipo_operacion, monto, descripcion, numero_comprobante)
+               VALUES ($1,$2,'cobro_cheque','ingreso',$3,$4,$5)`,
+              [caja_id, cliente_id, n(chq.monto), `Cobro cheque nro ${chq.numero}`, chq.numero || '']
+            );
+            await pool.query(
+              `UPDATE cajas SET total_ingresos = total_ingresos + $1, saldo_actual = saldo_actual + $1 WHERE id = $2`,
+              [n(chq.monto), caja_id]
+            );
+          }
+        }
+      } catch (err) { console.error('cheques: error registrando cobro en caja:', err.message); }
     }
 
     res.json({ ok: true });

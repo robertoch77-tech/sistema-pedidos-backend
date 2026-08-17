@@ -57,7 +57,25 @@ router.post('/fijos/:cliente_id', verificarClienteId, async (req, res) => {
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
       RETURNING id
     `, [cliente_id, descripcion, monto, categoria || 'otro', periodicidad || 'mensual', mes || null, anio || null, observaciones || null]);
-
+    // Registrar egreso en caja (si hay caja abierta)
+    try {
+      const cajaRes = await pool.query(
+        `SELECT id FROM cajas WHERE cliente_id=$1 AND estado='abierta' LIMIT 1`,
+        [cliente_id]
+      );
+      if (cajaRes.rows.length > 0) {
+        const caja_id = cajaRes.rows[0].id;
+        await pool.query(
+          `INSERT INTO caja_movimientos (caja_id, cliente_id, tipo, tipo_operacion, monto, descripcion, numero_comprobante)
+           VALUES ($1,$2,'gasto_fijo','egreso',$3,$4,'')`,
+          [caja_id, cliente_id, n(monto), `Gasto fijo: ${descripcion || 'mensual'}`]
+        );
+        await pool.query(
+          `UPDATE cajas SET total_egresos = total_egresos + $1, saldo_actual = saldo_actual - $1 WHERE id = $2`,
+          [n(monto), caja_id]
+        );
+      }
+    } catch (err) { console.error('gastos fijos: error registrando en caja:', err.message); }
     res.json({ ok: true, id: q.rows[0].id });
   } catch (err) {
     console.error('POST fijo:', err.message);
@@ -176,7 +194,25 @@ router.post('/variables/:cliente_id', verificarClienteId, async (req, res) => {
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
       RETURNING id
     `, [cliente_id, descripcion, monto, categoria || 'otro', fecha, comprobante || null, proveedor_id || null, observaciones || null]);
-
+    // Registrar egreso en caja (si hay caja abierta)
+    try {
+      const cajaRes = await pool.query(
+        `SELECT id FROM cajas WHERE cliente_id=$1 AND estado='abierta' LIMIT 1`,
+        [cliente_id]
+      );
+      if (cajaRes.rows.length > 0) {
+        const caja_id = cajaRes.rows[0].id;
+        await pool.query(
+          `INSERT INTO caja_movimientos (caja_id, cliente_id, tipo, tipo_operacion, monto, descripcion, numero_comprobante)
+           VALUES ($1,$2,'gasto','egreso',$3,$4,$5)`,
+          [caja_id, cliente_id, n(monto), `Gasto: ${descripcion || 'variable'}`, comprobante || '']
+        );
+        await pool.query(
+          `UPDATE cajas SET total_egresos = total_egresos + $1, saldo_actual = saldo_actual - $1 WHERE id = $2`,
+          [n(monto), caja_id]
+        );
+      }
+    } catch (err) { console.error('gastos: error registrando en caja:', err.message); }
     res.json({ ok: true, id: q.rows[0].id });
   } catch (err) {
     console.error('POST variable:', err.message);

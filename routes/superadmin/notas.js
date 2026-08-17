@@ -352,11 +352,18 @@ router.post('/:cliente_id/credito', verificarClienteId, async (req, res) => {
     if (afecta_cuenta_corriente) {
       if (tipo === 'emitida') {
         await pool.query(
-          `INSERT INTO cuentas_corrientes_clientes_movimientos
-             (cuenta_id, tipo, monto, descripcion, creado_en)
-           SELECT cc.id, 'haber', $1, $2, now()
+          `INSERT INTO movimientos_cuentas_corrientes
+             (cuenta_corriente_id, cliente_id, tipo, debe, haber, saldo_acumulado, descripcion, estado)
+           SELECT cc.id, $3, 'nota_credito', 0, $1,
+                  COALESCE(cc.saldo, 0) - $1,
+                  $2, 'procesado'
            FROM cuentas_corrientes_clientes cc WHERE cc.cliente_id=$3 LIMIT 1`,
           [totales.total, `NC ${numero_completo} - ${motivo}`, cliente_id]
+        ).catch(() => {});
+        await pool.query(
+          `UPDATE cuentas_corrientes_clientes SET saldo = COALESCE(saldo, 0) - $1, modificado_en = now()
+           WHERE cliente_id = $2`,
+          [totales.total, cliente_id]
         ).catch(() => {});
       } else if (tipo === 'recibida' && proveedor_id) {
         await pool.query(
@@ -371,8 +378,9 @@ router.post('/:cliente_id/credito', verificarClienteId, async (req, res) => {
       for (const it of items) {
         if (it.producto_id) {
           await pool.query(
-            `UPDATE productos SET stock = stock + $1 WHERE id=$2`,
-            [n(it.cantidad), it.producto_id]
+            `UPDATE productos_propios SET stock_actual = COALESCE(stock_actual, 0) + $1, modificado_en = now()
+             WHERE id = $2 AND cliente_id = $3`,
+            [n(it.cantidad), it.producto_id, cliente_id]
           ).catch(() => {});
         }
       }
@@ -447,11 +455,18 @@ router.post('/:cliente_id/debito', verificarClienteId, async (req, res) => {
     if (afecta_cuenta_corriente) {
       if (tipo === 'emitida') {
         await pool.query(
-          `INSERT INTO cuentas_corrientes_clientes_movimientos
-             (cuenta_id, tipo, monto, descripcion, creado_en)
-           SELECT cc.id, 'debito', $1, $2, now()
+          `INSERT INTO movimientos_cuentas_corrientes
+             (cuenta_corriente_id, cliente_id, tipo, debe, haber, saldo_acumulado, descripcion, estado)
+           SELECT cc.id, $3, 'nota_debito', $1, 0,
+                  COALESCE(cc.saldo, 0) + $1,
+                  $2, 'procesado'
            FROM cuentas_corrientes_clientes cc WHERE cc.cliente_id=$3 LIMIT 1`,
           [totales.total, `ND ${numero_completo} - ${motivo}`, cliente_id]
+        ).catch(() => {});
+        await pool.query(
+          `UPDATE cuentas_corrientes_clientes SET saldo = COALESCE(saldo, 0) + $1, modificado_en = now()
+           WHERE cliente_id = $2`,
+          [totales.total, cliente_id]
         ).catch(() => {});
       } else if (tipo === 'recibida' && proveedor_id) {
         await pool.query(
@@ -514,19 +529,33 @@ router.put('/:cliente_id/:tipo_nota/:id/anular', verificarClienteId, async (req,
     if (nota.afecta_cuenta_corriente) {
       if (tipo_nota === 'credito' && nota.tipo === 'emitida') {
         await pool.query(
-          `INSERT INTO cuentas_corrientes_clientes_movimientos
-             (cuenta_id, tipo, monto, descripcion, creado_en)
-           SELECT cc.id, 'debito', $1, $2, now()
+          `INSERT INTO movimientos_cuentas_corrientes
+             (cuenta_corriente_id, cliente_id, tipo, debe, haber, saldo_acumulado, descripcion, estado)
+           SELECT cc.id, $3, 'anulacion_nc', $1, 0,
+                  COALESCE(cc.saldo, 0) + $1,
+                  $2, 'procesado'
            FROM cuentas_corrientes_clientes cc WHERE cc.cliente_id=$3 LIMIT 1`,
           [n(nota.total), `Anulación ${nota.numero_completo}`, cliente_id]
         ).catch(() => {});
+        await pool.query(
+          `UPDATE cuentas_corrientes_clientes SET saldo = COALESCE(saldo, 0) + $1, modificado_en = now()
+           WHERE cliente_id = $2`,
+          [n(nota.total), cliente_id]
+        ).catch(() => {});
       } else if (tipo_nota === 'debito' && nota.tipo === 'emitida') {
         await pool.query(
-          `INSERT INTO cuentas_corrientes_clientes_movimientos
-             (cuenta_id, tipo, monto, descripcion, creado_en)
-           SELECT cc.id, 'haber', $1, $2, now()
+          `INSERT INTO movimientos_cuentas_corrientes
+             (cuenta_corriente_id, cliente_id, tipo, debe, haber, saldo_acumulado, descripcion, estado)
+           SELECT cc.id, $3, 'anulacion_nd', 0, $1,
+                  COALESCE(cc.saldo, 0) - $1,
+                  $2, 'procesado'
            FROM cuentas_corrientes_clientes cc WHERE cc.cliente_id=$3 LIMIT 1`,
           [n(nota.total), `Anulación ${nota.numero_completo}`, cliente_id]
+        ).catch(() => {});
+        await pool.query(
+          `UPDATE cuentas_corrientes_clientes SET saldo = COALESCE(saldo, 0) - $1, modificado_en = now()
+           WHERE cliente_id = $2`,
+          [n(nota.total), cliente_id]
         ).catch(() => {});
       }
     }
@@ -534,10 +563,10 @@ router.put('/:cliente_id/:tipo_nota/:id/anular', verificarClienteId, async (req,
     // Revertir stock si NC con stock
     if (tipo_nota === 'credito' && nota.afecta_stock) {
       await pool.query(
-        `UPDATE productos p SET stock = stock - nci.cantidad
+        `UPDATE productos_propios pp SET stock_actual = COALESCE(pp.stock_actual, 0) - nci.cantidad, modificado_en = now()
          FROM notas_credito_items nci
-         WHERE nci.nota_id=$1 AND nci.producto_id IS NOT NULL AND p.id=nci.producto_id`,
-        [id]
+         WHERE nci.nota_id=$1 AND nci.producto_id IS NOT NULL AND pp.id = nci.producto_id AND pp.cliente_id = $2`,
+        [id, cliente_id]
       ).catch(() => {});
     }
 

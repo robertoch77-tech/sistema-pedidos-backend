@@ -232,12 +232,24 @@ router.post('/:cliente_id', verificarClienteId, async (req, res) => {
 
       // Descontar stock si es producto real
       if (!it.es_libre && it.producto_id) {
+        const stPrev = await pool.query(
+          `SELECT COALESCE(stock_actual, 0) AS stock FROM productos_propios WHERE id=$1 AND cliente_id=$2`,
+          [it.producto_id, cliente_id]
+        ).catch(() => ({ rows: [{ stock: 0 }] }));
+        const stockAnterior = parseFloat(stPrev.rows[0]?.stock) || 0;
         await pool.query(
           `UPDATE productos_propios
            SET stock_actual = COALESCE(stock_actual, 0) - $1, modificado_en = now()
            WHERE id = $2 AND cliente_id = $3`,
           [it.cantidad, it.producto_id, cliente_id]
         );
+        await pool.query(
+          `INSERT INTO stock_movimientos
+             (cliente_id, producto_id, tipo, cantidad, stock_anterior, stock_posterior,
+              motivo, referencia_tipo, referencia_id, creado_en)
+           VALUES ($1,$2,'venta',$3,$4,$5,'Venta','venta',$6,now())`,
+          [cliente_id, it.producto_id, it.cantidad, stockAnterior, stockAnterior - it.cantidad, venta_id]
+        ).catch(() => {});
       }
     }
 
