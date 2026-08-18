@@ -110,10 +110,13 @@ router.get('/:mayorista_id', async (req, res) => {
 router.put('/:id/imprimir', async (req, res) => {
   try {
     const { id } = req.params;
+    const { mayorista_id } = req.body;
+    if (!mayorista_id) return res.status(400).json({ mensaje: 'Falta mayorista_id' });
     const resultado = await pool.query(
-      `UPDATE pedidos_web SET estado='impreso', visto_mayorista=true WHERE id=$1 RETURNING *`,
-      [id]
+      `UPDATE pedidos_web SET estado='impreso', visto_mayorista=true WHERE id=$1 AND mayorista_id=$2 RETURNING *`,
+      [id, mayorista_id]
     );
+    if (!resultado.rows[0]) return res.status(404).json({ mensaje: 'Pedido no encontrado' });
     res.json(resultado.rows[0]);
   } catch (error) {
     console.error(error);
@@ -125,6 +128,10 @@ router.put('/:id/imprimir', async (req, res) => {
 router.get('/detalle/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    const { mayorista_id } = req.query;
+    const condiciones = ['p.id=$1'];
+    const params = [id];
+    if (mayorista_id) { condiciones.push('p.mayorista_id=$2'); params.push(mayorista_id); }
     const resultado = await pool.query(
       `SELECT p.*,
          COALESCE(json_agg(json_build_object(
@@ -134,9 +141,9 @@ router.get('/detalle/:id', async (req, res) => {
          )) FILTER (WHERE pi.id IS NOT NULL),'[]'::json) as items
        FROM pedidos_web p
        LEFT JOIN pedidos_web_items pi ON p.id = pi.pedido_id
-       WHERE p.id=$1
+       WHERE ${condiciones.join(' AND ')}
        GROUP BY p.id`,
-      [id]
+      params
     );
     if (!resultado.rows[0]) return res.status(404).json({ mensaje: 'No encontrado' });
     res.json(resultado.rows[0]);
@@ -261,10 +268,11 @@ router.post('/', async (req, res) => {
 router.put('/:id/fecha-entrega', async (req, res) => {
   try {
     const { id } = req.params;
-    const { fecha_entrega_estimada } = req.body;
+    const { fecha_entrega_estimada, mayorista_id } = req.body;
+    if (!mayorista_id) return res.status(400).json({ mensaje: 'Falta mayorista_id' });
     const resultado = await pool.query(
-      `UPDATE pedidos_web SET fecha_entrega_estimada=$1 WHERE id=$2 RETURNING *`,
-      [fecha_entrega_estimada || null, id]
+      `UPDATE pedidos_web SET fecha_entrega_estimada=$1 WHERE id=$2 AND mayorista_id=$3 RETURNING *`,
+      [fecha_entrega_estimada || null, id, mayorista_id]
     );
     if (!resultado.rows[0]) return res.status(404).json({ mensaje: 'No encontrado' });
     res.json(resultado.rows[0]);
@@ -278,10 +286,16 @@ router.put('/:id/fecha-entrega', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { descuento, total_estimado, observaciones, estado, items } = req.body;
+    const { descuento, total_estimado, observaciones, estado, mayorista_id, items } = req.body;
+    if (!mayorista_id) return res.status(400).json({ mensaje: 'Falta mayorista_id' });
+    const check = await pool.query(
+      `SELECT id FROM pedidos_web WHERE id=$1 AND mayorista_id=$2`,
+      [id, mayorista_id]
+    );
+    if (!check.rows[0]) return res.status(404).json({ mensaje: 'Pedido no encontrado' });
     await pool.query(
-      `UPDATE pedidos_web SET descuento=$1,total_estimado=$2,observaciones=$3,estado=$4 WHERE id=$5`,
-      [descuento, total_estimado, observaciones, estado, id]
+      `UPDATE pedidos_web SET descuento=$1,total_estimado=$2,observaciones=$3,estado=$4 WHERE id=$5 AND mayorista_id=$6`,
+      [descuento, total_estimado, observaciones, estado, id, mayorista_id]
     );
     await pool.query(`DELETE FROM pedidos_web_items WHERE pedido_id=$1`, [id]);
     for (const item of items) {
@@ -291,7 +305,7 @@ router.put('/:id', async (req, res) => {
         [id, item.producto_id||null, item.codigo||'', item.nombre||'', item.rubro||'', item.cantidad, item.precio_unitario||0, item.es_oferta||false, item.oferta_titulo||null]
       );
     }
-    const resultado = await pool.query(`SELECT * FROM pedidos_web WHERE id=$1`, [id]);
+    const resultado = await pool.query(`SELECT * FROM pedidos_web WHERE id=$1 AND mayorista_id=$2`, [id, mayorista_id]);
     res.json(resultado.rows[0]);
   } catch (error) {
     console.error(error);

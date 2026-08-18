@@ -17,7 +17,22 @@ async function getConexionMayorista(mayorista_id) {
 
 router.get('/', async (req, res) => {
   try {
-    const resultado = await pool.query('SELECT * FROM mayoristas WHERE activo = true');
+    const resultado = await pool.query(
+      `SELECT id, nombre, codigo, logo, activo,
+              mostrar_precios, mostrar_stock, mostrar_marca, mostrar_rubro, mostrar_tipo,
+              habilitar_calculadora, descuento_1, descuento_2, descuento_3, iva,
+              orden_pdf, config_habilitada, pedir_clave, tamanio_hoja, items_por_hoja,
+              numero_pedido_inicio, habilitar_ctas_ctes, razon_social,
+              habilitar_demanda, habilitar_ofertas, habilitar_productos_solicitados,
+              habilitar_descuentos_por_cliente,
+              habilitar_lector_barras, habilitar_cross_selling, habilitar_mensajes,
+              habilitar_medios_de_pago, medios_de_pago, habilitar_notificaciones,
+              habilitar_calculadora_venta, habilitar_historial_ventas,
+              habilitar_cotizaciones, habilitar_novedades,
+              dto_pago_termino, precio_incluye_iva,
+              ivan_activo
+       FROM mayoristas WHERE activo = true`
+    );
     res.json(resultado.rows);
   } catch (error) { res.status(500).json({ mensaje: 'Error del servidor' }); }
 });
@@ -66,7 +81,19 @@ router.put('/:id/configuracion', async (req, res) => {
         habilitar_productos_solicitados=$19, habilitar_medios_de_pago=$20, medios_de_pago=$21,
         habilitar_notificaciones=$22,
         dto_pago_termino=$23
-       WHERE id=$24 RETURNING *`,
+       WHERE id=$24
+       RETURNING id, nombre, codigo, logo,
+                 mostrar_precios, mostrar_stock, mostrar_marca, mostrar_rubro, mostrar_tipo,
+                 habilitar_calculadora, descuento_1, descuento_2, descuento_3, iva,
+                 orden_pdf, config_habilitada, pedir_clave, tamanio_hoja, items_por_hoja,
+                 numero_pedido_inicio, habilitar_ctas_ctes, razon_social,
+                 habilitar_demanda, habilitar_ofertas, habilitar_productos_solicitados,
+                 habilitar_descuentos_por_cliente,
+                 habilitar_lector_barras, habilitar_cross_selling, habilitar_mensajes,
+                 habilitar_medios_de_pago, medios_de_pago, habilitar_notificaciones,
+                 habilitar_calculadora_venta, habilitar_historial_ventas,
+                 habilitar_cotizaciones, habilitar_novedades,
+                 dto_pago_termino, precio_incluye_iva`,
       [mostrar_precios, mostrar_stock, mostrar_marca, mostrar_rubro, mostrar_tipo,
        pedir_clave, tamanio_hoja, items_por_hoja, numero_pedido_inicio,
        habilitar_calculadora, descuento_1||0, descuento_2||0, descuento_3||0, iva||21,

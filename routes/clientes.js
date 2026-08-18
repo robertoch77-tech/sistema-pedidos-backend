@@ -33,32 +33,6 @@ function normalizar(texto) {
   return texto.replace(/[ñÑáéíóúÁÉÍÓÚ\uFFFD]/g, '_');
 }
 
-// TEMPORAL — diagnóstico ctas ctes
-router.get('/:mayorista_id/diag-ctas', async (req, res) => {
-  try {
-    const { mayorista_id } = req.params;
-    const poolExterno = await getConexionMayorista(mayorista_id);
-    if (!poolExterno) return res.status(404).json({ mensaje: 'Sin conexión' });
-    const r = await poolExterno.query(`SELECT * FROM "viewClientesCtasCtes" LIMIT 5`);
-    res.json(r.rows);
-  } catch (error) {
-    res.status(500).json({ mensaje: error.message });
-  }
-});
-
-// TEMPORAL — diagnóstico productos
-router.get('/:mayorista_id/diag-productos', async (req, res) => {
-  try {
-    const { mayorista_id } = req.params;
-    const poolExterno = await getConexionMayorista(mayorista_id);
-    if (!poolExterno) return res.status(404).json({ mensaje: 'Sin conexión' });
-    const r = await poolExterno.query(`SELECT * FROM "viewProductos" LIMIT 3`);
-    res.json(r.rows);
-  } catch (error) {
-    res.status(500).json({ mensaje: error.message });
-  }
-});
-
 // Cuentas corrientes del cliente
 router.get('/:mayorista_id/ctas-ctes/:id_cliente', async (req, res) => {
   try {
