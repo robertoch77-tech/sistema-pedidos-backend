@@ -199,6 +199,7 @@ app.use('/api/superadmin/cuenta-corriente', require('./routes/superadmin/cuenta-
 app.use('/api/superadmin/caja', require('./routes/superadmin/caja'));
 app.use('/api/superadmin/cheques', require('./routes/superadmin/cheques'));
 app.use('/api/superadmin/notas',   require('./routes/superadmin/notas'));
+app.use('/api/superadmin/notificaciones-roberto', require('./routes/superadmin/notificaciones-roberto'));
 app.use('/api/superadmin/arca',    require('./routes/superadmin/arca'));
 app.use('/api/superadmin/reportes', require('./routes/superadmin/reportes'));
 app.use('/api/superadmin/gastos',  require('./routes/superadmin/gastos'));
