@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 const { Pool } = require('pg');
+const { registrarNotificacionIvan } = require('../services/notificacionesIvan');
 
 const conexiones = {};
 
@@ -176,6 +177,23 @@ router.post('/', async (req, res) => {
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
         [pedido_id, item.producto_id||null, item.codigo||'', item.nombre||'', item.rubro||'', item.cantidad, item.precio_unitario||0, item.es_oferta||false, item.oferta_titulo||null]
       );
+    }
+
+    if (estado === 'enviado') {
+      await registrarNotificacionIvan({
+        mayoristaId: mayorista_id,
+        tipo: 'pedido',
+        referenciaId: pedido_id,
+        clienteCuit: cliente_cuit,
+        clienteNombre: cliente_nombre,
+        titulo: `Pedido #${numero_pedido || pedido_id}`,
+        resumen: `${cliente_nombre || cliente_cuit} - ${Array.isArray(items) ? items.length : 0} productos - $${Number(total_estimado || 0).toLocaleString('es-AR')}`,
+        datos: {
+          numero_pedido: numero_pedido || String(pedido_id),
+          total: Number(total_estimado || 0),
+          cantidad_items: Array.isArray(items) ? items.length : 0,
+        },
+      });
     }
 
     if (estado === 'enviado') {

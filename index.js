@@ -171,6 +171,7 @@ const bannersRouter = require('./routes/banners');
 app.use('/api/banners', bannersRouter);
 const mensajesRouter = require('./routes/mensajes');
 app.use('/api/mensajes', mensajesRouter);
+app.use('/api/notificaciones-ivan', require('./routes/notificaciones-ivan'));
 const notificacionesRouter = require('./routes/notificaciones');
 app.use('/api/notificaciones', notificacionesRouter);
 const historialRouter = require('./routes/historial');

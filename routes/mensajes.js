@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const { registrarNotificacionIvan } = require('../services/notificacionesIvan');
 
 // Lista de hilos del mayorista — agrupa por cliente_cuit con último mensaje y no leídos
 router.get('/:mayorista_id', async (req, res) => {
@@ -116,6 +117,18 @@ router.post('/', async (req, res) => {
        RETURNING *`,
       [mayorista_id, cliente_cuit, cliente_nombre || '', texto, origen]
     );
+    if (origen === 'cliente') {
+      await registrarNotificacionIvan({
+        mayoristaId: mayorista_id,
+        tipo: 'mensaje',
+        referenciaId: resultado.rows[0].id,
+        clienteCuit: cliente_cuit,
+        clienteNombre: cliente_nombre,
+        titulo: `Mensaje de ${cliente_nombre || cliente_cuit}`,
+        resumen: String(texto).slice(0, 180),
+        datos: { mensaje_id: resultado.rows[0].id },
+      });
+    }
     res.json(resultado.rows[0]);
   } catch (error) {
     console.error('Error enviar mensaje:', error.message);
