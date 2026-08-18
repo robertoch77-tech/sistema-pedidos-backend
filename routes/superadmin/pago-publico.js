@@ -3,17 +3,34 @@ const router  = express.Router();
 const pool    = require('../../db');
 const QRCode  = require('qrcode');
 
+const escapeHtml = value => String(value ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+
+const logoSeguro = value => {
+  try {
+    const url = new URL(String(value || ''));
+    return ['https:', 'http:'].includes(url.protocol) ? escapeHtml(url.toString()) : '';
+  } catch { return ''; }
+};
+
+const tokenValido = token => /^[a-f0-9]{48}$/.test(String(token || ''));
+
 // ═══════════════════════════════════════════════════════════════
-// GET /api/pago/:cliente_id — Landing page pública de pago
+// GET /api/pago/public/:token — Landing pública con identificador opaco.
 // SIN autenticación — es para que el comprador escanee el QR
 // ═══════════════════════════════════════════════════════════════
-router.get('/:cliente_id', async (req, res) => {
-  const { cliente_id } = req.params;
+router.get('/public/:token', async (req, res) => {
+  const { token } = req.params;
+  if (!tokenValido(token)) return res.status(404).send('No disponible');
   try {
     const result = await pool.query(
       `SELECT nombre_comercial, cuit, direccion, logo_url, alias_pago, cbu_pago, banco_pago
-       FROM config_negocio WHERE cliente_id = $1`,
-      [cliente_id]
+       FROM config_negocio WHERE pago_public_token = $1`,
+      [token]
     );
     if (!result.rows[0] || !result.rows[0].alias_pago) {
       return res.status(404).send(`
@@ -27,13 +44,24 @@ router.get('/:cliente_id', async (req, res) => {
       `);
     }
     const d = result.rows[0];
+    const nombre = escapeHtml(d.nombre_comercial || 'Negocio');
+    const direccion = escapeHtml(d.direccion);
+    const alias = escapeHtml(d.alias_pago);
+    const cbu = escapeHtml(d.cbu_pago);
+    const banco = escapeHtml(d.banco_pago);
+    const cuit = escapeHtml(d.cuit);
+    const logo = logoSeguro(d.logo_url);
+    const nonce = require('crypto').randomBytes(16).toString('base64');
+    res.set('Content-Security-Policy', `default-src 'none'; img-src https: http: data:; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; base-uri 'none'; frame-ancestors 'none'`);
+    res.set('X-Robots-Tag', 'noindex, nofollow');
+    res.set('Cache-Control', 'no-store');
     res.send(`
 <!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Pagar a ${d.nombre_comercial || 'Negocio'}</title>
+  <title>Datos de transferencia de ${nombre}</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
@@ -58,34 +86,34 @@ router.get('/:cliente_id', async (req, res) => {
 <body>
   <div class="card">
     <div class="header">
-      ${d.logo_url ? `<img src="${d.logo_url}" alt="Logo" onerror="this.style.display='none'">` : ''}
-      <h1>${d.nombre_comercial || 'Negocio'}</h1>
-      ${d.direccion ? `<p>${d.direccion}</p>` : ''}
+      ${logo ? `<img src="${logo}" alt="Logo">` : ''}
+      <h1>${nombre}</h1>
+      ${direccion ? `<p>${direccion}</p>` : ''}
     </div>
     <div class="body">
       <div class="field">
         <div class="field-label">Alias de transferencia</div>
         <div class="field-value">
-          <span class="field-text" id="alias">${d.alias_pago}</span>
+          <span class="field-text" id="alias">${alias}</span>
           <button class="copy-btn" onclick="copiar('alias', this)">Copiar</button>
         </div>
       </div>
-      ${d.cbu_pago ? `
+      ${cbu ? `
       <div class="field">
         <div class="field-label">CBU / CVU</div>
         <div class="field-value">
-          <span class="field-text" id="cbu" style="font-size:13px">${d.cbu_pago}</span>
+          <span class="field-text" id="cbu" style="font-size:13px">${cbu}</span>
           <button class="copy-btn" onclick="copiar('cbu', this)">Copiar</button>
         </div>
       </div>` : ''}
-      ${d.banco_pago ? `<p class="bank-info">&#127974; ${d.banco_pago}</p>` : ''}
-      ${d.cuit ? `<p class="bank-info" style="margin-top:8px">CUIT: ${d.cuit}</p>` : ''}
+      ${banco ? `<p class="bank-info">&#127974; ${banco}</p>` : ''}
+      ${cuit ? `<p class="bank-info" style="margin-top:8px">CUIT: ${cuit}</p>` : ''}
     </div>
     <div class="footer">
-      <p>Escaneá el QR o copiá el alias para transferir</p>
+      <p>Verificá el titular en tu banco antes de confirmar la transferencia</p>
     </div>
   </div>
-  <script>
+  <script nonce="${nonce}">
     function copiar(id, btn) {
       var txt = document.getElementById(id).textContent;
       navigator.clipboard.writeText(txt).then(function() {
@@ -113,21 +141,22 @@ router.get('/:cliente_id', async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// GET /api/pago/:cliente_id/qr.png — Imagen QR como PNG
+// GET /api/pago/public/:token/qr.png — Imagen QR como PNG
 // SIN autenticación — el frontend la usa para mostrar/descargar
 // ═══════════════════════════════════════════════════════════════
-router.get('/:cliente_id/qr.png', async (req, res) => {
-  const { cliente_id } = req.params;
+router.get('/public/:token/qr.png', async (req, res) => {
+  const { token } = req.params;
+  if (!tokenValido(token)) return res.status(404).json({ error: 'No disponible' });
   const baseUrl = `${req.protocol}://${req.get('host')}`;
   try {
     const result = await pool.query(
-      `SELECT alias_pago FROM config_negocio WHERE cliente_id = $1`,
-      [cliente_id]
+      `SELECT alias_pago FROM config_negocio WHERE pago_public_token = $1`,
+      [token]
     );
     if (!result.rows[0] || !result.rows[0].alias_pago) {
       return res.status(404).json({ error: 'Alias de pago no configurado' });
     }
-    const url = `${baseUrl}/api/pago/${cliente_id}`;
+    const url = `${baseUrl}/api/pago/public/${token}`;
     const qrBuffer = await QRCode.toBuffer(url, {
       width: 400,
       margin: 2,
