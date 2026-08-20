@@ -268,12 +268,15 @@ router.get('/:cliente_id/venta-items/:venta_id', verificarClienteId, async (req,
   try {
     const { cliente_id, venta_id } = req.params;
     const r = await pool.query(
-      `SELECT vi.producto_id, vi.descripcion, vi.cantidad, vi.precio_unitario,
+      `SELECT vi.producto_id,
+              COALESCE(p.descripcion, vi.descripcion_libre, '') AS descripcion,
+              vi.cantidad, vi.precio_unitario,
               COALESCE(vi.descuento_porcentaje, 0) AS descuento_pct,
               COALESCE(vi.alicuota_iva, 21) AS alicuota_iva,
               vi.subtotal, vi.iva_monto
        FROM ventas_items vi
        JOIN ventas v ON v.id = vi.venta_id
+       LEFT JOIN productos_propios p ON p.id = vi.producto_id AND p.cliente_id = v.cliente_id
        WHERE vi.venta_id = $1 AND v.cliente_id = $2
        ORDER BY vi.id`,
       [venta_id, cliente_id]
