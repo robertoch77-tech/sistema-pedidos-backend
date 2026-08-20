@@ -227,25 +227,31 @@ router.get('/:cliente_id/resumen', verificarClienteId, async (req, res) => {
   }
 });
 
-// ─── GET /:cliente_id/facturas-emitidas ── buscar facturas para vincular N/C
+// ─── GET /:cliente_id/facturas-emitidas ── buscar ventas/facturas para vincular N/C
 router.get('/:cliente_id/facturas-emitidas', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
     const { buscar } = req.query;
 
     let query = `
-      SELECT v.id AS venta_id, v.numero_arca, v.tipo_factura, v.cae, v.total AS monto_total,
+      SELECT v.id AS venta_id,
+             v.numero_completo AS numero_interno,
+             COALESCE(NULLIF(v.numero_arca::text, ''), v.numero_completo) AS numero_arca,
+             v.tipo_factura, v.cae, COALESCE(v.facturado, false) AS facturado,
+             v.total AS monto_total,
              v.comprador_nombre, v.comprador_cuit, v.creado_en,
              ac.punto_venta, ac.numero
       FROM ventas v
       LEFT JOIN arca_comprobantes ac ON ac.venta_id = v.id AND ac.cliente_id = v.cliente_id
-      WHERE v.cliente_id = $1 AND v.facturado = true
+      WHERE v.cliente_id = $1 AND COALESCE(v.anulada, false) = false
     `;
     const params = [cliente_id];
 
     if (buscar && buscar.trim()) {
       params.push('%' + buscar.trim() + '%');
-      query += ` AND (v.numero_arca ILIKE $2 OR v.comprador_nombre ILIKE $2 OR v.comprador_cuit ILIKE $2)`;
+      query += ` AND (v.numero_completo ILIKE $2 OR v.numero_arca::text ILIKE $2
+                      OR ac.numero_completo ILIKE $2
+                      OR v.comprador_nombre ILIKE $2 OR v.comprador_cuit ILIKE $2)`;
     }
     query += ` ORDER BY v.creado_en DESC LIMIT 20`;
 
@@ -263,7 +269,7 @@ router.get('/:cliente_id/venta-items/:venta_id', verificarClienteId, async (req,
     const { cliente_id, venta_id } = req.params;
     const r = await pool.query(
       `SELECT vi.producto_id, vi.descripcion, vi.cantidad, vi.precio_unitario,
-              COALESCE(vi.descuento, 0) AS descuento_pct,
+              COALESCE(vi.descuento_porcentaje, 0) AS descuento_pct,
               COALESCE(vi.alicuota_iva, 21) AS alicuota_iva,
               vi.subtotal, vi.iva_monto
        FROM ventas_items vi
