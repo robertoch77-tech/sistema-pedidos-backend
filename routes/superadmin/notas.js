@@ -112,6 +112,8 @@ async function asegurarTablas() {
       await pool.query(`ALTER TABLE notas_credito ADD COLUMN IF NOT EXISTS ${col} ${tipo}`).catch(() => {});
       await pool.query(`ALTER TABLE notas_debito  ADD COLUMN IF NOT EXISTS ${col} ${tipo}`).catch(() => {});
     }
+    await pool.query(`ALTER TABLE notas_credito_items ADD COLUMN IF NOT EXISTS modo_iva TEXT DEFAULT 'agregar'`).catch(() => {});
+    await pool.query(`ALTER TABLE notas_debito_items  ADD COLUMN IF NOT EXISTS modo_iva TEXT DEFAULT 'agregar'`).catch(() => {});
   } catch (err) {
     console.error('notas: error asegurando tablas:', err.message);
   }
@@ -125,14 +127,21 @@ function n(v) { return parseFloat(v) || 0; }
 function calcTotales(items) {
   let subtotal = 0, total_iva = 0;
   for (const it of items) {
-    const base = n(it.cantidad) * n(it.precio_unitario) * (1 - n(it.descuento_pct) / 100);
-    const iva  = base * (n(it.alicuota_iva) / 100);
+    const importe = n(it.cantidad) * n(it.precio_unitario) * (1 - n(it.descuento_pct) / 100);
+    const alicuota = n(it.alicuota_iva);
+    const modoIva = ['off', 'agregar', 'discriminar'].includes(it.modo_iva) ? it.modo_iva : 'agregar';
+    const iva = modoIva === 'agregar'
+      ? importe * (alicuota / 100)
+      : modoIva === 'discriminar'
+        ? importe * (alicuota / (100 + alicuota))
+        : 0;
+    const base = modoIva === 'discriminar' ? importe - iva : importe;
     it._subtotal   = base;
-    it._total_item = base + iva;
+    it._total_item = modoIva === 'agregar' ? importe + iva : importe;
     subtotal  += base;
     total_iva += iva;
   }
-  return { subtotal, total_iva, total: subtotal + total_iva };
+  return { subtotal, total_iva, total: items.reduce((s, it) => s + n(it._total_item), 0) };
 }
 
 // ─── GET /:cliente_id — lista con filtros ─────────────────────
@@ -238,6 +247,7 @@ router.get('/:cliente_id/facturas-emitidas', verificarClienteId, async (req, res
              v.numero_completo AS numero_interno,
              COALESCE(NULLIF(v.numero_arca::text, ''), v.numero_completo) AS numero_arca,
              v.tipo_factura, v.cae, COALESCE(v.facturado, false) AS facturado,
+             COALESCE(v.modo_iva, 'off') AS modo_iva,
              v.total AS monto_total,
              v.comprador_nombre, v.comprador_cuit, v.creado_en,
              ac.punto_venta, ac.numero
@@ -349,11 +359,13 @@ router.post('/:cliente_id/credito', verificarClienteId, async (req, res) => {
       await pool.query(
         `INSERT INTO notas_credito_items
            (nota_id, producto_id, variante_id, es_libre, descripcion,
-            cantidad, precio_unitario, descuento_pct, alicuota_iva, subtotal, total_item)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+            cantidad, precio_unitario, descuento_pct, alicuota_iva, modo_iva, subtotal, total_item)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
         [nota_id, it.producto_id || null, it.variante_id || null, it.es_libre || false,
          it.descripcion || '', n(it.cantidad), n(it.precio_unitario),
-         n(it.descuento_pct), n(it.alicuota_iva) || 21, it._subtotal, it._total_item]
+         n(it.descuento_pct), n(it.alicuota_iva) || 21,
+         ['off', 'agregar', 'discriminar'].includes(it.modo_iva) ? it.modo_iva : 'agregar',
+         it._subtotal, it._total_item]
       );
     }
 
@@ -452,11 +464,13 @@ router.post('/:cliente_id/debito', verificarClienteId, async (req, res) => {
       await pool.query(
         `INSERT INTO notas_debito_items
            (nota_id, producto_id, variante_id, es_libre, descripcion,
-            cantidad, precio_unitario, descuento_pct, alicuota_iva, subtotal, total_item)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+            cantidad, precio_unitario, descuento_pct, alicuota_iva, modo_iva, subtotal, total_item)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
         [nota_id, it.producto_id || null, it.variante_id || null, it.es_libre || false,
          it.descripcion || '', n(it.cantidad), n(it.precio_unitario),
-         n(it.descuento_pct), n(it.alicuota_iva) || 21, it._subtotal, it._total_item]
+         n(it.descuento_pct), n(it.alicuota_iva) || 21,
+         ['off', 'agregar', 'discriminar'].includes(it.modo_iva) ? it.modo_iva : 'agregar',
+         it._subtotal, it._total_item]
       );
     }
 
