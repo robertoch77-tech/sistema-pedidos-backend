@@ -3,6 +3,7 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const pool = require('../../db');
+const { registrarInicio, sinInterrumpir } = require('../../services/actividadAccesos');
 
 pool.query(`
   CREATE TABLE IF NOT EXISTS sesiones_portal (
@@ -74,6 +75,17 @@ router.post('/login', async (req, res) => {
        VALUES ($1, $2, $3)`,
       [token, cliente.id, expira]
     );
+
+    sinInterrumpir(registrarInicio({
+      token,
+      sistema: 'roberto',
+      tipoActor: 'cliente_roberto',
+      actorId: cliente.id,
+      empresaId: cliente.mayorista_id,
+      nombre: cliente.nombre_comercial || cliente.razon_social,
+      identificador: cliente.codigo_acceso,
+      req,
+    }), 'inicio Roberto');
 
     res.json({
       ok: true,

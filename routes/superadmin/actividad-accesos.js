@@ -1,0 +1,76 @@
+const express = require('express');
+const jwt = require('jsonwebtoken');
+const pool = require('../../db');
+const { verificarCualquierToken, verificarSoloSuperadmin } = require('./authMiddleware');
+const { asegurarTablas, registrarPulso, registrarCierre } = require('../../services/actividadAccesos');
+
+const router = express.Router();
+
+async function validarSesionCliente(req, res, next) {
+  const token = req.headers['x-roberto-token'] || req.headers.authorization?.replace(/^Bearer\s+/i, '');
+  if (!token) return res.status(401).json({ error: 'Sesión requerida' });
+
+  try {
+    if (String(token).startsWith('rp_')) {
+      const sesion = await pool.query('SELECT expira_en FROM sesiones_portal WHERE token=$1', [token]);
+      if (!sesion.rows[0] || Number(sesion.rows[0].expira_en) < Date.now()) {
+        return res.status(401).json({ error: 'Sesión inválida o expirada' });
+      }
+    } else {
+      jwt.verify(token, process.env.JWT_SECRET);
+    }
+    req.actividadToken = token;
+    next();
+  } catch (_) {
+    return res.status(401).json({ error: 'Sesión inválida o expirada' });
+  }
+}
+
+router.post('/pulso', validarSesionCliente, async (req, res) => {
+  try {
+    const encontrada = await registrarPulso(req.actividadToken);
+    res.json({ ok: true, registrada: encontrada });
+  } catch (error) {
+    console.error('[ACTIVIDAD] pulso:', error.message);
+    res.json({ ok: true, registrada: false });
+  }
+});
+
+router.post('/cerrar', validarSesionCliente, async (req, res) => {
+  try {
+    await registrarCierre(req.actividadToken);
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('[ACTIVIDAD] cierre:', error.message);
+    res.json({ ok: true });
+  }
+});
+
+router.get('/', verificarCualquierToken, verificarSoloSuperadmin, async (req, res) => {
+  try {
+    await asegurarTablas();
+    const dias = Math.min(Math.max(Number(req.query.dias) || 7, 1), 90);
+    const sistema = ['roberto', 'ivan'].includes(String(req.query.sistema)) ? String(req.query.sistema) : null;
+    const { rows } = await pool.query(`
+      SELECT id, sistema, tipo_actor, actor_id, empresa_id, nombre, identificador,
+             inicio_en, ultima_actividad_en, cierre_en,
+             (cierre_en IS NULL AND ultima_actividad_en >= NOW() - INTERVAL '3 minutes') AS en_linea,
+             GREATEST(0, EXTRACT(EPOCH FROM (COALESCE(cierre_en, ultima_actividad_en) - inicio_en)))::BIGINT AS duracion_segundos,
+             CASE
+               WHEN user_agent ILIKE '%Mobile%' OR user_agent ILIKE '%Android%' OR user_agent ILIKE '%iPhone%' THEN 'Celular'
+               ELSE 'Computadora'
+             END AS dispositivo
+      FROM sesiones_actividad
+      WHERE inicio_en >= NOW() - ($1::text || ' days')::interval
+        AND ($2::text IS NULL OR sistema = $2)
+      ORDER BY ultima_actividad_en DESC
+      LIMIT 500
+    `, [dias, sistema]);
+    res.json({ sesiones: rows, criterio_en_linea_minutos: 3 });
+  } catch (error) {
+    console.error('[ACTIVIDAD] listado:', error.message);
+    res.status(500).json({ error: 'No se pudo consultar la actividad' });
+  }
+});
+
+module.exports = router;

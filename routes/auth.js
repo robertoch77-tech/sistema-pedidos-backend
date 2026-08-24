@@ -4,6 +4,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const pool = require('../db');
 const { Pool } = require('pg');
+const { registrarInicio, sinInterrumpir } = require('../services/actividadAccesos');
 
 const conexiones = {};
 
@@ -46,6 +47,10 @@ router.post('/login', async (req, res) => {
       process.env.JWT_SECRET,
       { expiresIn: '8h' }
     );
+    sinInterrumpir(registrarInicio({
+      token, sistema: 'ivan', tipoActor: 'mayorista', actorId: mayorista.id,
+      empresaId: mayorista.id, nombre: mayorista.nombre, identificador: mayorista.email, req,
+    }), 'inicio mayorista Iván');
     res.json({
       token,
       mayorista: {
@@ -144,10 +149,18 @@ router.post('/login-cliente', async (req, res) => {
     }
 
     const token = jwt.sign(
-      { id: cliente.id_cliente, cuit: cliente.doc_cliente, tipo: 'cliente' },
+      { id: cliente.id_cliente, cuit: cliente.doc_cliente, tipo: 'cliente', mayorista_id: conexion.mayorista_id },
       process.env.JWT_SECRET,
       { expiresIn: '8h' }
     );
+
+    sinInterrumpir(registrarInicio({
+      token, sistema: 'ivan', tipoActor: 'cliente_ivan', actorId: cliente.id_cliente,
+      empresaId: conexion.mayorista_id,
+      nombre: cliente.raz_soc_cliente || cliente.nom_fan_cliente,
+      identificador: cliente.doc_cliente,
+      req,
+    }), 'inicio cliente Iván');
 
     res.json({
       token,
