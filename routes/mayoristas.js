@@ -80,15 +80,35 @@ router.put('/:id/configuracion', async (req, res) => {
       habilitar_medios_de_pago, medios_de_pago, habilitar_notificaciones,
       dto_pago_termino, precio_incluye_iva, permitir_presupuesto_clientes
     } = req.body;
+    // Este endpoint es compartido por Admin y por el panel del mayorista.
+    // Cada pantalla envía un subconjunto distinto: un campo ausente debe
+    // conservarse, mientras que false y 0 sí son valores intencionales.
+    const valor = dato => dato === undefined ? null : dato;
     const resultado = await pool.query(
       `UPDATE mayoristas SET
-        mostrar_precios=$1, mostrar_stock=$2, mostrar_marca=$3, mostrar_rubro=$4, mostrar_tipo=$5,
-        pedir_clave=$6, tamanio_hoja=$7, items_por_hoja=$8, numero_pedido_inicio=$9,
-        habilitar_calculadora=$10, descuento_1=$11, descuento_2=$12, descuento_3=$13, iva=$14,
-        orden_pdf=$15, habilitar_ctas_ctes=$16, habilitar_demanda=$17, habilitar_ofertas=$18,
-        habilitar_productos_solicitados=$19, habilitar_medios_de_pago=$20, medios_de_pago=$21,
-        habilitar_notificaciones=$22,
-        dto_pago_termino=$23,
+        mostrar_precios=COALESCE($1, mostrar_precios),
+        mostrar_stock=COALESCE($2, mostrar_stock),
+        mostrar_marca=COALESCE($3, mostrar_marca),
+        mostrar_rubro=COALESCE($4, mostrar_rubro),
+        mostrar_tipo=COALESCE($5, mostrar_tipo),
+        pedir_clave=COALESCE($6, pedir_clave),
+        tamanio_hoja=COALESCE($7, tamanio_hoja),
+        items_por_hoja=COALESCE($8, items_por_hoja),
+        numero_pedido_inicio=COALESCE($9, numero_pedido_inicio),
+        habilitar_calculadora=COALESCE($10, habilitar_calculadora),
+        descuento_1=COALESCE($11, descuento_1),
+        descuento_2=COALESCE($12, descuento_2),
+        descuento_3=COALESCE($13, descuento_3),
+        iva=COALESCE($14, iva),
+        orden_pdf=COALESCE($15, orden_pdf),
+        habilitar_ctas_ctes=COALESCE($16, habilitar_ctas_ctes),
+        habilitar_demanda=COALESCE($17, habilitar_demanda),
+        habilitar_ofertas=COALESCE($18, habilitar_ofertas),
+        habilitar_productos_solicitados=COALESCE($19, habilitar_productos_solicitados),
+        habilitar_medios_de_pago=COALESCE($20, habilitar_medios_de_pago),
+        medios_de_pago=COALESCE($21, medios_de_pago),
+        habilitar_notificaciones=COALESCE($22, habilitar_notificaciones),
+        dto_pago_termino=COALESCE($23, dto_pago_termino),
         precio_incluye_iva=COALESCE($24, precio_incluye_iva),
         permitir_presupuesto_clientes=COALESCE($25, permitir_presupuesto_clientes)
        WHERE id=$26
@@ -104,14 +124,13 @@ router.put('/:id/configuracion', async (req, res) => {
                  habilitar_calculadora_venta, habilitar_historial_ventas,
                  habilitar_cotizaciones, habilitar_novedades,
                  dto_pago_termino, precio_incluye_iva, permitir_presupuesto_clientes`,
-      [mostrar_precios, mostrar_stock, mostrar_marca, mostrar_rubro, mostrar_tipo,
-       pedir_clave, tamanio_hoja, items_por_hoja, numero_pedido_inicio,
-       habilitar_calculadora, descuento_1||0, descuento_2||0, descuento_3||0, iva ?? 21,
-       orden_pdf||'codigo', habilitar_ctas_ctes||false, habilitar_demanda||false, habilitar_ofertas||false,
-       habilitar_productos_solicitados||false, habilitar_medios_de_pago||false, medios_de_pago||'',
-       habilitar_notificaciones||false, dto_pago_termino||0,
-       typeof precio_incluye_iva === 'boolean' ? precio_incluye_iva : null,
-       typeof permitir_presupuesto_clientes === 'boolean' ? permitir_presupuesto_clientes : null, id]
+      [valor(mostrar_precios), valor(mostrar_stock), valor(mostrar_marca), valor(mostrar_rubro), valor(mostrar_tipo),
+       valor(pedir_clave), valor(tamanio_hoja), valor(items_por_hoja), valor(numero_pedido_inicio),
+       valor(habilitar_calculadora), valor(descuento_1), valor(descuento_2), valor(descuento_3), valor(iva),
+       valor(orden_pdf), valor(habilitar_ctas_ctes), valor(habilitar_demanda), valor(habilitar_ofertas),
+       valor(habilitar_productos_solicitados), valor(habilitar_medios_de_pago), valor(medios_de_pago),
+       valor(habilitar_notificaciones), valor(dto_pago_termino), valor(precio_incluye_iva),
+       valor(permitir_presupuesto_clientes), id]
     );
     res.json(resultado.rows[0]);
   } catch (error) {
