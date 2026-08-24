@@ -162,6 +162,7 @@ app.use('/api/auth', require('./routes/auth'));
 app.use('/api/mayoristas', require('./routes/mayoristas'));
 app.use('/api/clientes', require('./routes/clientes'));
 app.use('/api/productos', require('./routes/productos'));
+app.use('/api/perfil-presupuesto', require('./routes/perfil-presupuesto'));
 app.use('/api/pedidos', require('./routes/pedidos'));
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/demanda', require('./routes/demanda'));

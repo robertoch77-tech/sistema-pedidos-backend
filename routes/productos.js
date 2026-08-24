@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 const { Pool } = require('pg');
+const jwt = require('jsonwebtoken');
 
 // Cache de conexiones por mayorista
 const conexiones = {};
@@ -55,6 +56,21 @@ function aplicarDto(productos, dtoPct) {
 // Reemplaza ñ, acentos y el caracter roto (�) por comodin _ (1 caracter cualquiera).
 function normalizar(texto) {
   return texto.replace(/[ñÑáéíóúÁÉÍÓÚ\uFFFD]/g, '_');
+}
+
+function verificarClientePrecios(req, res, next) {
+  const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  if (!token) return res.status(401).json({ mensaje: 'Sesión requerida' });
+  try {
+    const sesion = jwt.verify(token, process.env.JWT_SECRET);
+    if (sesion.tipo !== 'cliente' || Number(sesion.mayorista_id) !== Number(req.params.mayorista_id)) {
+      return res.status(403).json({ mensaje: 'No tenés acceso a estos precios' });
+    }
+    req.clienteSesion = sesion;
+    next();
+  } catch (_) {
+    return res.status(401).json({ mensaje: 'Sesión inválida o vencida' });
+  }
 }
 
 // Ivan todavía no expone obs_producto en todos los clientes. Se detecta una
@@ -296,11 +312,10 @@ router.get('/:mayorista_id/equivalentes', async (req, res) => {
 });
 
 // GET — precios custom del cliente logueado
-router.get('/:mayorista_id/mis-precios-custom', async (req, res) => {
+router.get('/:mayorista_id/mis-precios-custom', verificarClientePrecios, async (req, res) => {
   try {
     const { mayorista_id } = req.params;
-    const cuit = req.query.cuit;
-    if (!cuit) return res.status(400).json({ mensaje: 'Falta cuit' });
+    const cuit = req.clienteSesion.cuit;
     const result = await pool.query(
       'SELECT producto_id, precio_venta FROM precios_cliente_custom WHERE mayorista_id = $1 AND cliente_cuit = $2',
       [mayorista_id, cuit]
@@ -311,6 +326,35 @@ router.get('/:mayorista_id/mis-precios-custom', async (req, res) => {
     }
     res.json(mapa);
   } catch (error) { res.status(500).json({ mensaje: 'Error del servidor' }); }
+});
+
+router.put('/:mayorista_id/mis-precios-custom/:productoId', verificarClientePrecios, async (req, res) => {
+  try {
+    const { mayorista_id, productoId } = req.params;
+    const precio = Number(req.body.precio_venta);
+    if (!Number.isFinite(precio) || precio < 0) return res.status(400).json({ mensaje: 'Precio inválido' });
+    const { rows } = await pool.query(`
+      INSERT INTO precios_cliente_custom (mayorista_id, cliente_cuit, producto_id, precio_venta)
+      VALUES ($1,$2,$3,$4)
+      ON CONFLICT (mayorista_id, cliente_cuit, producto_id)
+      DO UPDATE SET precio_venta=EXCLUDED.precio_venta, modificado_en=NOW()
+      RETURNING producto_id, precio_venta
+    `, [mayorista_id, String(req.clienteSesion.cuit), productoId, precio]);
+    res.json(rows[0]);
+  } catch (error) {
+    console.error('Guardar precio personalizado:', error.message);
+    res.status(500).json({ mensaje: 'Error al guardar el precio' });
+  }
+});
+
+router.delete('/:mayorista_id/mis-precios-custom/:productoId', verificarClientePrecios, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM precios_cliente_custom WHERE mayorista_id=$1 AND cliente_cuit=$2 AND producto_id=$3',
+      [req.params.mayorista_id, String(req.clienteSesion.cuit), req.params.productoId]);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ mensaje: 'Error al quitar el precio' });
+  }
 });
 
 router.get('/:mayorista_id', async (req, res) => {

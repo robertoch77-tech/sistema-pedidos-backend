@@ -3,6 +3,11 @@ const router = express.Router();
 const pool = require('../db');
 const { Pool } = require('pg');
 
+const columnaPresupuestoLista = pool.query('ALTER TABLE mayoristas ADD COLUMN IF NOT EXISTS permitir_presupuesto_clientes boolean DEFAULT false').catch(error => {
+  console.error('Mayoristas: no se pudo asegurar permitir_presupuesto_clientes:', error.message);
+  return null;
+});
+
 const conexiones = {};
 
 async function getConexionMayorista(mayorista_id) {
@@ -39,6 +44,7 @@ router.get('/', async (req, res) => {
 
 router.get('/:id/configuracion', async (req, res) => {
   try {
+    await columnaPresupuestoLista;
     const { id } = req.params;
     const resultado = await pool.query(
       // === MODIFICADO: se agregó habilitar_productos_solicitados ===
@@ -53,7 +59,7 @@ router.get('/:id/configuracion', async (req, res) => {
               habilitar_calculadora_venta, habilitar_historial_ventas,
               habilitar_cotizaciones, habilitar_novedades,
               dto_pago_termino,
-              precio_incluye_iva
+              precio_incluye_iva, permitir_presupuesto_clientes
        FROM mayoristas WHERE id=$1`, [id]
     );
     if (!resultado.rows[0]) return res.status(404).json({ mensaje: 'Mayorista no encontrado' });
@@ -63,6 +69,7 @@ router.get('/:id/configuracion', async (req, res) => {
 
 router.put('/:id/configuracion', async (req, res) => {
   try {
+    await columnaPresupuestoLista;
     const { id } = req.params;
     const {
       mostrar_precios, mostrar_stock, mostrar_marca, mostrar_rubro, mostrar_tipo,
@@ -71,7 +78,7 @@ router.put('/:id/configuracion', async (req, res) => {
       // === MODIFICADO: se agregó habilitar_productos_solicitados ===
       habilitar_ctas_ctes, habilitar_demanda, habilitar_ofertas, habilitar_productos_solicitados,
       habilitar_medios_de_pago, medios_de_pago, habilitar_notificaciones,
-      dto_pago_termino
+      dto_pago_termino, precio_incluye_iva, permitir_presupuesto_clientes
     } = req.body;
     const resultado = await pool.query(
       `UPDATE mayoristas SET
@@ -81,8 +88,10 @@ router.put('/:id/configuracion', async (req, res) => {
         orden_pdf=$15, habilitar_ctas_ctes=$16, habilitar_demanda=$17, habilitar_ofertas=$18,
         habilitar_productos_solicitados=$19, habilitar_medios_de_pago=$20, medios_de_pago=$21,
         habilitar_notificaciones=$22,
-        dto_pago_termino=$23
-       WHERE id=$24
+        dto_pago_termino=$23,
+        precio_incluye_iva=COALESCE($24, precio_incluye_iva),
+        permitir_presupuesto_clientes=COALESCE($25, permitir_presupuesto_clientes)
+       WHERE id=$26
        RETURNING id, nombre, codigo, logo,
                  mostrar_precios, mostrar_stock, mostrar_marca, mostrar_rubro, mostrar_tipo,
                  habilitar_calculadora, descuento_1, descuento_2, descuento_3, iva,
@@ -94,13 +103,15 @@ router.put('/:id/configuracion', async (req, res) => {
                  habilitar_medios_de_pago, medios_de_pago, habilitar_notificaciones,
                  habilitar_calculadora_venta, habilitar_historial_ventas,
                  habilitar_cotizaciones, habilitar_novedades,
-                 dto_pago_termino, precio_incluye_iva`,
+                 dto_pago_termino, precio_incluye_iva, permitir_presupuesto_clientes`,
       [mostrar_precios, mostrar_stock, mostrar_marca, mostrar_rubro, mostrar_tipo,
        pedir_clave, tamanio_hoja, items_por_hoja, numero_pedido_inicio,
-       habilitar_calculadora, descuento_1||0, descuento_2||0, descuento_3||0, iva||21,
+       habilitar_calculadora, descuento_1||0, descuento_2||0, descuento_3||0, iva ?? 21,
        orden_pdf||'codigo', habilitar_ctas_ctes||false, habilitar_demanda||false, habilitar_ofertas||false,
        habilitar_productos_solicitados||false, habilitar_medios_de_pago||false, medios_de_pago||'',
-       habilitar_notificaciones||false, dto_pago_termino||0, id]
+       habilitar_notificaciones||false, dto_pago_termino||0,
+       typeof precio_incluye_iva === 'boolean' ? precio_incluye_iva : null,
+       typeof permitir_presupuesto_clientes === 'boolean' ? permitir_presupuesto_clientes : null, id]
     );
     res.json(resultado.rows[0]);
   } catch (error) {
