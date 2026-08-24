@@ -366,42 +366,53 @@ router.post('/:cliente_id/credito', verificarClienteId, async (req, res) => {
     );
     const nota_id = notaRes.rows[0].id;
 
-    // Algunas bases históricas conservan nota_credito_id como NOT NULL
-    // además de nota_id. Completar ambas relaciones mantiene compatibilidad
-    // sin alterar ni borrar el esquema existente.
-    const legacyColRes = await client.query(
-      `SELECT column_name
+    // La base histórica puede conservar nombres anteriores (nota_credito_id,
+    // cliente_id, total, descuento_porcentaje, iva_monto). Leer el esquema real
+    // evita corregir una restricción por vez y mantiene compatibilidad sin borrar datos.
+    const columnasRes = await client.query(
+      `SELECT column_name, is_nullable, column_default, is_identity
        FROM information_schema.columns
        WHERE table_schema = current_schema()
          AND table_name = 'notas_credito_items'
-         AND column_name IN ('nota_credito_id', 'cliente_id')`
+       ORDER BY ordinal_position`
     );
-    const columnasCompatibles = new Set(legacyColRes.rows.map(row => row.column_name));
-    const usaNotaCreditoIdLegacy = columnasCompatibles.has('nota_credito_id');
-    const usaClienteId = columnasCompatibles.has('cliente_id');
+    const columnasTabla = new Set(columnasRes.rows.map(row => row.column_name));
 
     for (const it of items) {
-      const columnasItem = ['nota_id'];
-      const valoresItem = [nota_id];
-      if (usaNotaCreditoIdLegacy) {
-        columnasItem.push('nota_credito_id');
-        valoresItem.push(nota_id);
+      const descuento = n(it.descuento_pct);
+      const totalItem = n(it._total_item);
+      const subtotalItem = n(it._subtotal);
+      const datosItem = {
+        nota_id,
+        nota_credito_id: nota_id,
+        cliente_id,
+        producto_id: it.producto_id || null,
+        variante_id: it.variante_id || null,
+        es_libre: it.es_libre || false,
+        descripcion: it.descripcion || '',
+        cantidad: n(it.cantidad),
+        precio_unitario: n(it.precio_unitario),
+        descuento_pct: descuento,
+        descuento_porcentaje: descuento,
+        alicuota_iva: n(it.alicuota_iva) || 21,
+        modo_iva: ['off', 'agregar', 'discriminar'].includes(it.modo_iva) ? it.modo_iva : 'agregar',
+        subtotal: subtotalItem,
+        iva_monto: totalItem - subtotalItem,
+        total_item: totalItem,
+        total: totalItem,
+      };
+      const faltantes = columnasRes.rows
+        .filter(col => col.is_nullable === 'NO'
+          && col.column_default == null
+          && col.is_identity !== 'YES'
+          && col.column_name !== 'id'
+          && !Object.prototype.hasOwnProperty.call(datosItem, col.column_name))
+        .map(col => col.column_name);
+      if (faltantes.length) {
+        throw new Error(`Esquema incompatible de notas_credito_items: faltan ${faltantes.join(', ')}`);
       }
-      if (usaClienteId) {
-        columnasItem.push('cliente_id');
-        valoresItem.push(cliente_id);
-      }
-      columnasItem.push(
-        'producto_id', 'variante_id', 'es_libre', 'descripcion', 'cantidad',
-        'precio_unitario', 'descuento_pct', 'alicuota_iva', 'modo_iva', 'subtotal', 'total_item'
-      );
-      valoresItem.push(
-        it.producto_id || null, it.variante_id || null, it.es_libre || false,
-        it.descripcion || '', n(it.cantidad), n(it.precio_unitario),
-        n(it.descuento_pct), n(it.alicuota_iva) || 21,
-        ['off', 'agregar', 'discriminar'].includes(it.modo_iva) ? it.modo_iva : 'agregar',
-        it._subtotal, it._total_item,
-      );
+      const columnasItem = Object.keys(datosItem).filter(columna => columnasTabla.has(columna));
+      const valoresItem = columnasItem.map(columna => datosItem[columna]);
       const placeholders = valoresItem.map((_, index) => `$${index + 1}`).join(',');
       await client.query(
         `INSERT INTO notas_credito_items (${columnasItem.join(',')}) VALUES (${placeholders})`,
