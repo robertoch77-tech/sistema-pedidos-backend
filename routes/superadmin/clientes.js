@@ -144,12 +144,36 @@ router.put('/:id/prueba', async (req, res) => {
         [prueba_inicio, prueba_fin, id]
       );
     } else {
-      await pool.query(
-        `UPDATE clientes_roberto SET
-          prueba_inicio = NULL, prueba_fin = NULL, estado = 'activo', modificado_en = now()
-        WHERE id = $1`,
-        [id]
-      );
+      // Quitar la prueba debe dejar operativas las dos partes vinculadas.
+      // Se hace en una transacción para evitar un estado "cliente activo / empresa inactiva".
+      const db = await pool.connect();
+      try {
+        await db.query('BEGIN');
+        const activado = await db.query(
+          `UPDATE clientes_roberto SET
+            prueba_inicio = NULL, prueba_fin = NULL, estado = 'activo', modificado_en = now()
+          WHERE id = $1
+          RETURNING mayorista_id`,
+          [id]
+        );
+        if (!activado.rows[0]) {
+          await db.query('ROLLBACK');
+          return res.status(404).json({ mensaje: 'Cliente no encontrado' });
+        }
+        const mayoristaId = activado.rows[0].mayorista_id;
+        if (mayoristaId) {
+          const empresaActivada = await db.query('UPDATE mayoristas SET activo=true WHERE id=$1', [mayoristaId]);
+          if (empresaActivada.rowCount !== 1) {
+            throw new Error('La empresa vinculada no existe');
+          }
+        }
+        await db.query('COMMIT');
+      } catch (error) {
+        await db.query('ROLLBACK');
+        throw error;
+      } finally {
+        db.release();
+      }
     }
     const result = await pool.query(
       'SELECT estado, prueba_inicio, prueba_fin FROM clientes_roberto WHERE id=$1',
