@@ -318,7 +318,9 @@ router.get('/:cliente_id/:tipo_nota/:id', verificarClienteId, async (req, res) =
 
 // ─── POST /:cliente_id/credito ────────────────────────────────
 router.post('/:cliente_id/credito', verificarClienteId, async (req, res) => {
+  let client;
   try {
+    client = await pool.connect();
     const { cliente_id } = req.params;
     const {
       tipo = 'emitida', comprador_nombre, comprador_cuit, proveedor_id,
@@ -327,7 +329,15 @@ router.post('/:cliente_id/credito', verificarClienteId, async (req, res) => {
       afecta_cuenta_corriente = false, observaciones, estado = 'emitida',
     } = req.body;
 
-    const numRes = await pool.query(
+    await client.query('BEGIN');
+    // Serializa la numeración de N/C por cliente para evitar duplicados
+    // cuando dos usuarios emiten al mismo tiempo.
+    await client.query(
+      'SELECT pg_advisory_xact_lock(71001, ($1::bigint % 2147483647)::int)',
+      [cliente_id]
+    );
+
+    const numRes = await client.query(
       `SELECT COALESCE(MAX(numero),0)+1 AS siguiente FROM notas_credito WHERE cliente_id=$1`,
       [cliente_id]
     );
@@ -336,7 +346,7 @@ router.post('/:cliente_id/credito', verificarClienteId, async (req, res) => {
 
     const totales = calcTotales(items);
 
-    const notaRes = await pool.query(
+    const notaRes = await client.query(
       `INSERT INTO notas_credito
          (cliente_id, numero, numero_completo, tipo, estado,
           comprador_nombre, comprador_cuit, proveedor_id,
@@ -355,24 +365,50 @@ router.post('/:cliente_id/credito', verificarClienteId, async (req, res) => {
     );
     const nota_id = notaRes.rows[0].id;
 
+    // Algunas bases históricas conservan nota_credito_id como NOT NULL
+    // además de nota_id. Completar ambas relaciones mantiene compatibilidad
+    // sin alterar ni borrar el esquema existente.
+    const legacyColRes = await client.query(
+      `SELECT 1
+       FROM information_schema.columns
+       WHERE table_schema = current_schema()
+         AND table_name = 'notas_credito_items'
+         AND column_name = 'nota_credito_id'`
+    );
+    const usaNotaCreditoIdLegacy = legacyColRes.rows.length > 0;
+
     for (const it of items) {
-      await pool.query(
-        `INSERT INTO notas_credito_items
-           (nota_id, producto_id, variante_id, es_libre, descripcion,
-            cantidad, precio_unitario, descuento_pct, alicuota_iva, modo_iva, subtotal, total_item)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-        [nota_id, it.producto_id || null, it.variante_id || null, it.es_libre || false,
-         it.descripcion || '', n(it.cantidad), n(it.precio_unitario),
-         n(it.descuento_pct), n(it.alicuota_iva) || 21,
-         ['off', 'agregar', 'discriminar'].includes(it.modo_iva) ? it.modo_iva : 'agregar',
-         it._subtotal, it._total_item]
-      );
+      const valoresItem = [
+        nota_id, it.producto_id || null, it.variante_id || null, it.es_libre || false,
+        it.descripcion || '', n(it.cantidad), n(it.precio_unitario),
+        n(it.descuento_pct), n(it.alicuota_iva) || 21,
+        ['off', 'agregar', 'discriminar'].includes(it.modo_iva) ? it.modo_iva : 'agregar',
+        it._subtotal, it._total_item,
+      ];
+
+      if (usaNotaCreditoIdLegacy) {
+        await client.query(
+          `INSERT INTO notas_credito_items
+             (nota_id, nota_credito_id, producto_id, variante_id, es_libre, descripcion,
+              cantidad, precio_unitario, descuento_pct, alicuota_iva, modo_iva, subtotal, total_item)
+           VALUES ($1,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+          valoresItem
+        );
+      } else {
+        await client.query(
+          `INSERT INTO notas_credito_items
+             (nota_id, producto_id, variante_id, es_libre, descripcion,
+              cantidad, precio_unitario, descuento_pct, alicuota_iva, modo_iva, subtotal, total_item)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+          valoresItem
+        );
+      }
     }
 
     // CC: haber en cliente (emitida) o proveedor (recibida)
     if (afecta_cuenta_corriente) {
       if (tipo === 'emitida') {
-        await pool.query(
+        await client.query(
           `INSERT INTO movimientos_cuentas_corrientes
              (cuenta_corriente_id, cliente_id, tipo, debe, haber, saldo_acumulado, descripcion, estado)
            SELECT cc.id, $3, 'nota_credito', 0, $1,
@@ -380,17 +416,17 @@ router.post('/:cliente_id/credito', verificarClienteId, async (req, res) => {
                   $2, 'procesado'
            FROM cuentas_corrientes_clientes cc WHERE cc.cliente_id=$3 LIMIT 1`,
           [totales.total, `NC ${numero_completo} - ${motivo}`, cliente_id]
-        ).catch(() => {});
-        await pool.query(
+        );
+        await client.query(
           `UPDATE cuentas_corrientes_clientes SET saldo = COALESCE(saldo, 0) - $1, modificado_en = now()
            WHERE cliente_id = $2`,
           [totales.total, cliente_id]
-        ).catch(() => {});
+        );
       } else if (tipo === 'recibida' && proveedor_id) {
-        await pool.query(
+        await client.query(
           `UPDATE proveedores SET saldo = saldo - $1 WHERE id=$2`,
           [totales.total, proveedor_id]
-        ).catch(() => {});
+        );
       }
     }
 
@@ -398,16 +434,18 @@ router.post('/:cliente_id/credito', verificarClienteId, async (req, res) => {
     if (afecta_stock) {
       for (const it of items) {
         if (it.producto_id) {
-          await pool.query(
+          await client.query(
             `UPDATE productos_propios SET stock_actual = COALESCE(stock_actual, 0) + $1, modificado_en = now()
              WHERE id = $2 AND cliente_id = $3`,
             [n(it.cantidad), it.producto_id, cliente_id]
-          ).catch(() => {});
+          );
         }
       }
     }
 
-    // Analytics
+    await client.query('COMMIT');
+
+    // Analytics no forma parte de la operación comercial y no debe impedirla.
     await pool.query(
       `INSERT INTO analytics_eventos (cliente_id, tipo, valor, metadata, creado_en)
        VALUES ($1,'nc_emitida',$2,$3,now())`,
@@ -416,8 +454,11 @@ router.post('/:cliente_id/credito', verificarClienteId, async (req, res) => {
 
     res.json({ ok: true, nota_id, numero_completo });
   } catch (err) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
     console.error('notas credito crear:', err.message);
     res.status(500).json({ error: err.message });
+  } finally {
+    if (client) client.release();
   }
 });
 
