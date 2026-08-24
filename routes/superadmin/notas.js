@@ -40,6 +40,7 @@ async function asegurarTablas() {
       CREATE TABLE IF NOT EXISTS notas_credito_items (
         id               BIGSERIAL PRIMARY KEY,
         nota_id          BIGINT NOT NULL,
+        cliente_id       BIGINT NOT NULL,
         producto_id      BIGINT,
         variante_id      BIGINT,
         es_libre         BOOLEAN DEFAULT false,
@@ -369,40 +370,43 @@ router.post('/:cliente_id/credito', verificarClienteId, async (req, res) => {
     // además de nota_id. Completar ambas relaciones mantiene compatibilidad
     // sin alterar ni borrar el esquema existente.
     const legacyColRes = await client.query(
-      `SELECT 1
+      `SELECT column_name
        FROM information_schema.columns
        WHERE table_schema = current_schema()
          AND table_name = 'notas_credito_items'
-         AND column_name = 'nota_credito_id'`
+         AND column_name IN ('nota_credito_id', 'cliente_id')`
     );
-    const usaNotaCreditoIdLegacy = legacyColRes.rows.length > 0;
+    const columnasCompatibles = new Set(legacyColRes.rows.map(row => row.column_name));
+    const usaNotaCreditoIdLegacy = columnasCompatibles.has('nota_credito_id');
+    const usaClienteId = columnasCompatibles.has('cliente_id');
 
     for (const it of items) {
-      const valoresItem = [
-        nota_id, it.producto_id || null, it.variante_id || null, it.es_libre || false,
+      const columnasItem = ['nota_id'];
+      const valoresItem = [nota_id];
+      if (usaNotaCreditoIdLegacy) {
+        columnasItem.push('nota_credito_id');
+        valoresItem.push(nota_id);
+      }
+      if (usaClienteId) {
+        columnasItem.push('cliente_id');
+        valoresItem.push(cliente_id);
+      }
+      columnasItem.push(
+        'producto_id', 'variante_id', 'es_libre', 'descripcion', 'cantidad',
+        'precio_unitario', 'descuento_pct', 'alicuota_iva', 'modo_iva', 'subtotal', 'total_item'
+      );
+      valoresItem.push(
+        it.producto_id || null, it.variante_id || null, it.es_libre || false,
         it.descripcion || '', n(it.cantidad), n(it.precio_unitario),
         n(it.descuento_pct), n(it.alicuota_iva) || 21,
         ['off', 'agregar', 'discriminar'].includes(it.modo_iva) ? it.modo_iva : 'agregar',
         it._subtotal, it._total_item,
-      ];
-
-      if (usaNotaCreditoIdLegacy) {
-        await client.query(
-          `INSERT INTO notas_credito_items
-             (nota_id, nota_credito_id, producto_id, variante_id, es_libre, descripcion,
-              cantidad, precio_unitario, descuento_pct, alicuota_iva, modo_iva, subtotal, total_item)
-           VALUES ($1,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-          valoresItem
-        );
-      } else {
-        await client.query(
-          `INSERT INTO notas_credito_items
-             (nota_id, producto_id, variante_id, es_libre, descripcion,
-              cantidad, precio_unitario, descuento_pct, alicuota_iva, modo_iva, subtotal, total_item)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-          valoresItem
-        );
-      }
+      );
+      const placeholders = valoresItem.map((_, index) => `$${index + 1}`).join(',');
+      await client.query(
+        `INSERT INTO notas_credito_items (${columnasItem.join(',')}) VALUES (${placeholders})`,
+        valoresItem
+      );
     }
 
     // CC: haber en cliente (emitida) o proveedor (recibida)

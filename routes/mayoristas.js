@@ -92,7 +92,7 @@ router.put('/:id/configuracion', async (req, res) => {
         precio_incluye_iva=COALESCE($24, precio_incluye_iva),
         permitir_presupuesto_clientes=COALESCE($25, permitir_presupuesto_clientes)
        WHERE id=$26
-       RETURNING id, nombre, codigo, logo,
+       RETURNING id, nombre, codigo, logo_url,
                  mostrar_precios, mostrar_stock, mostrar_marca, mostrar_rubro, mostrar_tipo,
                  habilitar_calculadora, descuento_1, descuento_2, descuento_3, iva,
                  orden_pdf, config_habilitada, pedir_clave, tamanio_hoja, items_por_hoja,
