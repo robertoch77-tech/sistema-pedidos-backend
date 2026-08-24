@@ -312,10 +312,23 @@ router.get('/:mayorista_id/equivalentes', async (req, res) => {
 });
 
 // GET — precios custom del cliente logueado
-router.get('/:mayorista_id/mis-precios-custom', verificarClientePrecios, async (req, res) => {
+router.get('/:mayorista_id/mis-precios-custom', async (req, res) => {
   try {
     const { mayorista_id } = req.params;
-    const cuit = req.clienteSesion.cuit;
+    const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    let cuit = req.query.cuit;
+    if (token) {
+      let sesion;
+      try { sesion = jwt.verify(token, process.env.JWT_SECRET); }
+      catch (_) { return res.status(401).json({ mensaje: 'Sesión inválida o vencida' }); }
+      if (sesion.tipo !== 'cliente' || Number(sesion.mayorista_id) !== Number(mayorista_id)) {
+        return res.status(403).json({ mensaje: 'No tenés acceso a estos precios' });
+      }
+      cuit = sesion.cuit;
+    }
+    // Compatibilidad transitoria con el frontend anterior al despliegue actual.
+    // El frontend nuevo siempre deriva el CUIT de la sesión firmada.
+    if (!cuit) return res.status(401).json({ mensaje: 'Sesión requerida' });
     const result = await pool.query(
       'SELECT producto_id, precio_venta FROM precios_cliente_custom WHERE mayorista_id = $1 AND cliente_cuit = $2',
       [mayorista_id, cuit]
