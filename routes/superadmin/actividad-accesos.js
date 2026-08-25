@@ -66,7 +66,21 @@ router.get('/', verificarCualquierToken, verificarSoloSuperadmin, async (req, re
       ORDER BY ultima_actividad_en DESC
       LIMIT 500
     `, [dias, sistema]);
-    res.json({ sesiones: rows, criterio_en_linea_minutos: 3 });
+    const clientes = sistema === 'ivan' ? [] : (await pool.query(`
+      SELECT c.id, c.nombre_comercial AS nombre, c.cuit, c.estado,
+             ultima.inicio_en AS ultimo_ingreso,
+             ultima.ultima_actividad_en,
+             (ultima.cierre_en IS NULL AND ultima.ultima_actividad_en >= NOW() - INTERVAL '3 minutes') AS en_linea
+      FROM clientes_roberto c
+      LEFT JOIN LATERAL (
+        SELECT s.inicio_en, s.ultima_actividad_en, s.cierre_en
+        FROM sesiones_actividad s
+        WHERE s.sistema='roberto' AND s.empresa_id=c.id
+        ORDER BY s.ultima_actividad_en DESC LIMIT 1
+      ) ultima ON true
+      ORDER BY c.nombre_comercial
+    `)).rows;
+    res.json({ sesiones: rows, clientes, criterio_en_linea_minutos: 3 });
   } catch (error) {
     console.error('[ACTIVIDAD] listado:', error.message);
     res.status(500).json({ error: 'No se pudo consultar la actividad' });

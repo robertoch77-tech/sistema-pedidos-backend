@@ -1,4 +1,5 @@
 const CACHE_TTL_MS = 5 * 60 * 1000;
+const { registrarDescuento, sinInterrumpir } = require('./auditoriaIvan');
 const cache = new Map();
 const consultasEnCurso = new Map();
 
@@ -9,7 +10,9 @@ const porcentajeSeguro = valor => {
 };
 
 function guardarDescuentoItems(mayoristaId, cuit, porcentaje) {
-  cache.set(clave(mayoristaId, cuit), { porcentaje: porcentajeSeguro(porcentaje), verificadoEn: Date.now() });
+  const porcentajeNormalizado = porcentajeSeguro(porcentaje);
+  cache.set(clave(mayoristaId, cuit), { porcentaje: porcentajeNormalizado, verificadoEn: Date.now() });
+  sinInterrumpir(registrarDescuento({ mayoristaId, cuit, porcentaje: porcentajeNormalizado }), 'guardar descuento');
 }
 
 async function obtenerDescuentoItems(poolExterno, mayoristaId, cuit) {
@@ -34,6 +37,10 @@ async function obtenerDescuentoItems(poolExterno, mayoristaId, cuit) {
       return porcentaje;
     } catch (error) {
       console.error('Descuento Iván por CUIT no disponible:', error.message);
+      sinInterrumpir(registrarDescuento({
+        mayoristaId, cuit, porcentaje: existente?.porcentaje ?? 0,
+        estado: 'error', mensaje: error.message,
+      }), 'error descuento');
       return existente?.porcentaje ?? 0;
     } finally {
       consultasEnCurso.delete(cacheKey);

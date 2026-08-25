@@ -222,6 +222,7 @@ app.use('/api/superadmin/clientes', require('./routes/superadmin/clientes'));
 app.use('/api/superadmin/portal', require('./routes/superadmin/portal'));
 app.use('/api/superadmin/portal-auth', require('./routes/superadmin/portal-auth'));
 app.use('/api/superadmin/actividad-accesos', require('./routes/superadmin/actividad-accesos'));
+app.use('/api/superadmin/control-ivan', require('./routes/superadmin/control-ivan'));
 app.use('/api/superadmin/importador', require('./routes/superadmin/importador'));
 app.use('/api/superadmin/importador-entidades', require('./routes/superadmin/importador-entidades'));
 app.use('/api/superadmin/eliminar-registro',   require('./routes/superadmin/eliminar-registro'));

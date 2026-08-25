@@ -3,6 +3,7 @@ const router = express.Router();
 const pool = require('../db');
 const conexionCompartida = require('../services/conexionMayorista');
 const { registrarNotificacionIvan } = require('../services/notificacionesIvan');
+const { registrarPedido: registrarPedidoIvan } = require('../services/auditoriaIvan');
 
 async function getConexionMayorista(mayorista_id) {
   return conexionCompartida.getConexionMayorista(mayorista_id);
@@ -209,6 +210,13 @@ router.post('/', async (req, res) => {
     clienteCentral = null;
 
     if (estado === 'enviado') {
+      await registrarPedidoIvan({
+        pedidoWebId: pedido_id, mayoristaId: mayorista_id, numeroPedido: numeroFinal,
+        clienteCuit: cliente_cuit, estado: 'procesando',
+      }).catch(error => console.error('[AUDITORIA IVAN] pedido en proceso:', error.message));
+    }
+
+    if (estado === 'enviado') {
       await registrarNotificacionIvan({
         mayoristaId: mayorista_id,
         tipo: 'pedido',
@@ -290,12 +298,26 @@ router.post('/', async (req, res) => {
                 [item.producto_id, fk_id_item]
               );
             }
+            await registrarPedidoIvan({
+              pedidoWebId: pedido_id, mayoristaId: mayorista_id, numeroPedido: numeroFinal,
+              clienteCuit: cliente_cuit, estado: 'enviado', pedidoIvanId: fk_id_pedido,
+            });
           } else {
-            console.warn(`Pedido ${numeroFinal}: cliente CUIT ${cliente_cuit} no encontrado en base de Ivan`);
+            throw new Error(`Cliente CUIT ${cliente_cuit} no encontrado en la base de Iván`);
           }
+        } else {
+          await registrarPedidoIvan({
+            pedidoWebId: pedido_id, mayoristaId: mayorista_id, numeroPedido: numeroFinal,
+            clienteCuit: cliente_cuit, estado: 'no_configurado',
+            mensaje: 'La integración con Iván no está activa para este mayorista',
+          });
         }
       } catch (errorIvan) {
         console.error('Error replicando en Ivan:', errorIvan.message);
+        await registrarPedidoIvan({
+          pedidoWebId: pedido_id, mayoristaId: mayorista_id, numeroPedido: numeroFinal,
+          clienteCuit: cliente_cuit, estado: 'error', mensaje: errorIvan.message,
+        }).catch(errorAuditoria => console.error('[AUDITORIA IVAN] pedido con error:', errorAuditoria.message));
         return res.status(200).json({
           ...pedido.rows[0],
           ivan_error: true,
