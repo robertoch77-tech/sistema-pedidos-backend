@@ -10,9 +10,15 @@ const porcentajeSeguro = valor => {
 };
 
 function guardarDescuentoItems(mayoristaId, cuit, porcentaje) {
+  const tieneDato = porcentaje !== null && porcentaje !== undefined && porcentaje !== '';
   const porcentajeNormalizado = porcentajeSeguro(porcentaje);
   cache.set(clave(mayoristaId, cuit), { porcentaje: porcentajeNormalizado, verificadoEn: Date.now() });
-  sinInterrumpir(registrarDescuento({ mayoristaId, cuit, porcentaje: porcentajeNormalizado }), 'guardar descuento');
+  sinInterrumpir(registrarDescuento({
+    mayoristaId, cuit,
+    porcentaje: tieneDato ? porcentajeNormalizado : null,
+    estado: tieneDato ? 'ok' : 'sin_dato',
+    mensaje: tieneDato ? null : 'Iván no devolvió un porcentaje de descuento',
+  }), 'guardar descuento');
 }
 
 async function obtenerDescuentoItems(poolExterno, mayoristaId, cuit) {

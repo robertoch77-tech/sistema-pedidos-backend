@@ -17,6 +17,7 @@ async function asegurarTablas() {
         )
       `);
       await pool.query('CREATE INDEX IF NOT EXISTS idx_auditoria_descuentos_cuit ON auditoria_descuentos_ivan (mayorista_id, cuit, consultado_en DESC)');
+      await pool.query('ALTER TABLE auditoria_descuentos_ivan ALTER COLUMN porcentaje DROP NOT NULL');
       await pool.query(`
         CREATE TABLE IF NOT EXISTS auditoria_pedidos_ivan (
           pedido_web_id BIGINT PRIMARY KEY,
@@ -43,7 +44,7 @@ async function registrarDescuento({ mayoristaId, cuit, porcentaje, estado = 'ok'
   await pool.query(
     `INSERT INTO auditoria_descuentos_ivan (mayorista_id,cuit,porcentaje,estado,mensaje)
      VALUES ($1,$2,$3,$4,$5)`,
-    [mayoristaId, String(cuit || '').replace(/\D/g, ''), Number(porcentaje) || 0, estado, mensaje]
+    [mayoristaId, String(cuit || '').replace(/\D/g, ''), porcentaje == null ? null : Number(porcentaje), estado, mensaje]
   );
 }
 
