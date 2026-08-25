@@ -1,36 +1,14 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
-const { Pool } = require('pg');
+const conexionCompartida = require('../services/conexionMayorista');
 const jwt = require('jsonwebtoken');
 const { obtenerDescuentoItems } = require('../services/descuentoClienteIvan');
 
-// Cache de conexiones por mayorista
-const conexiones = {};
 const soporteObsProducto = {};
 
 async function getConexionMayorista(mayorista_id) {
-  if (conexiones[mayorista_id]) return conexiones[mayorista_id];
-
-  const resultado = await pool.query(
-    'SELECT db_connection FROM mayoristas WHERE id = $1',
-    [mayorista_id]
-  );
-
-  if (!resultado.rows[0]?.db_connection) return null;
-
-  const poolExterno = new Pool({
-    connectionString: resultado.rows[0].db_connection,
-    ssl: false
-  });
-
-  // La base de Ivan viene en LATIN1
-  poolExterno.on('connect', (client) => {
-    client.query("SET client_encoding TO 'LATIN1'");
-  });
-
-  conexiones[mayorista_id] = poolExterno;
-  return poolExterno;
+  return conexionCompartida.getConexionMayorista(mayorista_id);
 }
 
 async function getDtoPagoTermino(mayorista_id) {

@@ -84,14 +84,50 @@ const loginLimiter = rateLimit({
   message: { error: 'Demasiados intentos. Esperá 15 minutos.' },
 });
 
+const loginMayoristaLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  keyGenerator: (req) => `mayorista:${String(req.body?.email || '').trim().toLowerCase()}`,
+  skipSuccessfulRequests: true,
+  message: { mensaje: 'Demasiados intentos para esta cuenta. Esperá 15 minutos.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const loginClienteLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  keyGenerator: (req) => {
+    const codigo = String(req.body?.codigo || '').trim().toLowerCase();
+    const cuit = String(req.body?.cuit || '').replace(/\D/g, '');
+    return `cliente:${codigo}:${cuit}`;
+  },
+  skipSuccessfulRequests: true,
+  message: { mensaje: 'Demasiados intentos para este acceso. Esperá 15 minutos.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const busquedasProductosLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000,
+  max: 600,
+  keyGenerator: (req) => String(req.headers.authorization || `ip:${rateLimit.ipKeyGenerator(req.ip)}`),
+  message: { mensaje: 'Hay muchas búsquedas en curso. Esperá unos segundos y volvé a intentar.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 const apiLimiter = rateLimit({
   windowMs: 1 * 60 * 1000,
-  max: 200,
+  max: 3000,
   message: { error: 'Demasiadas solicitudes. Intentá en un momento.' },
   standardHeaders: true,
   legacyHeaders: false,
 });
 
+app.post('/api/auth/login', loginMayoristaLimiter);
+app.post('/api/auth/login-cliente', loginClienteLimiter);
+app.use('/api/productos', busquedasProductosLimiter);
 app.use('/api/', apiLimiter);
 
 app.use((req, res, next) => {

@@ -1,32 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
-const { Pool } = require('pg');
-
-// Cache de conexiones por mayorista
-const conexiones = {};
+const conexionCompartida = require('../services/conexionMayorista');
 
 async function getConexionMayorista(mayorista_id) {
-  if (conexiones[mayorista_id]) return conexiones[mayorista_id];
-
-  const resultado = await pool.query(
-    'SELECT db_connection FROM mayoristas WHERE id = $1',
-    [mayorista_id]
-  );
-
-  if (!resultado.rows[0]?.db_connection) return null;
-
-  const poolExterno = new Pool({
-    connectionString: resultado.rows[0].db_connection,
-    ssl: false
-  });
-
-  poolExterno.on('connect', (client) => {
-    client.query("SET client_encoding TO 'LATIN1'");
-  });
-
-  conexiones[mayorista_id] = poolExterno;
-  return poolExterno;
+  return conexionCompartida.getConexionMayorista(mayorista_id);
 }
 
 function normalizar(texto) {

@@ -1,23 +1,15 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
-const { Pool } = require('pg');
+const conexionCompartida = require('../services/conexionMayorista');
 
 const columnaPresupuestoLista = pool.query('ALTER TABLE mayoristas ADD COLUMN IF NOT EXISTS permitir_presupuesto_clientes boolean DEFAULT false').catch(error => {
   console.error('Mayoristas: no se pudo asegurar permitir_presupuesto_clientes:', error.message);
   return null;
 });
 
-const conexiones = {};
-
 async function getConexionMayorista(mayorista_id) {
-  if (conexiones[mayorista_id]) return conexiones[mayorista_id];
-  const resultado = await pool.query('SELECT db_connection FROM mayoristas WHERE id=$1', [mayorista_id]);
-  if (!resultado.rows[0]?.db_connection) return null;
-  const poolExterno = new Pool({ connectionString: resultado.rows[0].db_connection, ssl: false });
-  poolExterno.on('connect', client => client.query("SET client_encoding TO 'LATIN1'"));
-  conexiones[mayorista_id] = poolExterno;
-  return poolExterno;
+  return conexionCompartida.getConexionMayorista(mayorista_id);
 }
 
 router.get('/', async (req, res) => {
@@ -208,14 +200,8 @@ router.get('/:id/proximo-numero', async (req, res) => {
     const contador = parseInt(contadorRes.rows[0].numero_pedido_inicio) || 1;
     const maxReal  = parseInt(maxRes.rows[0].max_real) || 0;
 
-    // El próximo número es el mayor de los dos + 1
-    const proximoNumero = Math.max(contador, maxReal) + 1;
-
-    // Actualizar el contador para que quede sincronizado
-    await pool.query(
-      `UPDATE mayoristas SET numero_pedido_inicio = $1 WHERE id=$2`,
-      [proximoNumero, id]
-    );
+    // Vista previa solamente: consultar no debe consumir un número.
+    const proximoNumero = Math.max(contador, maxReal + 1);
 
     res.json({ numero: proximoNumero });
   } catch (error) {

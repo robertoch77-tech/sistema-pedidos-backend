@@ -3,29 +3,12 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const pool = require('../db');
-const { Pool } = require('pg');
+const conexionCompartida = require('../services/conexionMayorista');
 const { registrarInicio, sinInterrumpir } = require('../services/actividadAccesos');
 const { guardarDescuentoItems } = require('../services/descuentoClienteIvan');
 
-const conexiones = {};
-
 async function getConexionPorCodigo(codigo) {
-  if (conexiones[codigo]) return conexiones[codigo];
-
-  const resultado = await pool.query(
-    'SELECT id, db_connection FROM mayoristas WHERE codigo = $1',
-    [codigo]
-  );
-
-  if (!resultado.rows[0]?.db_connection) return null;
-
-  const poolExterno = new Pool({
-    connectionString: resultado.rows[0].db_connection,
-    ssl: false
-  });
-
-  conexiones[codigo] = { pool: poolExterno, mayorista_id: resultado.rows[0].id };
-  return conexiones[codigo];
+  return conexionCompartida.getConexionPorCodigo(codigo);
 }
 
 router.post('/login', async (req, res) => {

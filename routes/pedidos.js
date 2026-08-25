@@ -1,27 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
-const { Pool } = require('pg');
+const conexionCompartida = require('../services/conexionMayorista');
 const { registrarNotificacionIvan } = require('../services/notificacionesIvan');
 
-const conexiones = {};
-
 async function getConexionMayorista(mayorista_id) {
-  if (conexiones[mayorista_id]) return conexiones[mayorista_id];
-  const resultado = await pool.query(
-    'SELECT db_connection FROM mayoristas WHERE id = $1',
-    [mayorista_id]
-  );
-  if (!resultado.rows[0]?.db_connection) return null;
-  const poolExterno = new Pool({
-    connectionString: resultado.rows[0].db_connection,
-    ssl: false
-  });
-  poolExterno.on('connect', (client) => {
-    client.query("SET client_encoding TO 'LATIN1'");
-  });
-  conexiones[mayorista_id] = poolExterno;
-  return poolExterno;
+  return conexionCompartida.getConexionMayorista(mayorista_id);
 }
 
 // Mis Pedidos del cliente
@@ -156,28 +140,73 @@ router.get('/detalle/:id', async (req, res) => {
 
 // Guardar pedido nuevo
 router.post('/', async (req, res) => {
+  let clienteCentral = null;
+  let transaccionAbierta = false;
   try {
     const { mayorista_id, cliente_cuit, cliente_nombre, numero_pedido,
             descuento, total_estimado, observaciones, tamanio_hoja, estado, items } = req.body;
 
-    const pedido = await pool.query(
+    if (!mayorista_id || !Array.isArray(items)) {
+      return res.status(400).json({ mensaje: 'Datos incompletos para guardar el pedido' });
+    }
+
+    clienteCentral = await pool.connect();
+    await clienteCentral.query('BEGIN');
+    transaccionAbierta = true;
+
+    let numeroFinal = numero_pedido;
+    if (estado === 'enviado') {
+      // Bloqueo compartido por PostgreSQL: también protege si Render usa más de un proceso.
+      await clienteCentral.query(
+        'SELECT pg_advisory_xact_lock(72001, ($1::bigint % 2147483647)::int)',
+        [mayorista_id]
+      );
+      const numeracion = await clienteCentral.query(
+        `SELECT m.numero_pedido_inicio,
+                (SELECT COALESCE(MAX(CAST(p.numero_pedido AS INTEGER)), 0)
+                   FROM pedidos_web p
+                  WHERE p.mayorista_id=m.id AND p.numero_pedido ~ '^[0-9]+$') AS max_real
+           FROM mayoristas m
+          WHERE m.id=$1
+          FOR UPDATE`,
+        [mayorista_id]
+      );
+      if (!numeracion.rows[0]) throw new Error('Mayorista no encontrado');
+      const configurado = parseInt(numeracion.rows[0].numero_pedido_inicio) || 1;
+      const maxReal = parseInt(numeracion.rows[0].max_real) || 0;
+      numeroFinal = String(Math.max(configurado, maxReal + 1));
+    }
+
+    const pedido = await clienteCentral.query(
       `INSERT INTO pedidos_web
          (mayorista_id, cliente_cuit, cliente_nombre, numero_pedido, descuento,
           total_estimado, observaciones, tamanio_hoja, estado, visto_mayorista)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-      [mayorista_id, cliente_cuit, cliente_nombre || '', numero_pedido,
+      [mayorista_id, cliente_cuit, cliente_nombre || '', numeroFinal,
        descuento || 0, total_estimado, observaciones || '', tamanio_hoja || 'A4',
        estado || 'borrador', false]
     );
     const pedido_id = pedido.rows[0].id;
 
     for (const item of items) {
-      await pool.query(
+      await clienteCentral.query(
         `INSERT INTO pedidos_web_items (pedido_id,producto_id,codigo,nombre,rubro,cantidad,precio_unitario,es_oferta,oferta_titulo)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
         [pedido_id, item.producto_id||null, item.codigo||'', item.nombre||'', item.rubro||'', item.cantidad, item.precio_unitario||0, item.es_oferta||false, item.oferta_titulo||null]
       );
     }
+
+    if (estado === 'enviado') {
+      await clienteCentral.query(
+        'UPDATE mayoristas SET numero_pedido_inicio=$1 WHERE id=$2',
+        [Number(numeroFinal) + 1, mayorista_id]
+      );
+    }
+
+    await clienteCentral.query('COMMIT');
+    transaccionAbierta = false;
+    clienteCentral.release();
+    clienteCentral = null;
 
     if (estado === 'enviado') {
       await registrarNotificacionIvan({
@@ -186,10 +215,10 @@ router.post('/', async (req, res) => {
         referenciaId: pedido_id,
         clienteCuit: cliente_cuit,
         clienteNombre: cliente_nombre,
-        titulo: `Pedido #${numero_pedido || pedido_id}`,
+        titulo: `Pedido #${numeroFinal || pedido_id}`,
         resumen: `${cliente_nombre || cliente_cuit} - ${Array.isArray(items) ? items.length : 0} productos - $${Number(total_estimado || 0).toLocaleString('es-AR')}`,
         datos: {
-          numero_pedido: numero_pedido || String(pedido_id),
+          numero_pedido: numeroFinal || String(pedido_id),
           total: Number(total_estimado || 0),
           cantidad_items: Array.isArray(items) ? items.length : 0,
         },
@@ -225,7 +254,7 @@ router.post('/', async (req, res) => {
               'fk_id_tipo_pedido', 'fk_id_cliente'
             ];
             const valores = [
-              ahora, ahora, numero_pedido, cfg.ivan_id_sucursal, 'PENDIENTE',
+              ahora, ahora, numeroFinal, cfg.ivan_id_sucursal, 'PENDIENTE',
               ahora, observaciones || '', true, descuento || 0,
               cfg.ivan_id_deposito, cfg.ivan_id_operario,
               cfg.ivan_id_vendedor, cfg.ivan_id_tipo_pedido, fk_id_cliente
@@ -262,7 +291,7 @@ router.post('/', async (req, res) => {
               );
             }
           } else {
-            console.warn(`Pedido ${numero_pedido}: cliente CUIT ${cliente_cuit} no encontrado en base de Ivan`);
+            console.warn(`Pedido ${numeroFinal}: cliente CUIT ${cliente_cuit} no encontrado en base de Ivan`);
           }
         }
       } catch (errorIvan) {
@@ -277,8 +306,13 @@ router.post('/', async (req, res) => {
 
     res.json(pedido.rows[0]);
   } catch (error) {
+    if (clienteCentral && transaccionAbierta) {
+      await clienteCentral.query('ROLLBACK').catch(() => {});
+    }
     console.error('Error guardando pedido:', error);
     res.status(500).json({ mensaje: 'Error al guardar el pedido' });
+  } finally {
+    if (clienteCentral) clienteCentral.release();
   }
 });
 
