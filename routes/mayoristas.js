@@ -15,7 +15,7 @@ async function getConexionMayorista(mayorista_id) {
 router.get('/', async (req, res) => {
   try {
     const resultado = await pool.query(
-      `SELECT id, nombre, codigo, logo, activo,
+      `SELECT id, nombre, codigo, logo_url AS logo, activo,
               mostrar_precios, mostrar_stock, mostrar_marca, mostrar_rubro, mostrar_tipo,
               habilitar_calculadora, descuento_1, descuento_2, descuento_3, iva,
               orden_pdf, config_habilitada, pedir_clave, tamanio_hoja, items_por_hoja,
