@@ -28,7 +28,9 @@ router.get('/', async (req, res) => {
               habilitar_cotizaciones, habilitar_novedades,
               dto_pago_termino, precio_incluye_iva,
               ivan_activo
-       FROM mayoristas WHERE activo = true`
+       FROM mayoristas
+       WHERE activo = true
+         AND tipo_fuente IS DISTINCT FROM 'roberto'`
     );
     res.json(resultado.rows);
   } catch (error) { res.status(500).json({ mensaje: 'Error del servidor' }); }
