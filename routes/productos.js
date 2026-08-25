@@ -372,6 +372,9 @@ router.get('/:mayorista_id', async (req, res) => {
     const marca = req.query.marca || '';
     const rubro = req.query.rubro || '';
     const tipo = req.query.tipo || '';
+    const ordenPrecio = req.query.orden_precio === 'asc' || req.query.orden_precio === 'desc'
+      ? req.query.orden_precio
+      : '';
     const pagina = parseInt(req.query.pagina) || 1;
     const porPagina = 50;
     const desde = (pagina - 1) * porPagina;
@@ -408,6 +411,10 @@ router.get('/:mayorista_id', async (req, res) => {
     );
     const total = parseInt(totalResultado.rows[0].count);
 
+    const orderBy = ordenPrecio
+      ? `precio_producto ${ordenPrecio === 'asc' ? 'ASC NULLS LAST' : 'DESC NULLS LAST'}, des_producto ASC`
+      : 'des_producto ASC';
+
     const productosResultado = await poolExterno.query(
       `SELECT id_producto, cod_producto, des_producto, imagen_producto,
               precio_producto, stock_temporal, des_producto_marca,
@@ -415,7 +422,7 @@ router.get('/:mayorista_id', async (req, res) => {
               ${conObsProducto ? ', obs_producto' : ''}
        FROM "viewProductos"
        ${where}
-       ORDER BY des_producto
+       ORDER BY ${orderBy}
        LIMIT ${porPagina} OFFSET ${desde}`,
       params
     );

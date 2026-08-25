@@ -11,6 +11,10 @@ const columnaDetalleCalculo = pool.query('ALTER TABLE mayoristas ADD COLUMN IF N
   console.error('Mayoristas: no se pudo asegurar mostrar_detalle_calculo_precios:', error.message);
   return null;
 });
+const columnaPrecioListaMisPrecios = pool.query('ALTER TABLE mayoristas ADD COLUMN IF NOT EXISTS mostrar_precio_lista_mis_precios boolean DEFAULT true').catch(error => {
+  console.error('Mayoristas: no se pudo asegurar mostrar_precio_lista_mis_precios:', error.message);
+  return null;
+});
 
 async function getConexionMayorista(mayorista_id) {
   return conexionCompartida.getConexionMayorista(mayorista_id);
@@ -42,7 +46,7 @@ router.get('/', async (req, res) => {
 
 router.get('/:id/configuracion', async (req, res) => {
   try {
-    await Promise.all([columnaPresupuestoLista, columnaDetalleCalculo]);
+    await Promise.all([columnaPresupuestoLista, columnaDetalleCalculo, columnaPrecioListaMisPrecios]);
     const { id } = req.params;
     const resultado = await pool.query(
       // === MODIFICADO: se agregó habilitar_productos_solicitados ===
@@ -58,7 +62,7 @@ router.get('/:id/configuracion', async (req, res) => {
               habilitar_cotizaciones, habilitar_novedades,
               dto_pago_termino,
               precio_incluye_iva, permitir_presupuesto_clientes,
-              mostrar_detalle_calculo_precios
+              mostrar_detalle_calculo_precios, mostrar_precio_lista_mis_precios
        FROM mayoristas WHERE id=$1`, [id]
     );
     if (!resultado.rows[0]) return res.status(404).json({ mensaje: 'Mayorista no encontrado' });
@@ -68,7 +72,7 @@ router.get('/:id/configuracion', async (req, res) => {
 
 router.put('/:id/configuracion', async (req, res) => {
   try {
-    await Promise.all([columnaPresupuestoLista, columnaDetalleCalculo]);
+    await Promise.all([columnaPresupuestoLista, columnaDetalleCalculo, columnaPrecioListaMisPrecios]);
     const { id } = req.params;
     const {
       mostrar_precios, mostrar_stock, mostrar_marca, mostrar_rubro, mostrar_tipo,
@@ -78,7 +82,7 @@ router.put('/:id/configuracion', async (req, res) => {
       habilitar_ctas_ctes, habilitar_demanda, habilitar_ofertas, habilitar_productos_solicitados,
       habilitar_medios_de_pago, medios_de_pago, habilitar_notificaciones,
       dto_pago_termino, precio_incluye_iva, permitir_presupuesto_clientes,
-      mostrar_detalle_calculo_precios
+      mostrar_detalle_calculo_precios, mostrar_precio_lista_mis_precios
     } = req.body;
     // Este endpoint es compartido por Admin y por el panel del mayorista.
     // Cada pantalla envía un subconjunto distinto: un campo ausente debe
@@ -111,8 +115,9 @@ router.put('/:id/configuracion', async (req, res) => {
         dto_pago_termino=COALESCE($23, dto_pago_termino),
         precio_incluye_iva=COALESCE($24, precio_incluye_iva),
         permitir_presupuesto_clientes=COALESCE($25, permitir_presupuesto_clientes),
-        mostrar_detalle_calculo_precios=COALESCE($26, mostrar_detalle_calculo_precios)
-       WHERE id=$27
+        mostrar_detalle_calculo_precios=COALESCE($26, mostrar_detalle_calculo_precios),
+        mostrar_precio_lista_mis_precios=COALESCE($27, mostrar_precio_lista_mis_precios)
+       WHERE id=$28
        RETURNING id, nombre, codigo, logo_url,
                  mostrar_precios, mostrar_stock, mostrar_marca, mostrar_rubro, mostrar_tipo,
                  habilitar_calculadora, descuento_1, descuento_2, descuento_3, iva,
@@ -125,14 +130,15 @@ router.put('/:id/configuracion', async (req, res) => {
                  habilitar_calculadora_venta, habilitar_historial_ventas,
                  habilitar_cotizaciones, habilitar_novedades,
                  dto_pago_termino, precio_incluye_iva, permitir_presupuesto_clientes,
-                 mostrar_detalle_calculo_precios`,
+                 mostrar_detalle_calculo_precios, mostrar_precio_lista_mis_precios`,
       [valor(mostrar_precios), valor(mostrar_stock), valor(mostrar_marca), valor(mostrar_rubro), valor(mostrar_tipo),
        valor(pedir_clave), valor(tamanio_hoja), valor(items_por_hoja), valor(numero_pedido_inicio),
        valor(habilitar_calculadora), valor(descuento_1), valor(descuento_2), valor(descuento_3), valor(iva),
        valor(orden_pdf), valor(habilitar_ctas_ctes), valor(habilitar_demanda), valor(habilitar_ofertas),
        valor(habilitar_productos_solicitados), valor(habilitar_medios_de_pago), valor(medios_de_pago),
        valor(habilitar_notificaciones), valor(dto_pago_termino), valor(precio_incluye_iva),
-       valor(permitir_presupuesto_clientes), valor(mostrar_detalle_calculo_precios), id]
+       valor(permitir_presupuesto_clientes), valor(mostrar_detalle_calculo_precios),
+       valor(mostrar_precio_lista_mis_precios), id]
     );
     res.json(resultado.rows[0]);
   } catch (error) {
