@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 const pool = require('../db');
 const { Pool } = require('pg');
 const { registrarInicio, sinInterrumpir } = require('../services/actividadAccesos');
+const { guardarDescuentoItems } = require('../services/descuentoClienteIvan');
 
 const conexiones = {};
 
@@ -95,6 +96,7 @@ router.post('/login-cliente', async (req, res) => {
       return res.status(401).json({ mensaje: 'CUIT incorrecto o cliente inactivo' });
     }
     const cliente = resultado.rows[0];
+    guardarDescuentoItems(conexion.mayorista_id, cliente.doc_cliente, cliente.porcentaje_descuento_items);
 
     const cfg = await pool.query(
       'SELECT pedir_clave, mostrar_precios, mostrar_stock FROM mayoristas WHERE codigo = $1',

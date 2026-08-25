@@ -3,6 +3,7 @@ const router = express.Router();
 const pool = require('../db');
 const { Pool } = require('pg');
 const jwt = require('jsonwebtoken');
+const { obtenerDescuentoItems } = require('../services/descuentoClienteIvan');
 
 // Cache de conexiones por mayorista
 const conexiones = {};
@@ -42,15 +43,33 @@ async function getDtoPagoTermino(mayorista_id) {
   } catch { return 0; }
 }
 
-function aplicarDto(productos, dtoPct) {
-  if (!dtoPct || dtoPct <= 0) return productos;
-  const factor = 1 - dtoPct / 100;
+function aplicarDto(productos, dtoPct, descuentoItemsPct = 0) {
+  const dto = Math.min(100, Math.max(0, Number(dtoPct) || 0));
+  const descuentoItems = Math.min(100, Math.max(0, Number(descuentoItemsPct) || 0));
+  const factor = (1 - dto / 100) * (1 - descuentoItems / 100);
+  if (factor === 1) return productos;
   return productos.map(p => ({
     ...p,
     precio_producto: p.precio_producto != null
       ? Math.round(p.precio_producto * factor * 100) / 100
       : p.precio_producto
   }));
+}
+
+async function getCondicionesPrecio(req, poolExterno, mayoristaId) {
+  const dtoPct = await getDtoPagoTermino(mayoristaId);
+  const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  if (!token) return { dtoPct, descuentoItemsPct: 0 };
+  try {
+    const sesion = jwt.verify(token, process.env.JWT_SECRET);
+    if (sesion.tipo !== 'cliente' || Number(sesion.mayorista_id) !== Number(mayoristaId)) {
+      return { dtoPct, descuentoItemsPct: 0 };
+    }
+    const descuentoItemsPct = await obtenerDescuentoItems(poolExterno, mayoristaId, sesion.cuit);
+    return { dtoPct, descuentoItemsPct };
+  } catch (_) {
+    return { dtoPct, descuentoItemsPct: 0 };
+  }
 }
 
 // Reemplaza ñ, acentos y el caracter roto (�) por comodin _ (1 caracter cualquiera).
@@ -173,8 +192,8 @@ router.get('/:mayorista_id/todos', async (req, res) => {
       params
     );
 
-    const dtoPct = await getDtoPagoTermino(mayorista_id);
-    const productosConDto = aplicarDto(resultado.rows, dtoPct);
+    const { dtoPct, descuentoItemsPct } = await getCondicionesPrecio(req, poolExterno, mayorista_id);
+    const productosConDto = aplicarDto(resultado.rows, dtoPct, descuentoItemsPct);
 
     res.json({ productos: productosConDto, total: productosConDto.length });
   } catch (error) {
@@ -201,11 +220,9 @@ router.get('/:mayorista_id/buscar-ean/:ean', async (req, res) => {
          FROM "viewProductos" WHERE ean = $1 LIMIT 1`,
         [ean]
       );
-      const dtoPct = await getDtoPagoTermino(mayorista_id);
+      const { dtoPct, descuentoItemsPct } = await getCondicionesPrecio(req, poolExterno, mayorista_id);
       const prod = resultado.rows[0] || null;
-      if (prod && dtoPct > 0 && prod.precio_producto != null) {
-        prod.precio_producto = Math.round(prod.precio_producto * (1 - dtoPct / 100) * 100) / 100;
-      }
+      if (prod) Object.assign(prod, aplicarDto([prod], dtoPct, descuentoItemsPct)[0]);
       res.json({ producto: prod });
     } catch (errCampo) {
       // La vista no tiene columna "ean" en este mayorista — modo EAN no disponible.
@@ -263,8 +280,8 @@ router.get('/:mayorista_id/cross-selling', async (req, res) => {
       if (prod) resultado.push(prod);
       if (resultado.length >= 5) break;
     }
-    const dtoPct = await getDtoPagoTermino(mayorista_id);
-    res.json(aplicarDto(resultado, dtoPct));
+    const { dtoPct, descuentoItemsPct } = await getCondicionesPrecio(req, poolExterno, mayorista_id);
+    res.json(aplicarDto(resultado, dtoPct, descuentoItemsPct));
   } catch (error) {
     console.error('Error cross-selling:', error.message);
     res.json([]);
@@ -303,8 +320,8 @@ router.get('/:mayorista_id/equivalentes', async (req, res) => {
        LIMIT 30`,
       [observaciones, codigos]
     );
-    const dtoPct = await getDtoPagoTermino(mayorista_id);
-    res.json(aplicarDto(alternativas.rows, dtoPct));
+    const { dtoPct, descuentoItemsPct } = await getCondicionesPrecio(req, poolExterno, mayorista_id);
+    res.json(aplicarDto(alternativas.rows, dtoPct, descuentoItemsPct));
   } catch (error) {
     console.error('Error equivalentes:', error.message);
     res.json([]);
@@ -425,8 +442,8 @@ router.get('/:mayorista_id', async (req, res) => {
       params
     );
 
-    const dtoPct = await getDtoPagoTermino(mayorista_id);
-    const productosConDto = aplicarDto(productosResultado.rows, dtoPct);
+    const { dtoPct, descuentoItemsPct } = await getCondicionesPrecio(req, poolExterno, mayorista_id);
+    const productosConDto = aplicarDto(productosResultado.rows, dtoPct, descuentoItemsPct);
 
     res.json({
       productos: productosConDto,
