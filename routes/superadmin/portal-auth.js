@@ -81,7 +81,7 @@ router.post('/login', async (req, res) => {
       sistema: 'roberto',
       tipoActor: 'cliente_roberto',
       actorId: cliente.id,
-      empresaId: cliente.mayorista_id,
+      empresaId: cliente.id,
       nombre: cliente.nombre_comercial || cliente.razon_social,
       identificador: cliente.codigo_acceso,
       req,

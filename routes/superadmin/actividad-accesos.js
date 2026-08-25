@@ -2,7 +2,7 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const pool = require('../../db');
 const { verificarCualquierToken, verificarSoloSuperadmin } = require('./authMiddleware');
-const { asegurarTablas, registrarPulso, registrarCierre } = require('../../services/actividadAccesos');
+const { asegurarTablas, hashSesion, registrarInicio, registrarPulso, registrarCierre } = require('../../services/actividadAccesos');
 
 const router = express.Router();
 
@@ -12,10 +12,11 @@ async function validarSesionCliente(req, res, next) {
 
   try {
     if (String(token).startsWith('rp_')) {
-      const sesion = await pool.query('SELECT expira_en FROM sesiones_portal WHERE token=$1', [token]);
+      const sesion = await pool.query('SELECT cliente_id, expira_en FROM sesiones_portal WHERE token=$1', [token]);
       if (!sesion.rows[0] || Number(sesion.rows[0].expira_en) < Date.now()) {
         return res.status(401).json({ error: 'Sesión inválida o expirada' });
       }
+      req.actividadClienteRobertoId = sesion.rows[0].cliente_id;
     } else {
       jwt.verify(token, process.env.JWT_SECRET);
     }
@@ -28,7 +29,37 @@ async function validarSesionCliente(req, res, next) {
 
 router.post('/pulso', validarSesionCliente, async (req, res) => {
   try {
-    const encontrada = await registrarPulso(req.actividadToken);
+    let encontrada = await registrarPulso(req.actividadToken);
+    if (req.actividadClienteRobertoId) {
+      const cliente = await pool.query(
+        `SELECT id, nombre_comercial, razon_social, codigo_acceso
+         FROM clientes_roberto WHERE id=$1`,
+        [req.actividadClienteRobertoId]
+      );
+      if (cliente.rows[0]) {
+        const datos = cliente.rows[0];
+        if (encontrada) {
+          await pool.query(
+            `UPDATE sesiones_actividad
+             SET actor_id=$2, empresa_id=$3, nombre=$4, identificador=$5
+             WHERE sesion_hash=$1`,
+            [hashSesion(req.actividadToken), String(datos.id), datos.id, datos.nombre_comercial || datos.razon_social, datos.codigo_acceso]
+          );
+        } else {
+          await registrarInicio({
+            token: req.actividadToken,
+            sistema: 'roberto',
+            tipoActor: 'cliente_roberto',
+            actorId: datos.id,
+            empresaId: datos.id,
+            nombre: datos.nombre_comercial || datos.razon_social,
+            identificador: datos.codigo_acceso,
+            req,
+          });
+          encontrada = true;
+        }
+      }
+    }
     res.json({ ok: true, registrada: encontrada });
   } catch (error) {
     console.error('[ACTIVIDAD] pulso:', error.message);
