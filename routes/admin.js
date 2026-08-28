@@ -4,6 +4,7 @@ const pool = require('../db');
 const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
+const { invalidarConexion } = require('../services/conexionMayorista');
 
 const adminSessionLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -161,13 +162,63 @@ router.post('/mayoristas', checkAdmin, async (req, res) => {
   }
 });
 
+// Rate limiter para revelado de conexión (separado del login admin)
+const revelarConexionLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { mensaje: 'Demasiados intentos. Esperá 15 minutos.' },
+});
+
+const modificarConexionLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => !(typeof req.body?.db_connection === 'string' && req.body.db_connection.trim() !== ''),
+  message: { mensaje: 'Demasiados intentos. Esperá 15 minutos.' },
+});
+
+// POST — revelar conexión con reautenticación
+router.post('/mayoristas/:id/revelar-conexion', checkAdmin, revelarConexionLimiter, async (req, res) => {
+  try {
+    const { clave } = req.body || {};
+    if (!secretValido(clave)) {
+      return res.status(403).json({ mensaje: 'Clave incorrecta' });
+    }
+    const { id } = req.params;
+    if (!Number.isInteger(Number(id)) || Number(id) <= 0) {
+      return res.status(400).json({ mensaje: 'Mayorista inválido' });
+    }
+    const resultado = await pool.query(
+      'SELECT db_connection FROM mayoristas WHERE id = $1',
+      [id]
+    );
+    if (!resultado.rows[0]) {
+      return res.status(404).json({ mensaje: 'Mayorista no encontrado' });
+    }
+    res.json({ db_connection: resultado.rows[0].db_connection || '' });
+  } catch (error) {
+    res.status(500).json({ mensaje: 'Error al revelar conexión' });
+  }
+});
+
 // PUT — editar datos (nombre, email, db_connection, razon_social)
-router.put('/mayoristas/:id/datos', checkAdmin, async (req, res) => {
+router.put('/mayoristas/:id/datos', checkAdmin, modificarConexionLimiter, async (req, res) => {
   try {
     const { id } = req.params;
-    const { nombre, email, db_connection, razon_social } = req.body;
+    const { nombre, email, db_connection, razon_social, clave_admin } = req.body;
+    if (!Number.isInteger(Number(id)) || Number(id) <= 0)
+      return res.status(400).json({ mensaje: 'Mayorista inválido' });
     if (!nombre || !email)
       return res.status(400).json({ mensaje: 'Nombre y email son obligatorios' });
+    if (db_connection != null && typeof db_connection !== 'string')
+      return res.status(400).json({ mensaje: 'Conexión inválida' });
+    const cambiaConexion = typeof db_connection === 'string' && db_connection.trim() !== '';
+    if (cambiaConexion && !secretValido(clave_admin)) {
+      return res.status(403).json({ mensaje: 'Clave administrativa requerida para modificar la conexión' });
+    }
     const resultado = await pool.query(
       `UPDATE mayoristas
        SET nombre=$1, email=$2,
@@ -179,6 +230,12 @@ router.put('/mayoristas/:id/datos', checkAdmin, async (req, res) => {
                  razon_social`,
       [nombre.trim(), email.trim().toLowerCase(), db_connection || '', razon_social || null, id]
     );
+    if (!resultado.rows[0]) {
+      return res.status(404).json({ mensaje: 'Mayorista no encontrado' });
+    }
+    if (cambiaConexion) {
+      await invalidarConexion(Number(id));
+    }
     res.json(resultado.rows[0]);
   } catch (error) {
     console.error(error);

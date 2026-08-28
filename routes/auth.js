@@ -68,7 +68,7 @@ router.post('/login-cliente', async (req, res) => {
   try {
     const conexion = await getConexionPorCodigo(codigo);
     if (!conexion) {
-      return res.status(404).json({ mensaje: 'Mayorista no encontrado' });
+      return res.status(404).json({ mensaje: 'No pudimos acceder al proveedor. Verificá el enlace o consultá con tu proveedor.' });
     }
 
     const resultado = await conexion.pool.query(
@@ -76,7 +76,7 @@ router.post('/login-cliente', async (req, res) => {
       [cuit]
     );
     if (resultado.rows.length === 0) {
-      return res.status(401).json({ mensaje: 'CUIT incorrecto o cliente inactivo' });
+      return res.status(401).json({ mensaje: 'Verificá el CUIT ingresado o consultá con tu proveedor.' });
     }
     const cliente = resultado.rows[0];
     guardarDescuentoItems(conexion.mayorista_id, cliente.doc_cliente, cliente.porcentaje_descuento_items);

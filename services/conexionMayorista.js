@@ -58,4 +58,12 @@ async function getConexionPorCodigo(codigo) {
   };
 }
 
-module.exports = { getConexionMayorista, getConexionPorCodigo };
+async function invalidarConexion(mayoristaId) {
+  const clave = String(mayoristaId);
+  const pool = conexionesPorMayorista.get(clave);
+  if (!pool) return;
+  conexionesPorMayorista.delete(clave);
+  try { await pool.end(); } catch {}
+}
+
+module.exports = { getConexionMayorista, getConexionPorCodigo, invalidarConexion };
