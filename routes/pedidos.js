@@ -4,6 +4,12 @@ const pool = require('../db');
 const conexionCompartida = require('../services/conexionMayorista');
 const { registrarNotificacionIvan } = require('../services/notificacionesIvan');
 const { registrarPedido: registrarPedidoIvan } = require('../services/auditoriaIvan');
+const {
+  asegurarColumnasPrecioMayorista,
+  debeEnviarPrecioSinIva,
+  precioUnitarioParaIvan,
+  redondearMoneda,
+} = require('../services/precioCatalogoMayorista');
 
 async function getConexionMayorista(mayorista_id) {
   return conexionCompartida.getConexionMayorista(mayorista_id);
@@ -235,9 +241,11 @@ router.post('/', async (req, res) => {
 
     if (estado === 'enviado') {
       try {
+        await asegurarColumnasPrecioMayorista(pool);
         const cfgRes = await pool.query(
           `SELECT ivan_activo, ivan_id_deposito, ivan_id_operario, ivan_id_vendedor,
-                  ivan_id_tipo_pedido, ivan_id_sucursal, ivan_porc_iva, ivan_id_condicion_venta
+                  ivan_id_tipo_pedido, ivan_id_sucursal, ivan_porc_iva, ivan_id_condicion_venta,
+                  ivan_enviar_precio_sin_iva, modelo_precio_catalogo
            FROM mayoristas WHERE id = $1`,
           [mayorista_id]
         );
@@ -279,16 +287,26 @@ router.post('/', async (req, res) => {
               valores
             );
             const fk_id_pedido = pedidoIvanRes.rows[0].id_pedido;
+            const enviarPrecioSinIva = debeEnviarPrecioSinIva(cfg);
 
             for (const item of items) {
+              const ivaItem = enviarPrecioSinIva
+                ? (Number.isFinite(Number(item.iva_producto_aplicada))
+                    ? Number(item.iva_producto_aplicada)
+                    : Number(cfg.ivan_porc_iva) || 0)
+                : cfg.ivan_porc_iva;
+              const importeNetoIvan = enviarPrecioSinIva
+                ? redondearMoneda(
+                    precioUnitarioParaIvan(item.precio_unitario, ivaItem, true) * Number(item.cantidad)
+                  )
+                : item.precio_unitario * item.cantidad;
               const itemRes = await poolIvan.query(
                 `INSERT INTO Items_Pedidos
                    (can_item_pedido, porc_iva_item_pedido, imp_neto_item_pedido,
                     imp_int_item_pedido, porc_desc_item_pedido, fk_id_pedido)
                  VALUES ($1,$2,$3,0,0,$4)
                  RETURNING *`,
-                [item.cantidad, cfg.ivan_porc_iva,
-                 item.precio_unitario * item.cantidad, fk_id_pedido]
+                [item.cantidad, ivaItem, importeNetoIvan, fk_id_pedido]
               );
               const fk_id_item = itemRes.rows[0].id_item_pedido;
 

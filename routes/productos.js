@@ -4,8 +4,14 @@ const pool = require('../db');
 const conexionCompartida = require('../services/conexionMayorista');
 const jwt = require('jsonwebtoken');
 const { obtenerDescuentoItems } = require('../services/descuentoClienteIvan');
+const {
+  MODELO_COSTO_MARGEN_IVA,
+  asegurarColumnasPrecioMayorista,
+  aplicarPreciosCatalogo,
+} = require('../services/precioCatalogoMayorista');
 
 const soporteObsProducto = {};
+const soporteIvaProducto = {};
 
 async function getConexionMayorista(mayorista_id) {
   return conexionCompartida.getConexionMayorista(mayorista_id);
@@ -21,32 +27,49 @@ async function getDtoPagoTermino(mayorista_id) {
   } catch { return 0; }
 }
 
-function aplicarDto(productos, dtoPct, descuentoItemsPct = 0) {
-  const dto = Math.min(100, Math.max(0, Number(dtoPct) || 0));
-  const descuentoItems = Math.min(100, Math.max(0, Number(descuentoItemsPct) || 0));
-  const factor = (1 - dto / 100) * (1 - descuentoItems / 100);
-  if (factor === 1) return productos;
-  return productos.map(p => ({
-    ...p,
-    precio_producto: p.precio_producto != null
-      ? Math.round(p.precio_producto * factor * 100) / 100
-      : p.precio_producto
-  }));
+async function getConfiguracionPrecio(mayoristaId) {
+  try {
+    await asegurarColumnasPrecioMayorista(pool);
+    const r = await pool.query(
+      `SELECT modelo_precio_catalogo, margen_catalogo, iva_catalogo_default,
+              usar_iva_producto
+       FROM mayoristas WHERE id=$1`,
+      [mayoristaId]
+    );
+    return r.rows[0] || {};
+  } catch {
+    // Compatibilidad durante despliegue escalonado: sin migración, todo sigue legado.
+    return { modelo_precio_catalogo: 'precio_recibido' };
+  }
+}
+
+function aplicarCondicionesPrecio(productos, condiciones) {
+  return aplicarPreciosCatalogo(productos, {
+    ...condiciones.configPrecio,
+    dto_pago_termino: condiciones.dtoPct,
+    descuento_items_pct: condiciones.descuentoItemsPct,
+  });
 }
 
 async function getCondicionesPrecio(req, poolExterno, mayoristaId) {
-  const dtoPct = await getDtoPagoTermino(mayoristaId);
+  const [dtoPct, configPrecio] = await Promise.all([
+    getDtoPagoTermino(mayoristaId),
+    getConfiguracionPrecio(mayoristaId),
+  ]);
   const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-  if (!token) return { dtoPct, descuentoItemsPct: 0 };
+  if (!token) return { dtoPct, descuentoItemsPct: 0, configPrecio };
   try {
     const sesion = jwt.verify(token, process.env.JWT_SECRET);
     if (sesion.tipo !== 'cliente' || Number(sesion.mayorista_id) !== Number(mayoristaId)) {
-      return { dtoPct, descuentoItemsPct: 0 };
+      return { dtoPct, descuentoItemsPct: 0, configPrecio };
+    }
+    if (configPrecio.modelo_precio_catalogo === MODELO_COSTO_MARGEN_IVA) {
+      return { dtoPct: 0, descuentoItemsPct: 0, configPrecio };
     }
     const descuentoItemsPct = await obtenerDescuentoItems(poolExterno, mayoristaId, sesion.cuit);
-    return { dtoPct, descuentoItemsPct };
+    return { dtoPct, descuentoItemsPct, configPrecio };
   } catch (_) {
-    return { dtoPct, descuentoItemsPct: 0 };
+    return { dtoPct, descuentoItemsPct: 0, configPrecio };
   }
 }
 
@@ -88,6 +111,30 @@ async function tieneObsProducto(poolExterno, mayorista_id) {
     soporteObsProducto[mayorista_id] = { disponible: false, verificado_en: Date.now() };
   }
   return soporteObsProducto[mayorista_id].disponible;
+}
+
+async function campoIvaProducto(poolExterno, mayorista_id) {
+  const cache = soporteIvaProducto[mayorista_id];
+  if (cache && Date.now() - cache.verificado_en < 5 * 60 * 1000) return cache.campo;
+  const candidatos = ['porc_iva_producto', 'alicuota_iva', 'iva_producto', 'porcentaje_iva', 'porc_iva'];
+  try {
+    const r = await poolExterno.query(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_name='viewProductos' AND column_name=ANY($1::text[])`,
+      [candidatos]
+    );
+    const disponibles = new Set(r.rows.map(row => row.column_name));
+    const campo = candidatos.find(nombre => disponibles.has(nombre)) || null;
+    soporteIvaProducto[mayorista_id] = { campo, verificado_en: Date.now() };
+    return campo;
+  } catch {
+    soporteIvaProducto[mayorista_id] = { campo: null, verificado_en: Date.now() };
+    return null;
+  }
+}
+
+function seleccionIva(campo) {
+  return campo ? `, "${campo}" AS iva_producto` : ', NULL::numeric AS iva_producto';
 }
 
 // Opciones para los selectores de marca / rubro / tipo
@@ -141,6 +188,7 @@ router.get('/:mayorista_id/todos', async (req, res) => {
     const poolExterno = await getConexionMayorista(mayorista_id);
     if (!poolExterno) return res.status(404).json({ mensaje: 'Sin conexión configurada' });
     const conObsProducto = await tieneObsProducto(poolExterno, mayorista_id);
+    const campoIva = await campoIvaProducto(poolExterno, mayorista_id);
 
     const condiciones = [];
     const params = [];
@@ -164,14 +212,15 @@ router.get('/:mayorista_id/todos', async (req, res) => {
               precio_producto, stock_temporal, des_producto_marca,
               des_producto_rubro, des_producto_tipo
               ${conObsProducto ? ', obs_producto' : ''}
+              ${seleccionIva(campoIva)}
        FROM "viewProductos"
        ${where}
        ORDER BY des_producto`,
       params
     );
 
-    const { dtoPct, descuentoItemsPct } = await getCondicionesPrecio(req, poolExterno, mayorista_id);
-    const productosConDto = aplicarDto(resultado.rows, dtoPct, descuentoItemsPct);
+    const condicionesPrecio = await getCondicionesPrecio(req, poolExterno, mayorista_id);
+    const productosConDto = aplicarCondicionesPrecio(resultado.rows, condicionesPrecio);
 
     res.json({ productos: productosConDto, total: productosConDto.length });
   } catch (error) {
@@ -190,17 +239,19 @@ router.get('/:mayorista_id/buscar-ean/:ean', async (req, res) => {
     const { mayorista_id, ean } = req.params;
     const poolExterno = await getConexionMayorista(mayorista_id);
     if (!poolExterno) return res.status(404).json({ mensaje: 'Sin conexión configurada' });
+    const campoIva = await campoIvaProducto(poolExterno, mayorista_id);
     try {
       const resultado = await poolExterno.query(
         `SELECT id_producto, cod_producto, des_producto, imagen_producto,
                 precio_producto, stock_temporal, des_producto_marca,
                 des_producto_rubro, des_producto_tipo
+                ${seleccionIva(campoIva)}
          FROM "viewProductos" WHERE ean = $1 LIMIT 1`,
         [ean]
       );
-      const { dtoPct, descuentoItemsPct } = await getCondicionesPrecio(req, poolExterno, mayorista_id);
+      const condicionesPrecio = await getCondicionesPrecio(req, poolExterno, mayorista_id);
       const prod = resultado.rows[0] || null;
-      if (prod) Object.assign(prod, aplicarDto([prod], dtoPct, descuentoItemsPct)[0]);
+      if (prod) Object.assign(prod, aplicarCondicionesPrecio([prod], condicionesPrecio)[0]);
       res.json({ producto: prod });
     } catch (errCampo) {
       // La vista no tiene columna "ean" en este mayorista — modo EAN no disponible.
@@ -241,12 +292,14 @@ router.get('/:mayorista_id/cross-selling', async (req, res) => {
 
     const poolExterno = await getConexionMayorista(mayorista_id);
     if (!poolExterno) return res.json([]);
+    const campoIva = await campoIvaProducto(poolExterno, mayorista_id);
 
     const codigosRelacionados = relacionados.rows.map(r => r.codigo);
     const ivanRes = await poolExterno.query(
       `SELECT id_producto, cod_producto, des_producto, imagen_producto,
               precio_producto, stock_temporal, des_producto_marca,
               des_producto_rubro, des_producto_tipo
+              ${seleccionIva(campoIva)}
        FROM "viewProductos" WHERE cod_producto = ANY($1::text[])`,
       [codigosRelacionados]
     );
@@ -258,8 +311,8 @@ router.get('/:mayorista_id/cross-selling', async (req, res) => {
       if (prod) resultado.push(prod);
       if (resultado.length >= 5) break;
     }
-    const { dtoPct, descuentoItemsPct } = await getCondicionesPrecio(req, poolExterno, mayorista_id);
-    res.json(aplicarDto(resultado, dtoPct, descuentoItemsPct));
+    const condicionesPrecio = await getCondicionesPrecio(req, poolExterno, mayorista_id);
+    res.json(aplicarCondicionesPrecio(resultado, condicionesPrecio));
   } catch (error) {
     console.error('Error cross-selling:', error.message);
     res.json([]);
@@ -276,6 +329,7 @@ router.get('/:mayorista_id/equivalentes', async (req, res) => {
 
     const poolExterno = await getConexionMayorista(mayorista_id);
     if (!poolExterno || !(await tieneObsProducto(poolExterno, mayorista_id))) return res.json([]);
+    const campoIva = await campoIvaProducto(poolExterno, mayorista_id);
 
     const origen = await poolExterno.query(
       `SELECT DISTINCT obs_producto
@@ -291,6 +345,7 @@ router.get('/:mayorista_id/equivalentes', async (req, res) => {
       `SELECT id_producto, cod_producto, des_producto, imagen_producto,
               precio_producto, stock_temporal, des_producto_marca,
               des_producto_rubro, des_producto_tipo, obs_producto
+              ${seleccionIva(campoIva)}
        FROM "viewProductos"
        WHERE obs_producto = ANY($1::text[])
          AND cod_producto <> ALL($2::text[])
@@ -298,8 +353,10 @@ router.get('/:mayorista_id/equivalentes', async (req, res) => {
        LIMIT 30`,
       [observaciones, codigos]
     );
-    const { dtoPct, descuentoItemsPct } = await getCondicionesPrecio(req, poolExterno, mayorista_id);
-    res.json(aplicarDto(alternativas.rows, dtoPct, descuentoItemsPct));
+    const condicionesPrecio = await getCondicionesPrecio(req, poolExterno, mayorista_id);
+    const transformadas = aplicarCondicionesPrecio(alternativas.rows, condicionesPrecio);
+    transformadas.sort((a, b) => (Number(a.precio_producto) || 0) - (Number(b.precio_producto) || 0));
+    res.json(transformadas);
   } catch (error) {
     console.error('Error equivalentes:', error.message);
     res.json([]);
@@ -382,6 +439,8 @@ router.get('/:mayorista_id', async (req, res) => {
     const poolExterno = await getConexionMayorista(mayorista_id);
     if (!poolExterno) return res.status(404).json({ mensaje: 'Sin conexión configurada' });
     const conObsProducto = await tieneObsProducto(poolExterno, mayorista_id);
+    const campoIva = await campoIvaProducto(poolExterno, mayorista_id);
+    const condicionesPrecio = await getCondicionesPrecio(req, poolExterno, mayorista_id);
 
     const condiciones = [];
     const params = [];
@@ -411,14 +470,24 @@ router.get('/:mayorista_id', async (req, res) => {
     );
     const total = parseInt(totalResultado.rows[0].count);
 
+    const configPrecio = condicionesPrecio.configPrecio || {};
+    const margenCatalogo = Number(configPrecio.margen_catalogo) || 0;
+    const ivaCatalogoDefault = Number(configPrecio.iva_catalogo_default) || 0;
+    const ivaParaOrden = campoIva && configPrecio.usar_iva_producto !== false
+      ? `COALESCE("${campoIva}", ${ivaCatalogoDefault})`
+      : `${ivaCatalogoDefault}`;
+    const expresionPrecioOrden = configPrecio.modelo_precio_catalogo === MODELO_COSTO_MARGEN_IVA
+      ? `(precio_producto * ${1 + margenCatalogo / 100} * (1 + (${ivaParaOrden}) / 100.0))`
+      : 'precio_producto';
     const orderBy = ordenPrecio
-      ? `precio_producto ${ordenPrecio === 'asc' ? 'ASC NULLS LAST' : 'DESC NULLS LAST'}, des_producto ASC`
+      ? `${expresionPrecioOrden} ${ordenPrecio === 'asc' ? 'ASC NULLS LAST' : 'DESC NULLS LAST'}, des_producto ASC`
       : 'des_producto ASC';
 
     const productosResultado = await poolExterno.query(
       `SELECT id_producto, cod_producto, des_producto, imagen_producto,
               precio_producto, stock_temporal, des_producto_marca,
               des_producto_rubro, des_producto_tipo
+              ${seleccionIva(campoIva)}
               ${conObsProducto ? ', obs_producto' : ''}
        FROM "viewProductos"
        ${where}
@@ -427,8 +496,7 @@ router.get('/:mayorista_id', async (req, res) => {
       params
     );
 
-    const { dtoPct, descuentoItemsPct } = await getCondicionesPrecio(req, poolExterno, mayorista_id);
-    const productosConDto = aplicarDto(productosResultado.rows, dtoPct, descuentoItemsPct);
+    const productosConDto = aplicarCondicionesPrecio(productosResultado.rows, condicionesPrecio);
 
     res.json({
       productos: productosConDto,

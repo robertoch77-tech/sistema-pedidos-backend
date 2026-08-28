@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 const conexionCompartida = require('../services/conexionMayorista');
+const { asegurarColumnasPrecioMayorista } = require('../services/precioCatalogoMayorista');
 
 const columnaPresupuestoLista = pool.query('ALTER TABLE mayoristas ADD COLUMN IF NOT EXISTS permitir_presupuesto_clientes boolean DEFAULT false').catch(error => {
   console.error('Mayoristas: no se pudo asegurar permitir_presupuesto_clientes:', error.message);
@@ -46,6 +47,7 @@ router.get('/', async (req, res) => {
 
 router.get('/:id/configuracion', async (req, res) => {
   try {
+    await asegurarColumnasPrecioMayorista(pool);
     await Promise.all([columnaPresupuestoLista, columnaDetalleCalculo, columnaPrecioListaMisPrecios]);
     const { id } = req.params;
     const resultado = await pool.query(
@@ -62,16 +64,23 @@ router.get('/:id/configuracion', async (req, res) => {
               habilitar_cotizaciones, habilitar_novedades,
               dto_pago_termino,
               precio_incluye_iva, permitir_presupuesto_clientes,
-              mostrar_detalle_calculo_precios, mostrar_precio_lista_mis_precios
+              mostrar_detalle_calculo_precios, mostrar_precio_lista_mis_precios,
+              modelo_precio_catalogo, margen_catalogo, iva_catalogo_default,
+              usar_iva_producto, ivan_enviar_precio_sin_iva
        FROM mayoristas WHERE id=$1`, [id]
     );
     if (!resultado.rows[0]) return res.status(404).json({ mensaje: 'Mayorista no encontrado' });
-    res.json(resultado.rows[0]);
+    const configuracion = resultado.rows[0];
+    configuracion.precio_catalogo_incluye_iva = configuracion.modelo_precio_catalogo === 'costo_margen_iva'
+      ? true
+      : !!configuracion.precio_incluye_iva;
+    res.json(configuracion);
   } catch (error) { res.status(500).json({ mensaje: 'Error del servidor' }); }
 });
 
 router.put('/:id/configuracion', async (req, res) => {
   try {
+    await asegurarColumnasPrecioMayorista(pool);
     await Promise.all([columnaPresupuestoLista, columnaDetalleCalculo, columnaPrecioListaMisPrecios]);
     const { id } = req.params;
     const {
@@ -82,8 +91,17 @@ router.put('/:id/configuracion', async (req, res) => {
       habilitar_ctas_ctes, habilitar_demanda, habilitar_ofertas, habilitar_productos_solicitados,
       habilitar_medios_de_pago, medios_de_pago, habilitar_notificaciones,
       dto_pago_termino, precio_incluye_iva, permitir_presupuesto_clientes,
-      mostrar_detalle_calculo_precios, mostrar_precio_lista_mis_precios
+      mostrar_detalle_calculo_precios, mostrar_precio_lista_mis_precios,
+      modelo_precio_catalogo, margen_catalogo, iva_catalogo_default,
+      usar_iva_producto, ivan_enviar_precio_sin_iva
     } = req.body;
+    if (modelo_precio_catalogo !== undefined && !['precio_recibido', 'costo_margen_iva'].includes(modelo_precio_catalogo)) {
+      return res.status(400).json({ mensaje: 'Modelo de precio inválido' });
+    }
+    const porcentajeValido = (valor, maximo) => valor === undefined || (Number.isFinite(Number(valor)) && Number(valor) >= 0 && Number(valor) <= maximo);
+    if (!porcentajeValido(margen_catalogo, 999) || !porcentajeValido(iva_catalogo_default, 100)) {
+      return res.status(400).json({ mensaje: 'Margen o IVA fuera de rango' });
+    }
     // Este endpoint es compartido por Admin y por el panel del mayorista.
     // Cada pantalla envía un subconjunto distinto: un campo ausente debe
     // conservarse, mientras que false y 0 sí son valores intencionales.
@@ -116,8 +134,13 @@ router.put('/:id/configuracion', async (req, res) => {
         precio_incluye_iva=COALESCE($24, precio_incluye_iva),
         permitir_presupuesto_clientes=COALESCE($25, permitir_presupuesto_clientes),
         mostrar_detalle_calculo_precios=COALESCE($26, mostrar_detalle_calculo_precios),
-        mostrar_precio_lista_mis_precios=COALESCE($27, mostrar_precio_lista_mis_precios)
-       WHERE id=$28
+        mostrar_precio_lista_mis_precios=COALESCE($27, mostrar_precio_lista_mis_precios),
+        modelo_precio_catalogo=COALESCE($28, modelo_precio_catalogo),
+        margen_catalogo=COALESCE($29, margen_catalogo),
+        iva_catalogo_default=COALESCE($30, iva_catalogo_default),
+        usar_iva_producto=COALESCE($31, usar_iva_producto),
+        ivan_enviar_precio_sin_iva=COALESCE($32, ivan_enviar_precio_sin_iva)
+       WHERE id=$33
        RETURNING id, nombre, codigo, logo_url,
                  mostrar_precios, mostrar_stock, mostrar_marca, mostrar_rubro, mostrar_tipo,
                  habilitar_calculadora, descuento_1, descuento_2, descuento_3, iva,
@@ -130,7 +153,9 @@ router.put('/:id/configuracion', async (req, res) => {
                  habilitar_calculadora_venta, habilitar_historial_ventas,
                  habilitar_cotizaciones, habilitar_novedades,
                  dto_pago_termino, precio_incluye_iva, permitir_presupuesto_clientes,
-                 mostrar_detalle_calculo_precios, mostrar_precio_lista_mis_precios`,
+                 mostrar_detalle_calculo_precios, mostrar_precio_lista_mis_precios,
+                 modelo_precio_catalogo, margen_catalogo, iva_catalogo_default,
+                 usar_iva_producto, ivan_enviar_precio_sin_iva`,
       [valor(mostrar_precios), valor(mostrar_stock), valor(mostrar_marca), valor(mostrar_rubro), valor(mostrar_tipo),
        valor(pedir_clave), valor(tamanio_hoja), valor(items_por_hoja), valor(numero_pedido_inicio),
        valor(habilitar_calculadora), valor(descuento_1), valor(descuento_2), valor(descuento_3), valor(iva),
@@ -138,9 +163,16 @@ router.put('/:id/configuracion', async (req, res) => {
        valor(habilitar_productos_solicitados), valor(habilitar_medios_de_pago), valor(medios_de_pago),
        valor(habilitar_notificaciones), valor(dto_pago_termino), valor(precio_incluye_iva),
        valor(permitir_presupuesto_clientes), valor(mostrar_detalle_calculo_precios),
-       valor(mostrar_precio_lista_mis_precios), id]
+       valor(mostrar_precio_lista_mis_precios), valor(modelo_precio_catalogo),
+       valor(margen_catalogo), valor(iva_catalogo_default), valor(usar_iva_producto),
+       valor(ivan_enviar_precio_sin_iva), id]
     );
-    res.json(resultado.rows[0]);
+    const configuracion = resultado.rows[0];
+    if (!configuracion) return res.status(404).json({ mensaje: 'Mayorista no encontrado' });
+    configuracion.precio_catalogo_incluye_iva = configuracion.modelo_precio_catalogo === 'costo_margen_iva'
+      ? true
+      : !!configuracion.precio_incluye_iva;
+    res.json(configuracion);
   } catch (error) {
     console.error(error);
     res.status(500).json({ mensaje: 'Error del servidor' });
