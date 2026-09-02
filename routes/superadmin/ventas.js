@@ -458,10 +458,10 @@ router.get('/:cliente_id/:id', verificarClienteId, async (req, res) => {
       pool.query(
         `SELECT vi.*, p.descripcion AS producto_descripcion, p.codigo AS producto_codigo
          FROM ventas_items vi
-         LEFT JOIN productos_propios p ON p.id = vi.producto_id
-         WHERE vi.venta_id = $1
+         LEFT JOIN productos_propios p ON p.id = vi.producto_id AND p.cliente_id = vi.cliente_id
+         WHERE vi.venta_id = $1 AND vi.cliente_id = $2
          ORDER BY vi.orden ASC`,
-        [id]
+        [id, cliente_id]
       ),
     ]);
 
@@ -502,58 +502,128 @@ router.put('/:cliente_id/:id/cobrar', verificarClienteId, async (req, res) => {
 // PUT /:cliente_id/:id/anular — anular venta
 // ═══════════════════════════════════════════════════════════════
 router.put('/:cliente_id/:id/anular', verificarClienteId, async (req, res) => {
+  let client;
   try {
     const { cliente_id, id } = req.params;
-    const venta = await pool.query(
-      'SELECT estado, anulada, numero_completo, total, va_a_cuenta_corriente, comprador_cuit, comprador_nombre FROM ventas WHERE id=$1 AND cliente_id=$2',
+    client = await pool.connect();
+    await client.query('BEGIN');
+
+    const venta = await client.query(
+      `SELECT id, estado, anulada, numero_completo, total,
+              va_a_cuenta_corriente, cuenta_corriente_cliente_id,
+              comprador_cuit, comprador_nombre
+       FROM ventas
+       WHERE id=$1 AND cliente_id=$2
+       FOR UPDATE`,
       [id, cliente_id]
     );
-    if (!venta.rows.length) return res.status(404).json({ mensaje: 'Venta no encontrada' });
-    if (venta.rows[0].anulada) return res.status(400).json({ mensaje: 'La venta ya está anulada' });
-
-    await pool.query(
-      `UPDATE ventas SET estado = 'anulada', anulada = true, modificado_en = now() WHERE id = $1 AND cliente_id = $2`,
-      [id, cliente_id]
-    );
-
+    if (!venta.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ mensaje: 'Venta no encontrada' });
+    }
     const v = venta.rows[0];
+    if (v.anulada) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ mensaje: 'La venta ya está anulada' });
+    }
+
+    await client.query(
+      `UPDATE ventas SET estado = 'anulada', anulada = true, modificado_en = now()
+       WHERE id = $1 AND cliente_id = $2`,
+      [id, cliente_id]
+    );
+
     if (v.va_a_cuenta_corriente) {
-      const ccRes = await pool.query(
-        `SELECT id, saldo FROM cuentas_corrientes_clientes
-         WHERE cliente_id = $1 AND (
-           (comprador_cuit != '' AND comprador_cuit = $2) OR comprador_nombre = $3
-         ) AND activo = true LIMIT 1`,
-        [cliente_id, v.comprador_cuit || '', v.comprador_nombre]
-      );
-      if (ccRes.rows.length > 0) {
-        const cc = ccRes.rows[0];
-        const nuevoSaldo = (parseFloat(cc.saldo) || 0) - parseFloat(v.total);
-        await pool.query(
-          `INSERT INTO movimientos_cuentas_corrientes
-             (cuenta_corriente_id, cliente_id, tipo, debe, haber, saldo_acumulado, descripcion, numero_comprobante, venta_id, estado)
-           VALUES ($1,$2,'anulacion',0,$3,$4,$5,$6,$7,'procesado')`,
-          [cc.id, cliente_id, parseFloat(v.total).toFixed(4), nuevoSaldo.toFixed(4),
-           `Anulación ${v.numero_completo}`, v.numero_completo, id]
+      let cuentaId = Number(v.cuenta_corriente_cliente_id) || 0;
+      if (!cuentaId) {
+        const movOrigen = await client.query(
+          `SELECT cuenta_corriente_id FROM movimientos_cuentas_corrientes
+           WHERE venta_id=$1 AND cliente_id=$2
+           ORDER BY id ASC LIMIT 1`,
+          [id, cliente_id]
         );
-        await pool.query(
-          `UPDATE cuentas_corrientes_clientes SET saldo = $1 WHERE id = $2`,
-          [nuevoSaldo.toFixed(4), cc.id]
+        cuentaId = Number(movOrigen.rows[0]?.cuenta_corriente_id) || 0;
+      }
+      if (!cuentaId) {
+        const ccRes = await client.query(
+          `SELECT id, saldo FROM cuentas_corrientes_clientes
+           WHERE cliente_id = $1 AND (
+             (comprador_cuit != '' AND comprador_cuit = $2) OR comprador_nombre = $3
+           ) AND activo = true LIMIT 1
+           FOR UPDATE`,
+          [cliente_id, v.comprador_cuit || '', v.comprador_nombre]
+        );
+        cuentaId = ccRes.rows[0]?.id || 0;
+      }
+      if (cuentaId) {
+        const ccLock = await client.query(
+          `SELECT id, saldo FROM cuentas_corrientes_clientes
+           WHERE id=$1 AND cliente_id=$2
+           FOR UPDATE`,
+          [cuentaId, cliente_id]
+        );
+        if (ccLock.rows[0]) {
+          const saldoActual = parseFloat(ccLock.rows[0].saldo) || 0;
+          const montoVenta = parseFloat(v.total) || 0;
+          const nuevoSaldo = saldoActual - montoVenta;
+          await client.query(
+            `UPDATE cuentas_corrientes_clientes
+             SET saldo = $1, modificado_en = now()
+             WHERE id = $2 AND cliente_id = $3`,
+            [nuevoSaldo.toFixed(4), cuentaId, cliente_id]
+          );
+          await client.query(
+            `INSERT INTO movimientos_cuentas_corrientes
+               (cuenta_corriente_id, cliente_id, tipo, debe, haber, saldo_acumulado,
+                descripcion, numero_comprobante, venta_id, estado)
+             VALUES ($1,$2,'anulacion',0,$3,$4,$5,$6,$7,'procesado')`,
+            [cuentaId, cliente_id, montoVenta.toFixed(4), nuevoSaldo.toFixed(4),
+             `Anulación ${v.numero_completo}`, v.numero_completo, id]
+          );
+        }
+      }
+    }
+
+    const itemsRes = await client.query(
+      `SELECT producto_id, cantidad FROM ventas_items
+       WHERE venta_id=$1 AND cliente_id=$2 AND producto_id IS NOT NULL`,
+      [id, cliente_id]
+    );
+    for (const it of itemsRes.rows) {
+      const stPrev = await client.query(
+        `SELECT COALESCE(stock_actual, 0) AS stock FROM productos_propios
+         WHERE id=$1 AND cliente_id=$2
+         FOR UPDATE`,
+        [it.producto_id, cliente_id]
+      );
+      if (stPrev.rows[0]) {
+        const stockAnterior = parseFloat(stPrev.rows[0].stock) || 0;
+        await client.query(
+          `UPDATE productos_propios
+           SET stock_actual = COALESCE(stock_actual, 0) + $1, modificado_en = now()
+           WHERE id = $2 AND cliente_id = $3`,
+          [it.cantidad, it.producto_id, cliente_id]
+        );
+        await client.query(
+          `INSERT INTO stock_movimientos
+             (cliente_id, producto_id, tipo, cantidad, stock_anterior, stock_posterior,
+              motivo, referencia_tipo, referencia_id, creado_en)
+           VALUES ($1,$2,'anulacion',$3,$4,$5,'Anulación de venta','venta',$6,now())`,
+          [cliente_id, it.producto_id, it.cantidad, stockAnterior, stockAnterior + Number(it.cantidad), id]
         );
       }
     }
 
-    const itemsRes = await pool.query('SELECT producto_id, cantidad FROM ventas_items WHERE venta_id=$1 AND producto_id IS NOT NULL', [id]);
-    for (const it of itemsRes.rows) {
-      await pool.query(
-        `UPDATE productos_propios SET stock_actual = COALESCE(stock_actual, 0) + $1, modificado_en = now() WHERE id = $2 AND cliente_id = $3`,
-        [it.cantidad, it.producto_id, cliente_id]
-      );
-    }
-
+    await client.query('COMMIT');
     res.json({ ok: true });
   } catch (err) {
+    if (client) {
+      try { await client.query('ROLLBACK'); } catch (_) {}
+    }
     console.error('PUT anular error:', err.message);
     res.status(500).json({ mensaje: 'Error del servidor' });
+  } finally {
+    if (client) client.release();
   }
 });
 

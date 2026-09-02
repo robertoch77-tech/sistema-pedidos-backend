@@ -88,37 +88,50 @@ router.put('/:id', async (req, res) => {
 });
 
 router.put('/:id/estado', async (req, res) => {
+  let client;
   try {
     const { id } = req.params;
     const { estado } = req.body;
     if (!['activo', 'suspendido', 'prueba'].includes(estado)) {
       return res.status(400).json({ mensaje: 'Estado inválido' });
     }
+
+    client = await pool.connect();
+    await client.query('BEGIN');
+
     if (estado === 'prueba') {
-      const check = await pool.query('SELECT prueba_fin FROM clientes_roberto WHERE id=$1', [id]);
+      const check = await client.query('SELECT prueba_fin FROM clientes_roberto WHERE id=$1', [id]);
       if (!check.rows[0]?.prueba_fin) {
-        await pool.query(
+        await client.query(
           `UPDATE clientes_roberto SET prueba_inicio=CURRENT_DATE, prueba_fin=CURRENT_DATE + INTERVAL '15 days' WHERE id=$1`,
           [id]
         );
       }
     }
     if (estado === 'activo') {
-      await pool.query('UPDATE clientes_roberto SET prueba_inicio=NULL, prueba_fin=NULL WHERE id=$1', [id]);
+      await client.query('UPDATE clientes_roberto SET prueba_inicio=NULL, prueba_fin=NULL WHERE id=$1', [id]);
     }
-    const clienteRes = await pool.query(
+    const clienteRes = await client.query(
       'UPDATE clientes_roberto SET estado=$1, modificado_en=now() WHERE id=$2 RETURNING mayorista_id',
       [estado, id]
     );
-    if (!clienteRes.rows[0]) return res.status(404).json({ mensaje: 'Cliente no encontrado' });
+    if (!clienteRes.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ mensaje: 'Cliente no encontrado' });
+    }
     const { mayorista_id } = clienteRes.rows[0];
     if (mayorista_id) {
-      await pool.query('UPDATE mayoristas SET activo=$1 WHERE id=$2', [estado === 'activo', mayorista_id]);
+      await client.query('UPDATE mayoristas SET activo=$1 WHERE id=$2', [estado === 'activo', mayorista_id]);
     }
+
+    await client.query('COMMIT');
     res.json({ ok: true, estado });
   } catch (error) {
+    if (client) { try { await client.query('ROLLBACK'); } catch (_) {} }
     console.error('SuperAdmin PUT estado error:', error.message);
     res.status(500).json({ mensaje: 'Error del servidor' });
+  } finally {
+    if (client) client.release();
   }
 });
 
@@ -187,17 +200,25 @@ router.put('/:id/prueba', async (req, res) => {
 });
 
 router.put('/:id/modulos', async (req, res) => {
+  let client;
   try {
     const { id } = req.params;
     const { modulos = {} } = req.body;
-    await pool.query(
-      'UPDATE clientes_roberto SET habilitar_sucursales=$1, habilitar_empleados=$2, arca_habilitado=$3, modificado_en=now() WHERE id=$4',
+
+    client = await pool.connect();
+    await client.query('BEGIN');
+
+    const cr = await client.query(
+      'UPDATE clientes_roberto SET habilitar_sucursales=$1, habilitar_empleados=$2, arca_habilitado=$3, modificado_en=now() WHERE id=$4 RETURNING mayorista_id',
       [!!modulos.sucursales, !!modulos.empleados, !!modulos.arca, id]
     );
-    const cr = await pool.query('SELECT mayorista_id FROM clientes_roberto WHERE id=$1', [id]);
-    const mayorista_id = cr.rows[0]?.mayorista_id;
+    if (!cr.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ mensaje: 'Cliente no encontrado' });
+    }
+    const mayorista_id = cr.rows[0].mayorista_id;
     if (mayorista_id) {
-      await pool.query(
+      await client.query(
         `UPDATE mayoristas SET
           habilitar_mensajes=$1, habilitar_notificaciones=$2, habilitar_banners=$3,
           habilitar_analiticas=$4, habilitar_ctas_ctes=$5, habilitar_cotizaciones=$6,
@@ -216,10 +237,15 @@ router.put('/:id/modulos', async (req, res) => {
          !!modulos.catalogo, mayorista_id]
       );
     }
+
+    await client.query('COMMIT');
     res.json({ ok: true });
   } catch (error) {
+    if (client) { try { await client.query('ROLLBACK'); } catch (_) {} }
     console.error('SuperAdmin PUT modulos error:', error.message);
     res.status(500).json({ mensaje: 'Error del servidor' });
+  } finally {
+    if (client) client.release();
   }
 });
 

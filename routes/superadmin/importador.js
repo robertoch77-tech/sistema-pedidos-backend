@@ -6,6 +6,7 @@ const pool     = require('../../db');
 const { verificarCualquierToken, verificarClienteId, verificarClienteIdBody } = require('./authMiddleware');
 const { registrarCambios, registrarEvento } = require('./historial-helper');
 const { buildSearchConditions } = require('./search-helper');
+const { parseNumeroImportacion } = require('../../utils/parseNumeroImportacion');
 
 // ── Multer en memoria ─────────────────────────────────────────
 const upload = multer({
@@ -230,6 +231,63 @@ function numVal(fila, columna, encabezados) {
   return isNaN(n) ? null : n;
 }
 
+const CAMPOS_NUMERICOS_V2 = [
+  { campo: 'precio_costo',     mapeo: 'precio_costo',   label: 'Precio costo' },
+  { campo: 'precio_venta_1',   mapeo: 'precio_venta_1', label: 'Precio venta 1' },
+  { campo: 'precio_venta_2',   mapeo: 'precio_venta_2', label: 'Precio venta 2' },
+  { campo: 'precio_venta_3',   mapeo: 'precio_venta_3', label: 'Precio venta 3' },
+  { campo: 'dto_1',            mapeo: 'descuento_1',    label: 'Descuento 1%' },
+  { campo: 'dto_2',            mapeo: 'descuento_2',    label: 'Descuento 2%' },
+  { campo: 'dto_3',            mapeo: 'descuento_3',    label: 'Descuento 3%' },
+  { campo: 'alicuota_iva',     mapeo: 'iva',            label: 'IVA%' },
+  { campo: 'stock_actual',     mapeo: 'stock',          label: 'Stock' },
+  { campo: 'stock_minimo',     mapeo: 'stock_minimo',   label: 'Stock mínimo' },
+  { campo: 'utilidad_1',       mapeo: 'utilidad_1',     label: 'Utilidad 1%' },
+  { campo: 'utilidad_2',       mapeo: 'utilidad_2',     label: 'Utilidad 2%' },
+  { campo: 'utilidad_3',       mapeo: 'utilidad_3',     label: 'Utilidad 3%' },
+];
+
+function leerNumerosV2(fila, mapeo, encabezados, hoja, filaExcel) {
+  const valores = {};
+  const celdas = [];
+  const errores = [];
+
+  for (const def of CAMPOS_NUMERICOS_V2) {
+    const columna = mapeo[def.mapeo];
+    if (!columna) {
+      valores[def.campo] = null;
+      continue;
+    }
+
+    const idx = encabezados.indexOf(columna);
+    if (idx === -1) {
+      valores[def.campo] = null;
+      errores.push({
+        hoja, fila: filaExcel, columna, campo: def.campo, valor_original: null,
+        motivo: 'La columna configurada no existe en esta hoja', etapa: 'validacion',
+      });
+      continue;
+    }
+
+    const parsed = parseNumeroImportacion(fila[idx]);
+    valores[def.campo] = parsed.estado === 'valido' ? parsed.valor : null;
+    celdas.push({
+      hoja, fila: filaExcel, columna, campo: def.campo, label: def.label,
+      valor_original: parsed.original,
+      valor_interpretado: parsed.estado === 'valido' ? parsed.valor : null,
+      estado: parsed.estado,
+    });
+    if (parsed.estado === 'invalido') {
+      errores.push({
+        hoja, fila: filaExcel, columna, campo: def.campo,
+        valor_original: parsed.original, motivo: parsed.motivo, etapa: 'validacion',
+      });
+    }
+  }
+
+  return { valores, celdas, errores };
+}
+
 // ── Middleware de auth (aplica a todas las rutas) ─────────────
 router.use(verificarCualquierToken);
 
@@ -284,7 +342,7 @@ router.post('/mapear', verificarClienteIdBody, async (req, res) => {
     );
     if (provExiste.rows[0]) {
       proveedor_id = provExiste.rows[0].id;
-      await pool.query('UPDATE proveedores SET activo=true WHERE id=$1', [proveedor_id]);
+      await pool.query('UPDATE proveedores SET activo=true WHERE id=$1 AND cliente_id=$2', [proveedor_id, cliente_id]);
     } else {
       const ins = await pool.query(
         'INSERT INTO proveedores (cliente_id, nombre, activo) VALUES ($1,$2,true) RETURNING id',
@@ -1141,7 +1199,7 @@ router.post('/aplicar-libre', (req, res, next) => { req.setTimeout(300000); next
                    dto_1=COALESCE($12, dto_1), dto_2=COALESCE($13, dto_2), dto_3=COALESCE($14, dto_3),
                    alicuota_iva=COALESCE($15, alicuota_iva),
                    proveedor_id=COALESCE($16, proveedor_id), modificado_en=now()
-                 WHERE id=$17`,
+                 WHERE id=$17 AND cliente_id=$18`,
                 [
                   descripcion,
                   toNum(prod.precio_costo), toNum(prod.precio_venta_1), toNum(prod.precio_venta_2),
@@ -1149,7 +1207,7 @@ router.post('/aplicar-libre', (req, res, next) => { req.setTimeout(300000); next
                   lPCF||null, lPVF||null,
                   prod.marca, prod.rubro, prod.unidad_medida, prod.ean,
                   toNum(prod.descuento_1), toNum(prod.descuento_2), toNum(prod.descuento_3),
-                  toNum(prod.iva), proveedor_id, existMap.get(key),
+                  toNum(prod.iva), proveedor_id, existMap.get(key), cliente_id,
                 ]
               );
               actualizados++;
@@ -1307,7 +1365,14 @@ router.post('/analizar-diff', upload.single('archivo'), verificarClienteIdBody, 
 
     // Guardar archivo temporal 30 min
     const tempId = genTempId();
-    tempFiles.set(tempId, { buffer: req.file.buffer, expires: Date.now() + 30 * 60 * 1000 });
+    tempFiles.set(tempId, {
+      buffer: req.file.buffer,
+      expires: Date.now() + 30 * 60 * 1000,
+      cliente_id: String(cliente_id),
+      procesadas: new Set(),
+      reintentables: new Set(),
+      enProceso: false,
+    });
 
     // Resolver proveedor_id
     let proveedor_id = null;
@@ -1364,6 +1429,7 @@ router.post('/analizar-diff', upload.single('archivo'), verificarClienteIdBody, 
     ];
 
     const nuevos = [], actualizar = [], prefijados = [];
+    const erroresValidacion = [], interpretaciones = [];
     const codigosEnExcel = new Set();
     let preciosSuben = 0, preciosBajan = 0, preciosSinCambio = 0, sumVar = 0, cntVar = 0;
 
@@ -1373,9 +1439,12 @@ router.post('/analizar-diff', upload.single('archivo'), verificarClienteIdBody, 
       if (!filas.length) continue;
       const headerIdx = detectarEncabezado(filas);
       const enc = filas[headerIdx].map(c => String(c).trim());
-      const datos = filas.slice(headerIdx + 1).filter(f => f.some(c => c !== '' && c != null));
+      const datos = filas
+        .map((fila, idx) => ({ fila, filaExcel: idx + 1 }))
+        .slice(headerIdx + 1)
+        .filter(({ fila }) => fila.some(c => c !== '' && c != null));
 
-      for (const fila of datos) {
+      for (const { fila, filaExcel } of datos) {
         const descCols = Array.isArray(mapeo.descripcion) ? mapeo.descripcion : (mapeo.descripcion ? [mapeo.descripcion] : []);
         const descripcion = descCols.map(c => val(fila, c, enc)).filter(Boolean).join(' ').trim();
         const codigo = val(fila, mapeo.codigo, enc) || null;
@@ -1384,23 +1453,29 @@ router.post('/analizar-diff', upload.single('archivo'), verificarClienteIdBody, 
         const key = codigo ? codigo.trim().toUpperCase() : null;
         if (key) codigosEnExcel.add(key);
 
+        const numericos = leerNumerosV2(fila, mapeo, enc, hojaName, filaExcel);
+        interpretaciones.push(...numericos.celdas.filter(c => c.estado !== 'vacio'));
+        if (numericos.errores.length) {
+          erroresValidacion.push(...numericos.errores.map(e => ({ ...e, row_id: `${hojaName}:${filaExcel}` })));
+          continue;
+        }
         const camposExcel = {
-          precio_costo:       numVal(fila, mapeo.precio_costo, enc),
-          precio_venta_1:     numVal(fila, mapeo.precio_venta_1, enc),
-          precio_venta_2:     numVal(fila, mapeo.precio_venta_2, enc),
-          precio_venta_final: numVal(fila, mapeo.precio_venta_final || mapeo.precio_venta_1, enc),
-          precio_venta_3:     numVal(fila, mapeo.precio_venta_3, enc),
+          precio_costo:       numericos.valores.precio_costo,
+          precio_venta_1:     numericos.valores.precio_venta_1,
+          precio_venta_2:     numericos.valores.precio_venta_2,
+          precio_venta_final: numericos.valores.precio_venta_1,
+          precio_venta_3:     numericos.valores.precio_venta_3,
           descripcion:        descripcion || null,
           marca:              val(fila, mapeo.marca, enc) || marca_defecto || null,
           rubro:              val(fila, mapeo.rubro, enc) || rubro_defecto || null,
           unidad_medida:      val(fila, mapeo.unidad_medida, enc) || null,
           ean:                val(fila, mapeo.ean, enc) || null,
-          dto_1:              numVal(fila, mapeo.descuento_1, enc),
-          dto_2:              numVal(fila, mapeo.descuento_2, enc),
-          dto_3:              numVal(fila, mapeo.descuento_3, enc),
-          alicuota_iva:       numVal(fila, mapeo.iva, enc),
-          stock_actual:       numVal(fila, mapeo.stock, enc),
-          stock_minimo:       numVal(fila, mapeo.stock_minimo, enc),
+          dto_1:              numericos.valores.dto_1,
+          dto_2:              numericos.valores.dto_2,
+          dto_3:              numericos.valores.dto_3,
+          alicuota_iva:       numericos.valores.alicuota_iva,
+          stock_actual:       numericos.valores.stock_actual,
+          stock_minimo:       numericos.valores.stock_minimo,
         };
 
         const existing = key ? dbMap.get(key) : null;
@@ -1422,7 +1497,15 @@ router.post('/analizar-diff', upload.single('archivo'), verificarClienteIdBody, 
               const changed = tipo === 'num'
                 ? Math.abs((parseFloat(vEx) || 0) - (parseFloat(vDb) || 0)) > 0.001
                 : String(vEx || '').trim() !== String(vDb || '').trim();
-              if (changed) diffs.push({ campo, label, anterior: vDb ?? null, nuevo: vEx });
+              if (changed) {
+                const celda = tipo === 'num' ? numericos.celdas.find(c => c.campo === campo) : null;
+                diffs.push({
+                  campo, label, anterior: vDb ?? null, nuevo: vEx,
+                  valor_original: celda?.valor_original ?? String(vEx),
+                  valor_interpretado: vEx,
+                  diferencia: tipo === 'num' ? Number(vEx) - (parseFloat(vDb) || 0) : null,
+                });
+              }
             }
 
             // Estadísticas de precio
@@ -1467,10 +1550,13 @@ router.post('/analizar-diff', upload.single('archivo'), verificarClienteIdBody, 
         precios_bajan:      preciosBajan,
         precios_sin_cambio: preciosSinCambio,
         variacion_promedio: cntVar > 0 ? Math.round(sumVar / cntVar * 10) / 10 : 0,
+        errores_validacion: erroresValidacion.length,
       },
       actualizar,
       prefijados,
       ausentes,
+      interpretaciones: interpretaciones.slice(0, 500),
+      errores_validacion: erroresValidacion,
     });
   } catch (err) {
     console.error('POST /analizar-diff error:', err.message);
@@ -1513,6 +1599,7 @@ router.post('/analizar-v2', upload.single('archivo'), async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next(); }, upload.single('archivo'), verificarClienteIdBody, async (req, res) => {
   const client = await pool.connect();
+  let tempEntrada = null;
   try {
     // Aceptar archivo subido O temp_id del análisis previo
     let fileBuffer;
@@ -1523,8 +1610,14 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
       if (!tmpId) return res.status(400).json({ mensaje: 'Se requiere un archivo Excel o temp_id' });
       const tmp = tempFiles.get(tmpId);
       if (!tmp) return res.status(400).json({ mensaje: 'Archivo temporal no encontrado o expirado. Volvé al mapeo y analizá de nuevo.' });
+      if (tmp.cliente_id && String(tmp.cliente_id) !== String(req.body.cliente_id)) {
+        return res.status(403).json({ mensaje: 'El análisis temporal no pertenece a este cliente' });
+      }
+      if (tmp.enProceso) return res.status(409).json({ mensaje: 'Esta importación ya se está procesando' });
+      tmp.enProceso = true;
+      tmp.expires = Date.now() + 30 * 60 * 1000;
+      tempEntrada = tmp;
       fileBuffer = tmp.buffer;
-      tempFiles.delete(tmpId);
     }
 
     const { cliente_id, proveedor } = req.body;
@@ -1544,48 +1637,94 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
     const existRes = await pool.query('SELECT id, codigo, proveedor_id FROM productos_propios WHERE cliente_id=$1', [cliente_id]);
     const existMap = new Map(existRes.rows.map(r => [String(r.codigo || '').trim().toUpperCase(), { id: r.id, proveedor_id: r.proveedor_id }]));
 
-    let totalNuevos = 0, totalActualizados = 0, totalErrores = 0;
+    let soloFilas = null;
+    if (req.body.solo_filas) {
+      try {
+        const parsed = typeof req.body.solo_filas === 'string' ? JSON.parse(req.body.solo_filas) : req.body.solo_filas;
+        if (!Array.isArray(parsed) || parsed.some(id => typeof id !== 'string')) throw new Error('invalid');
+        soloFilas = new Set(parsed);
+      } catch {
+        return res.status(400).json({ mensaje: 'Lista de filas para reintento inválida' });
+      }
+      if (!tempEntrada) return res.status(400).json({ mensaje: 'El reintento requiere un temp_id vigente' });
+      const noAutorizadas = [...soloFilas].filter(id => !tempEntrada.reintentables.has(id));
+      if (noAutorizadas.length) {
+        return res.status(409).json({ mensaje: 'El reintento contiene filas que no fallaron en la ejecución anterior' });
+      }
+    }
+
+    let totalSolicitados = 0, totalNuevos = 0, totalActualizados = 0, totalOmitidos = 0, totalFallidos = 0;
     const porHoja = [];
+    const detalle = [];
+    const filasExitosas = [];
+    const filasFallidas = [];
     const BATCH = 100;
 
     await client.query('BEGIN');
     for (const hojaName of hojas_seleccionadas) {
       if (!wb.Sheets[hojaName]) continue;
       const filas = XLSX.utils.sheet_to_json(wb.Sheets[hojaName], { header: 1, defval: '' });
-      if (!filas.length) { porHoja.push({ hoja: hojaName, nuevos: 0, actualizados: 0, errores: 0 }); continue; }
+      if (!filas.length) { porHoja.push({ hoja: hojaName, solicitados: 0, nuevos: 0, actualizados: 0, omitidos: 0, fallidos: 0, errores: 0 }); continue; }
       const headerIdx = detectarEncabezado(filas);
       const enc = filas[headerIdx].map(c => String(c).trim());
-      const datos = filas.slice(headerIdx + 1).filter(f => f.some(c => c !== '' && c != null));
-      let nuevos = 0, actualizados = 0, errores = 0;
+      const datos = filas
+        .map((fila, idx) => ({ fila, filaExcel: idx + 1 }))
+        .slice(headerIdx + 1)
+        .filter(({ fila }) => fila.some(c => c !== '' && c != null));
+      let solicitados = 0, nuevos = 0, actualizados = 0, omitidos = 0, fallidos = 0;
 
       for (let i = 0; i < datos.length; i += BATCH) {
-        for (const fila of datos.slice(i, i + BATCH)) {
+        for (const { fila, filaExcel } of datos.slice(i, i + BATCH)) {
+          const rowId = `${hojaName}:${filaExcel}`;
+          if (soloFilas && !soloFilas.has(rowId)) continue;
+          solicitados++;
+          totalSolicitados++;
+
+          if (tempEntrada?.procesadas.has(rowId)) {
+            omitidos++; totalOmitidos++;
+            detalle.push({ row_id: rowId, hoja: hojaName, fila: filaExcel, etapa: 'idempotencia', estado: 'omitido', motivo: 'La fila ya fue procesada correctamente' });
+            continue;
+          }
+
+          const descCols = Array.isArray(mapeo.descripcion) ? mapeo.descripcion : (mapeo.descripcion ? [mapeo.descripcion] : []);
+          const descripcion = descCols.map(c => val(fila, c, enc)).filter(Boolean).join(' ').trim();
+          const codigo = val(fila, mapeo.codigo, enc) || null;
+          if (!descripcion) {
+            omitidos++; totalOmitidos++;
+            detalle.push({ row_id: rowId, hoja: hojaName, fila: filaExcel, columna: descCols.join(' + '), valor_original: '', etapa: 'validacion', estado: 'omitido', motivo: 'Descripción vacía' });
+            continue;
+          }
+
+          const numericos = leerNumerosV2(fila, mapeo, enc, hojaName, filaExcel);
+          if (numericos.errores.length) {
+            omitidos++; totalOmitidos++;
+            detalle.push(...numericos.errores.map(e => ({ ...e, row_id: rowId, estado: 'omitido' })));
+            continue;
+          }
+
+          await client.query('SAVEPOINT fila_importacion');
           try {
-            const descCols = Array.isArray(mapeo.descripcion) ? mapeo.descripcion : (mapeo.descripcion ? [mapeo.descripcion] : []);
-            const descripcion = descCols.map(c => val(fila, c, enc)).filter(Boolean).join(' ').trim();
-            if (!descripcion) { errores++; continue; }
-            const codigo = val(fila, mapeo.codigo, enc) || null;
             const key = codigo ? codigo.trim().toUpperCase() : null;
             const prefixedKey = (key && prefix) ? `${prefix}-${key}` : null;
             const effectiveKey = (key && !existMap.has(key) && prefixedKey && existMap.has(prefixedKey)) ? prefixedKey : key;
             const campos = {
-              precio_costo:   numVal(fila, mapeo.precio_costo, enc),
-              precio_venta_1: numVal(fila, mapeo.precio_venta_1, enc),
-              precio_venta_2: numVal(fila, mapeo.precio_venta_2, enc),
-              precio_venta_3: numVal(fila, mapeo.precio_venta_3, enc),
+              precio_costo:   numericos.valores.precio_costo,
+              precio_venta_1: numericos.valores.precio_venta_1,
+              precio_venta_2: numericos.valores.precio_venta_2,
+              precio_venta_3: numericos.valores.precio_venta_3,
               marca:          val(fila, mapeo.marca, enc) || marca_defecto || null,
               rubro:          val(fila, mapeo.rubro, enc) || rubro_defecto || null,
               unidad_medida:  val(fila, mapeo.unidad_medida, enc) || null,
               ean:            val(fila, mapeo.ean, enc) || null,
-              dto_1:          numVal(fila, mapeo.descuento_1, enc),
-              dto_2:          numVal(fila, mapeo.descuento_2, enc),
-              dto_3:          numVal(fila, mapeo.descuento_3, enc),
-              alicuota_iva:   numVal(fila, mapeo.iva, enc),
-              stock_actual:   numVal(fila, mapeo.stock, enc),
-              stock_minimo:   numVal(fila, mapeo.stock_minimo, enc),
-              utilidad_1:     numVal(fila, mapeo.utilidad_1, enc),
-              utilidad_2:     numVal(fila, mapeo.utilidad_2, enc),
-              utilidad_3:     numVal(fila, mapeo.utilidad_3, enc),
+              dto_1:          numericos.valores.dto_1,
+              dto_2:          numericos.valores.dto_2,
+              dto_3:          numericos.valores.dto_3,
+              alicuota_iva:   numericos.valores.alicuota_iva,
+              stock_actual:   numericos.valores.stock_actual,
+              stock_minimo:   numericos.valores.stock_minimo,
+              utilidad_1:     numericos.valores.utilidad_1,
+              utilidad_2:     numericos.valores.utilidad_2,
+              utilidad_3:     numericos.valores.utilidad_3,
             };
             const pcf = calcPCF(campos.precio_costo, campos.dto_1, campos.dto_2, campos.dto_3);
             const u1 = campos.utilidad_1 || 0;
@@ -1674,27 +1813,49 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
               if (finalKey) existMap.set(finalKey, { id: ins.rows[0].id, proveedor_id });
               nuevos++;
             }
-          } catch { errores++; }
+            await client.query('RELEASE SAVEPOINT fila_importacion');
+            filasExitosas.push(rowId);
+          } catch (errFila) {
+            await client.query('ROLLBACK TO SAVEPOINT fila_importacion').catch(() => {});
+            await client.query('RELEASE SAVEPOINT fila_importacion').catch(() => {});
+            fallidos++; totalFallidos++; filasFallidas.push(rowId);
+            detalle.push({
+              row_id: rowId, hoja: hojaName, fila: filaExcel, codigo,
+              etapa: 'escritura', estado: 'fallido',
+              motivo: 'No se pudo guardar esta fila. Podés reintentarla sin repetir las filas exitosas.',
+            });
+            console.error(`POST /importar-v2 fila ${rowId}:`, errFila.message);
+          }
         }
       }
-      totalNuevos += nuevos; totalActualizados += actualizados; totalErrores += errores;
-      porHoja.push({ hoja: hojaName, nuevos, actualizados, errores });
+      totalNuevos += nuevos; totalActualizados += actualizados;
+      porHoja.push({ hoja: hojaName, solicitados, nuevos, actualizados, omitidos, fallidos, errores: omitidos + fallidos });
     }
     if (proveedor_id) {
       await client.query(
         `INSERT INTO importaciones_historial (cliente_id,proveedor_id,nuevos,aplicados,errores) VALUES($1,$2,$3,$4,$5)`,
-        [cliente_id, proveedor_id, totalNuevos, totalNuevos + totalActualizados, totalErrores]
+        [cliente_id, proveedor_id, totalNuevos, totalNuevos + totalActualizados, totalOmitidos + totalFallidos]
       );
     }
     await client.query('COMMIT');
+    if (tempEntrada) {
+      filasExitosas.forEach(id => tempEntrada.procesadas.add(id));
+      if (soloFilas) soloFilas.forEach(id => tempEntrada.reintentables.delete(id));
+      filasFallidas.forEach(id => tempEntrada.reintentables.add(id));
+    }
     res.json({ ok: true, importados: totalNuevos + totalActualizados, nuevos: totalNuevos,
-      actualizados: totalActualizados, errores: totalErrores,
-      total: totalNuevos + totalActualizados + totalErrores, por_hoja: porHoja });
+      actualizados: totalActualizados, errores: totalOmitidos + totalFallidos,
+      solicitados: totalSolicitados, omitidos: totalOmitidos, fallidos: totalFallidos,
+      total: totalSolicitados, por_hoja: porHoja, detalle,
+      filas_reintentables: filasFallidas });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('POST /importar-v2 error:', err.message);
-    res.status(500).json({ mensaje: 'Error al importar', detalle: err.message });
-  } finally { client.release(); }
+    res.status(500).json({ mensaje: 'Error al importar' });
+  } finally {
+    if (tempEntrada) tempEntrada.enProceso = false;
+    client.release();
+  }
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -1717,7 +1878,9 @@ router.put('/actualizar-precios-v2', verificarClienteIdBody, async (req, res) =>
     }
     await pool.query(`ALTER TABLE productos_propios ADD COLUMN IF NOT EXISTS stock_minimo NUMERIC DEFAULT 0`).catch(() => {});
 
-    const idsToUpdate = productos.map(p => p.id);
+    const idsToUpdate = productos
+      .filter(p => p && Number.isInteger(Number(p.id)) && Number(p.id) > 0)
+      .map(p => Number(p.id));
     const prevMap = {};
     if (idsToUpdate.length) {
       const prevResH = await pool.query(
@@ -1728,8 +1891,15 @@ router.put('/actualizar-precios-v2', verificarClienteIdBody, async (req, res) =>
       for (const row of prevResH.rows) prevMap[row.id] = row;
     }
 
-    let actualizados = 0;
-    for (const p of productos) {
+    let actualizados = 0, omitidos = 0, fallidos = 0;
+    const detalle = [];
+    for (let indice = 0; indice < productos.length; indice++) {
+      const p = productos[indice];
+      if (!p || !Number.isInteger(Number(p.id)) || Number(p.id) <= 0) {
+        omitidos++;
+        detalle.push({ indice, id: p?.id ?? null, estado: 'omitido', motivo: 'ID de producto inválido' });
+        continue;
+      }
       try {
         // ── Recálculo server-side: si llega precio_costo + impuestos, el backend
         //    recalcula pcFinal/pv1/pv2/pv3 él mismo. No depende del frontend. ──
@@ -1796,7 +1966,13 @@ router.put('/actualizar-precios-v2', verificarClienteIdBody, async (req, res) =>
            p.marca??null, p.rubro??null, p.unidad_medida??null,
            p.stock_minimo??null, p.activo??null, p.imagen_url??null, p.id, cliente_id]
         );
+        if (r.rowCount === 0) {
+          omitidos++;
+          detalle.push({ indice, id: p.id, estado: 'omitido', motivo: 'El producto no existe o no pertenece al cliente' });
+          continue;
+        }
         actualizados += r.rowCount;
+        detalle.push({ indice, id: p.id, estado: 'actualizado' });
         const prevH = prevMap[p.id];
         if (prevH) {
           const cambios = {};
@@ -1817,13 +1993,23 @@ router.put('/actualizar-precios-v2', verificarClienteIdBody, async (req, res) =>
           }
         }
       } catch (err) {
+        fallidos++;
+        detalle.push({ indice, id: p.id, estado: 'fallido', motivo: 'No se pudo actualizar este producto' });
         console.error(`PUT /actualizar-precios-v2 producto ${p.id}:`, err.message);
       }
     }
-    res.json({ ok: true, actualizados });
+    res.json({
+      ok: true,
+      solicitados: productos.length,
+      actualizados,
+      omitidos,
+      fallidos,
+      detalle,
+      productos_fallidos: detalle.filter(d => d.estado === 'fallido').map(d => ({ indice: d.indice, id: d.id })),
+    });
   } catch (err) {
     console.error('PUT /actualizar-precios-v2 error:', err.message);
-    res.status(500).json({ mensaje: 'Error al actualizar', detalle: err.message });
+    res.status(500).json({ mensaje: 'Error al actualizar' });
   }
 });
 
@@ -2185,6 +2371,167 @@ router.get('/productos/:cliente_id/count-sin-foto', verificarClienteId, async (r
     res.json({ total: r.rows[0].total });
   } catch (err) {
     res.status(500).json({ mensaje: 'Error', detalle: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// EQUIVALENCIAS DE PRODUCTOS
+// ═══════════════════════════════════════════════════════════════
+
+// GET /equivalencias/:cliente_id/:producto_id — listar equivalencias de un producto
+router.get('/equivalencias/:cliente_id/:producto_id', verificarClienteId, async (req, res) => {
+  try {
+    const { cliente_id, producto_id } = req.params;
+    const prodId = parseInt(producto_id, 10);
+    if (!Number.isInteger(prodId) || prodId <= 0) {
+      return res.status(400).json({ mensaje: 'producto_id debe ser un entero positivo' });
+    }
+
+    const result = await pool.query(
+      `SELECT e.id AS equivalencia_id,
+              CASE WHEN e.producto_a_id = $2 THEN e.producto_b_id ELSE e.producto_a_id END AS producto_id,
+              pp.codigo, pp.descripcion, pp.precio_costo, pp.precio_costo_final,
+              pp.precio_venta_1, pp.precio_venta_2, pp.precio_venta_3, pp.precio_venta_final,
+              pp.unidad_medida, pp.presentacion, pp.marca, pp.rubro,
+              pp.stock_actual, pp.alicuota_iva, pp.modificado_en,
+              prov.nombre AS proveedor_nombre
+       FROM productos_equivalencias e
+       JOIN productos_propios pp ON pp.id = CASE WHEN e.producto_a_id = $2 THEN e.producto_b_id ELSE e.producto_a_id END
+                                AND pp.cliente_id = $1
+       LEFT JOIN proveedores prov ON prov.id = pp.proveedor_id AND prov.cliente_id = $1
+       WHERE e.cliente_id = $1
+         AND (e.producto_a_id = $2 OR e.producto_b_id = $2)
+       ORDER BY pp.descripcion`,
+      [cliente_id, prodId]
+    );
+
+    res.json({ equivalencias: result.rows });
+  } catch (err) {
+    console.error('GET /equivalencias error:', err.message);
+    res.status(500).json({ mensaje: 'Error al listar equivalencias' });
+  }
+});
+
+// GET /equivalencias/:cliente_id/:producto_id/candidatos?buscar=texto — buscar candidatos
+router.get('/equivalencias/:cliente_id/:producto_id/candidatos', verificarClienteId, async (req, res) => {
+  try {
+    const { cliente_id, producto_id } = req.params;
+    const { buscar = '' } = req.query;
+    const prodId = parseInt(producto_id, 10);
+    if (!Number.isInteger(prodId) || prodId <= 0) {
+      return res.status(400).json({ mensaje: 'producto_id debe ser un entero positivo' });
+    }
+    if (!buscar.trim()) {
+      return res.json({ candidatos: [] });
+    }
+
+    const result = await pool.query(
+      `SELECT pp.id, pp.codigo, pp.descripcion, pp.precio_venta_final,
+              pp.unidad_medida, pp.presentacion, pp.marca,
+              prov.nombre AS proveedor_nombre
+       FROM productos_propios pp
+       LEFT JOIN proveedores prov ON prov.id = pp.proveedor_id AND prov.cliente_id = $1
+       WHERE pp.cliente_id = $1
+         AND pp.activo = true
+         AND pp.id <> $2
+         AND (pp.descripcion ILIKE $3 OR pp.codigo ILIKE $3 OR pp.marca ILIKE $3)
+         AND pp.id NOT IN (
+           SELECT CASE WHEN e.producto_a_id = $2 THEN e.producto_b_id ELSE e.producto_a_id END
+           FROM productos_equivalencias e
+           WHERE e.cliente_id = $1 AND (e.producto_a_id = $2 OR e.producto_b_id = $2)
+         )
+       ORDER BY pp.descripcion
+       LIMIT 20`,
+      [cliente_id, prodId, `%${buscar.trim()}%`]
+    );
+
+    res.json({ candidatos: result.rows });
+  } catch (err) {
+    console.error('GET /equivalencias/candidatos error:', err.message);
+    res.status(500).json({ mensaje: 'Error al buscar candidatos' });
+  }
+});
+
+// POST /equivalencias/:cliente_id — crear equivalencia
+router.post('/equivalencias/:cliente_id', verificarClienteId, async (req, res) => {
+  let client;
+  try {
+    const { cliente_id } = req.params;
+    const { producto_a_id, producto_b_id } = req.body;
+
+    const idA = parseInt(producto_a_id, 10);
+    const idB = parseInt(producto_b_id, 10);
+    if (!Number.isInteger(idA) || idA <= 0 || !Number.isInteger(idB) || idB <= 0) {
+      return res.status(400).json({ mensaje: 'Los IDs de producto deben ser enteros positivos' });
+    }
+    if (idA === idB) {
+      return res.status(400).json({ mensaje: 'Un producto no puede ser equivalente a sí mismo' });
+    }
+
+    const menor = Math.min(idA, idB);
+    const mayor = Math.max(idA, idB);
+
+    client = await pool.connect();
+    await client.query('BEGIN');
+
+    const pertenencia = await client.query(
+      `SELECT id FROM productos_propios WHERE id IN ($1, $2) AND cliente_id = $3`,
+      [menor, mayor, cliente_id]
+    );
+    if (pertenencia.rows.length !== 2) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ mensaje: 'Uno o ambos productos no existen o no pertenecen a este cliente' });
+    }
+
+    const duplicado = await client.query(
+      `SELECT id FROM productos_equivalencias
+       WHERE cliente_id = $1 AND producto_a_id = $2 AND producto_b_id = $3`,
+      [cliente_id, menor, mayor]
+    );
+    if (duplicado.rows.length > 0) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ mensaje: 'Esta equivalencia ya existe' });
+    }
+
+    const result = await client.query(
+      `INSERT INTO productos_equivalencias (cliente_id, producto_a_id, producto_b_id)
+       VALUES ($1, $2, $3)
+       RETURNING id`,
+      [cliente_id, menor, mayor]
+    );
+
+    await client.query('COMMIT');
+    res.json({ ok: true, equivalencia_id: result.rows[0].id });
+  } catch (err) {
+    if (client) { try { await client.query('ROLLBACK'); } catch (_) {} }
+    console.error('POST /equivalencias error:', err.message);
+    res.status(500).json({ mensaje: 'Error al crear equivalencia' });
+  } finally {
+    if (client) client.release();
+  }
+});
+
+// DELETE /equivalencias/:cliente_id/:equivalencia_id — eliminar equivalencia
+router.delete('/equivalencias/:cliente_id/:equivalencia_id', verificarClienteId, async (req, res) => {
+  try {
+    const { cliente_id, equivalencia_id } = req.params;
+    const eqId = parseInt(equivalencia_id, 10);
+    if (!Number.isInteger(eqId) || eqId <= 0) {
+      return res.status(400).json({ mensaje: 'equivalencia_id debe ser un entero positivo' });
+    }
+
+    const result = await pool.query(
+      `DELETE FROM productos_equivalencias WHERE id = $1 AND cliente_id = $2 RETURNING id`,
+      [eqId, cliente_id]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ mensaje: 'Equivalencia no encontrada' });
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('DELETE /equivalencias error:', err.message);
+    res.status(500).json({ mensaje: 'Error al eliminar equivalencia' });
   }
 });
 

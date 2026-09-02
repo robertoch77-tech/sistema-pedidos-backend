@@ -347,10 +347,10 @@ router.get('/:cliente_id/:id', verificarClienteId, async (req, res) => {
       pool.query(
         `SELECT pi.*, pp.descripcion AS producto_descripcion, pp.codigo AS producto_codigo
          FROM presupuestos_items pi
-         LEFT JOIN productos_propios pp ON pp.id = pi.producto_id
-         WHERE pi.presupuesto_id = $1
+         LEFT JOIN productos_propios pp ON pp.id = pi.producto_id AND pp.cliente_id = pi.cliente_id
+         WHERE pi.presupuesto_id = $1 AND pi.cliente_id = $2
          ORDER BY pi.orden ASC`,
-        [id]
+        [id, cliente_id]
       ),
     ]);
 
@@ -614,21 +614,30 @@ router.put('/:cliente_id/:id', verificarClienteId, async (req, res) => {
     return res.status(400).json({ mensaje: 'El presupuesto debe tener al menos un ítem' });
   }
 
+  let client;
   try {
-    // Verificar que existe + validar estado
-    const check = await pool.query(
-      `SELECT id, estado, convertido_a_venta FROM presupuestos WHERE id=$1 AND cliente_id=$2`,
+    client = await pool.connect();
+    await client.query('BEGIN');
+
+    const check = await client.query(
+      `SELECT id, estado, convertido_a_venta FROM presupuestos
+       WHERE id=$1 AND cliente_id=$2
+       FOR UPDATE`,
       [id, cliente_id]
     );
-    if (!check.rows[0]) return res.status(404).json({ mensaje: 'Presupuesto no encontrado' });
+    if (!check.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ mensaje: 'Presupuesto no encontrado' });
+    }
     if (check.rows[0].convertido_a_venta) {
+      await client.query('ROLLBACK');
       return res.status(400).json({ mensaje: 'No se puede editar un presupuesto convertido a venta' });
     }
     if (check.rows[0].estado === 'enviado') {
+      await client.query('ROLLBACK');
       return res.status(400).json({ mensaje: 'No se puede editar un presupuesto enviado. Cambiá el estado a borrador primero.' });
     }
 
-    // Recalcular totales — función compartida (espejo de frontend)
     const modoIvaValidado = (['off','agregar','discriminar'].includes(modo_iva) ? modo_iva : 'discriminar');
     const calc = calcularTotalesIVA(items, descuento_global, recargo_global, modoIvaValidado);
 
@@ -648,18 +657,17 @@ router.put('/:cliente_id/:id', verificarClienteId, async (req, res) => {
     const fechaVenc   = new Date(); fechaVenc.setDate(fechaVenc.getDate() + diasInt);
     const fechaVencStr = fechaVenc.toISOString().slice(0, 10);
 
-    // Guardar snapshot del estado anterior para historial
-    const snapAnterior = await pool.query(
+    const snapAnterior = await client.query(
       `SELECT comprador_nombre, comprador_cuit, subtotal, iva_monto, total,
               descuento_global, recargo_global, modo_iva, condiciones, observaciones, estado
-       FROM presupuestos WHERE id=$1`,
-      [id]
+       FROM presupuestos WHERE id=$1 AND cliente_id=$2`,
+      [id, cliente_id]
     );
-    const itemsAnteriores = await pool.query(
-      'SELECT descripcion, cantidad, precio_unitario, descuento_porcentaje FROM presupuestos_items WHERE presupuesto_id=$1 ORDER BY orden',
-      [id]
+    const itemsAnteriores = await client.query(
+      'SELECT descripcion, cantidad, precio_unitario, descuento_porcentaje FROM presupuestos_items WHERE presupuesto_id=$1 AND cliente_id=$2 ORDER BY orden',
+      [id, cliente_id]
     );
-    await pool.query(
+    await client.query(
       `INSERT INTO presupuestos_historial (presupuesto_id, cliente_id, accion, datos_anteriores, datos_nuevos)
        VALUES ($1, $2, 'edicion', $3, $4)`,
       [
@@ -667,9 +675,9 @@ router.put('/:cliente_id/:id', verificarClienteId, async (req, res) => {
         JSON.stringify({ presupuesto: snapAnterior.rows[0], items: itemsAnteriores.rows }),
         JSON.stringify({ comprador_nombre, comprador_cuit, items: items.length, descuento_global, recargo_global, modo_iva })
       ]
-    ).catch(e => console.error('Error guardando historial:', e.message));
+    );
 
-    await pool.query(
+    await client.query(
       `UPDATE presupuestos SET
          comprador_nombre=$1, comprador_cuit=$2, lista_precio_id=$3,
          dias_validez=$4, fecha_vencimiento=$5,
@@ -691,13 +699,15 @@ router.put('/:cliente_id/:id', verificarClienteId, async (req, res) => {
       ]
     );
 
-    // Reemplazar items
-    await pool.query(`DELETE FROM presupuestos_items WHERE presupuesto_id=$1`, [id]);
+    await client.query(
+      `DELETE FROM presupuestos_items WHERE presupuesto_id=$1 AND cliente_id=$2`,
+      [id, cliente_id]
+    );
     for (let i = 0; i < itemsCalc.length; i++) {
       const it  = itemsCalc[i];
       const det = calc.itemsDetalle[i];
       const dto_monto = it.precio * it.cantidad * (it.dto_pct / 100);
-      await pool.query(
+      await client.query(
         `INSERT INTO presupuestos_items
            (presupuesto_id, cliente_id, producto_id, es_libre,
             descripcion_libre, descripcion,
@@ -719,11 +729,17 @@ router.put('/:cliente_id/:id', verificarClienteId, async (req, res) => {
       );
     }
 
+    await client.query('COMMIT');
     res.json({ ok: true, presupuesto_id: id, fecha_vencimiento: fechaVencStr });
 
   } catch (err) {
+    if (client) {
+      try { await client.query('ROLLBACK'); } catch (_) {}
+    }
     console.error('PUT /presupuestos/:id error:', err.message);
     res.status(500).json({ mensaje: 'Error al actualizar presupuesto', detalle: err.message });
+  } finally {
+    if (client) client.release();
   }
 });
 

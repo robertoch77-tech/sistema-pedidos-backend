@@ -257,8 +257,8 @@ router.post('/:cliente_id', verificarClienteId, async (req, res) => {
           `UPDATE cajas
            SET total_egresos = total_egresos + $1,
                saldo_actual  = saldo_actual  - $1
-           WHERE id = $2`,
-          [n(total), caja_id]
+           WHERE id = $2 AND cliente_id = $3`,
+          [n(total), caja_id, cliente_id]
         );
       }
     } catch (err) {
@@ -367,10 +367,10 @@ router.get('/:cliente_id/:id', verificarClienteId, async (req, res) => {
       pool.query(
         `SELECT ci.*, pp.descripcion AS producto_descripcion, pp.codigo AS producto_codigo
          FROM compras_items ci
-         LEFT JOIN productos_propios pp ON pp.id = ci.producto_id
-         WHERE ci.compra_id = $1
+         LEFT JOIN productos_propios pp ON pp.id = ci.producto_id AND pp.cliente_id = ci.cliente_id
+         WHERE ci.compra_id = $1 AND ci.cliente_id = $2
          ORDER BY ci.id ASC`,
-        [id]
+        [id, cliente_id]
       ),
     ]);
 
