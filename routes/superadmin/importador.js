@@ -2,6 +2,7 @@ const express  = require('express');
 const router   = express.Router();
 const multer   = require('multer');
 const XLSX     = require('xlsx');
+const bcrypt   = require('bcryptjs');
 const pool     = require('../../db');
 const { verificarCualquierToken, verificarClienteId, verificarClienteIdBody } = require('./authMiddleware');
 const { registrarCambios, registrarEvento } = require('./historial-helper');
@@ -710,7 +711,9 @@ router.get('/productos/:cliente_id', verificarClienteId, async (req, res) => {
       pool.query(
         `SELECT id, codigo, descripcion, marca,
                 proveedor_id, rubro, unidad_medida, ean, imagen_url,
+                (SELECT nombre FROM proveedores pv WHERE pv.id=productos_propios.proveedor_id AND pv.cliente_id=$1) AS proveedor_nombre,
                 COALESCE(precio_costo, 0)        AS precio_costo,
+                COALESCE(precio_costo_final, 0)  AS precio_costo_final,
                 dto_1, dto_2, dto_3, imp_1, imp_2,
                 COALESCE(precio_venta_1, 0)      AS precio_venta_1,
                 COALESCE(precio_venta_2, 0)      AS precio_venta_2,
@@ -962,9 +965,19 @@ router.delete('/productos/:cliente_id/:id', verificarClienteId, async (req, res)
 // ═══════════════════════════════════════════════════════════════
 router.delete('/productos', verificarClienteIdBody, async (req, res) => {
   try {
-    const { cliente_id, ids, buscar, proveedor_id, marca, rubro, activo,
+    const { cliente_id, clave_usuario, ids, buscar, proveedor_id, marca, rubro, activo,
             fecha_desde, fecha_hasta, fecha_tipo } = req.body;
     if (!cliente_id) return res.status(400).json({ mensaje: 'cliente_id requerido' });
+    if (!clave_usuario) return res.status(400).json({ mensaje: 'Ingresá la clave del usuario del sistema' });
+
+    const clienteRes = await pool.query(
+      'SELECT password_hash FROM clientes_roberto WHERE id=$1',
+      [cliente_id]
+    );
+    const passwordHash = clienteRes.rows[0]?.password_hash;
+    if (!passwordHash || !bcrypt.compareSync(clave_usuario, passwordHash)) {
+      return res.status(403).json({ mensaje: 'Clave del usuario del sistema incorrecta' });
+    }
 
     let query, vals;
 
@@ -2392,7 +2405,7 @@ router.get('/equivalencias/:cliente_id/:producto_id', verificarClienteId, async 
               CASE WHEN e.producto_a_id = $2 THEN e.producto_b_id ELSE e.producto_a_id END AS producto_id,
               pp.codigo, pp.descripcion, pp.precio_costo, pp.precio_costo_final,
               pp.precio_venta_1, pp.precio_venta_2, pp.precio_venta_3, pp.precio_venta_final,
-              pp.unidad_medida, pp.presentacion, pp.marca, pp.rubro,
+              pp.unidad_medida, pp.marca, pp.rubro,
               pp.stock_actual, pp.alicuota_iva, pp.modificado_en,
               prov.nombre AS proveedor_nombre
        FROM productos_equivalencias e
@@ -2416,25 +2429,38 @@ router.get('/equivalencias/:cliente_id/:producto_id', verificarClienteId, async 
 router.get('/equivalencias/:cliente_id/:producto_id/candidatos', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, producto_id } = req.params;
-    const { buscar = '' } = req.query;
+    const { buscar = '', proveedor_id = '' } = req.query;
     const prodId = parseInt(producto_id, 10);
     if (!Number.isInteger(prodId) || prodId <= 0) {
       return res.status(400).json({ mensaje: 'producto_id debe ser un entero positivo' });
     }
-    if (!buscar.trim()) {
+    const proveedorId = parseInt(String(proveedor_id), 10);
+    if (!buscar.trim() && !Number.isInteger(proveedorId)) {
       return res.json({ candidatos: [] });
     }
 
+    const filtros = [];
+    const valores = [cliente_id, prodId];
+    if (buscar.trim()) {
+      valores.push(`%${buscar.trim()}%`);
+      filtros.push(`(pp.descripcion ILIKE $${valores.length} OR pp.codigo ILIKE $${valores.length} OR pp.marca ILIKE $${valores.length})`);
+    }
+    if (Number.isInteger(proveedorId) && proveedorId > 0) {
+      valores.push(proveedorId);
+      filtros.push(`pp.proveedor_id = $${valores.length}`);
+    }
+
     const result = await pool.query(
-      `SELECT pp.id, pp.codigo, pp.descripcion, pp.precio_venta_final,
-              pp.unidad_medida, pp.presentacion, pp.marca,
+      `SELECT pp.id, pp.codigo, pp.descripcion, pp.precio_costo, pp.precio_costo_final,
+              pp.precio_venta_final, pp.precio_venta_1, pp.precio_venta_2, pp.precio_venta_3,
+              pp.unidad_medida, pp.marca, pp.stock_actual, pp.alicuota_iva, pp.modificado_en,
               prov.nombre AS proveedor_nombre
        FROM productos_propios pp
        LEFT JOIN proveedores prov ON prov.id = pp.proveedor_id AND prov.cliente_id = $1
        WHERE pp.cliente_id = $1
          AND pp.activo = true
          AND pp.id <> $2
-         AND (pp.descripcion ILIKE $3 OR pp.codigo ILIKE $3 OR pp.marca ILIKE $3)
+         AND ${filtros.join(' AND ')}
          AND pp.id NOT IN (
            SELECT CASE WHEN e.producto_a_id = $2 THEN e.producto_b_id ELSE e.producto_a_id END
            FROM productos_equivalencias e
@@ -2442,7 +2468,7 @@ router.get('/equivalencias/:cliente_id/:producto_id/candidatos', verificarClient
          )
        ORDER BY pp.descripcion
        LIMIT 20`,
-      [cliente_id, prodId, `%${buscar.trim()}%`]
+      valores
     );
 
     res.json({ candidatos: result.rows });

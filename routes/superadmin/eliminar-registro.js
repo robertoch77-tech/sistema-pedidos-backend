@@ -17,9 +17,10 @@ const TABLAS_PERMITIDAS = {
 
 // POST /api/superadmin/eliminar-registro
 router.post('/', async (req, res) => {
-  const { tabla, id, clave_superadmin, cliente_id } = req.body;
+  const { tabla, id, clave_usuario, clave_superadmin, cliente_id } = req.body;
+  const clave = clave_usuario || clave_superadmin;
 
-  if (!tabla || !id || !clave_superadmin || !cliente_id) {
+  if (!tabla || !id || !clave || !cliente_id) {
     return res.status(400).json({ mensaje: 'Faltan datos requeridos' });
   }
 
@@ -35,12 +36,12 @@ router.post('/', async (req, res) => {
     );
 
     if (superCheck.rows.length === 0) {
-      return res.status(403).json({ mensaje: 'Clave de superadmin incorrecta' });
+      return res.status(403).json({ mensaje: 'Clave del usuario del sistema incorrecta' });
     }
 
-    const claveOk = bcrypt.compareSync(clave_superadmin, superCheck.rows[0].password_hash);
+    const claveOk = bcrypt.compareSync(clave, superCheck.rows[0].password_hash);
     if (!claveOk) {
-      return res.status(403).json({ mensaje: 'Clave de superadmin incorrecta' });
+      return res.status(403).json({ mensaje: 'Clave del usuario del sistema incorrecta' });
     }
 
     const existe = await pool.query(
