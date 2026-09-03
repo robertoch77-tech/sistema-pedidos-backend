@@ -113,6 +113,11 @@ async function asegurarTablas() {
       await pool.query(`ALTER TABLE notas_credito ADD COLUMN IF NOT EXISTS ${col} ${tipo}`).catch(() => {});
       await pool.query(`ALTER TABLE notas_debito  ADD COLUMN IF NOT EXISTS ${col} ${tipo}`).catch(() => {});
     }
+    // NOTA: cuenta_corriente_id (notas_credito/notas_debito), afecta_caja y
+    // caja_movimiento_id (notas_credito), y nota_credito_id (caja_movimientos)
+    // NO se agregan automáticamente. Ver SQL pendiente en el informe del ciclo.
+    // El código detecta en tiempo de ejecución si existen (columnasExtra()) y
+    // degrada sin fallar si todavía no fueron aplicadas.
     await pool.query(`ALTER TABLE notas_credito_items ADD COLUMN IF NOT EXISTS modo_iva TEXT DEFAULT 'agregar'`).catch(() => {});
     await pool.query(`ALTER TABLE notas_debito_items  ADD COLUMN IF NOT EXISTS modo_iva TEXT DEFAULT 'agregar'`).catch(() => {});
   } catch (err) {
@@ -125,6 +130,55 @@ router.use(verificarCualquierToken);
 
 function n(v) { return parseFloat(v) || 0; }
 function normCuit(v) { return (v || '').replace(/\D/g, ''); }
+function normNombre(v) { return (v || '').trim().toLowerCase().replace(/\s+/g, ' '); }
+
+// ── Columnas opcionales (no se crean solas — ver SQL pendiente en el informe) ──
+// Se detectan una sola vez contra el esquema real para no asumir su existencia
+// silenciosamente: si faltan, las funciones que dependen de ellas se desactivan
+// con un error explícito en vez de romper con un error de SQL.
+let _columnasExtraPromise = null;
+function columnasExtra() {
+  if (!_columnasExtraPromise) {
+    _columnasExtraPromise = pool.query(
+      `SELECT table_name, column_name FROM information_schema.columns
+       WHERE table_schema = current_schema()
+         AND table_name IN ('notas_credito','notas_debito','caja_movimientos')
+         AND column_name IN ('cuenta_corriente_id','afecta_caja','caja_movimiento_id','nota_credito_id')`
+    ).then(r => {
+      const set = new Set(r.rows.map(row => `${row.table_name}.${row.column_name}`));
+      return {
+        ncCuentaCorrienteId:  set.has('notas_credito.cuenta_corriente_id'),
+        ndCuentaCorrienteId:  set.has('notas_debito.cuenta_corriente_id'),
+        ncAfectaCaja:         set.has('notas_credito.afecta_caja'),
+        ncCajaMovimientoId:   set.has('notas_credito.caja_movimiento_id'),
+        cajaMovNotaCreditoId: set.has('caja_movimientos.nota_credito_id'),
+      };
+    }).catch(() => ({
+      ncCuentaCorrienteId: false, ndCuentaCorrienteId: false,
+      ncAfectaCaja: false, ncCajaMovimientoId: false, cajaMovNotaCreditoId: false,
+    }));
+  }
+  return _columnasExtraPromise;
+}
+
+// Si el cliente ya envió un cuenta_corriente_id (cliente elegido/creado en el
+// buscador persistente), se usa DIRECTO: se bloquea con FOR UPDATE y se exige
+// que exista, esté activa y sea del mismo cliente_id — nunca se vuelve a
+// buscar por nombre o CUIT en ese caso. La búsqueda normalizada por CUIT/nombre
+// queda solo como compatibilidad para llamadas históricas que no manden ID.
+async function resolverCuentaCorriente(client, cliente_id, ccIdEnviado) {
+  if (!ccIdEnviado) return null;
+  const r = await client.query(
+    `SELECT id, saldo FROM cuentas_corrientes_clientes
+     WHERE id = $1 AND cliente_id = $2 AND activo = true
+     FOR UPDATE`,
+    [ccIdEnviado, cliente_id]
+  );
+  if (!r.rows[0]) {
+    throw new Error('La cuenta corriente indicada no existe, no está activa, o no pertenece a este comercio');
+  }
+  return r.rows[0];
+}
 
 function calcTotales(items) {
   let subtotal = 0, total_iva = 0;
@@ -328,8 +382,17 @@ router.post('/:cliente_id/credito', verificarClienteId, async (req, res) => {
       tipo = 'emitida', comprador_nombre, comprador_cuit, proveedor_id,
       venta_id, compra_id, tipo_comprobante_origen, numero_comprobante_origen,
       motivo, descripcion_motivo, items = [], afecta_stock = false,
-      afecta_cuenta_corriente = false, observaciones, estado = 'emitida',
+      afecta_cuenta_corriente = false, afecta_caja = false, cuenta_corriente_id: ccIdEnviado = null,
+      observaciones, estado = 'emitida',
     } = req.body;
+
+    if (afecta_caja && tipo !== 'emitida') {
+      throw new Error('La devolución de caja solo aplica a notas de crédito emitidas a clientes');
+    }
+    const cols = await columnasExtra();
+    if (estado === 'emitida' && afecta_caja && !(cols.ncCajaMovimientoId && cols.cajaMovNotaCreditoId)) {
+      throw new Error('La devolución de caja requiere una actualización de base de datos pendiente (ver informe del ciclo). No se guardó nada.');
+    }
 
     await client.query('BEGIN');
     // Serializa la numeración de N/C por cliente para evitar duplicados
@@ -421,34 +484,42 @@ router.post('/:cliente_id/credito', verificarClienteId, async (req, res) => {
       );
     }
 
-    if (afecta_cuenta_corriente) {
+    // Los movimientos comerciales (CC, stock, caja) solo se ejecutan cuando la
+    // nota queda 'emitida'. Un borrador puede guardar los mismos checkboxes,
+    // pero no debe mover nada todavía.
+    let cuenta_corriente_id = null;
+    if (estado === 'emitida' && afecta_cuenta_corriente) {
       if (tipo === 'emitida') {
-        const cuitNorm = normCuit(comprador_cuit);
-        const ccRes = cuitNorm
-          ? await client.query(
-              `SELECT id, saldo FROM cuentas_corrientes_clientes
-               WHERE cliente_id = $1
-                 AND regexp_replace(comprador_cuit, '\\D', '', 'g') = $2
-                 AND activo = true
-               FOR UPDATE`,
-              [cliente_id, cuitNorm]
-            )
-          : await client.query(
-              `SELECT id, saldo FROM cuentas_corrientes_clientes
-               WHERE cliente_id = $1
-                 AND comprador_nombre = $2
-                 AND activo = true
-               FOR UPDATE`,
-              [cliente_id, comprador_nombre || '']
+        let cc = await resolverCuentaCorriente(client, cliente_id, ccIdEnviado);
+        if (!cc) {
+          const cuitNorm = normCuit(comprador_cuit);
+          const ccRes = cuitNorm
+            ? await client.query(
+                `SELECT id, saldo FROM cuentas_corrientes_clientes
+                 WHERE cliente_id = $1
+                   AND regexp_replace(comprador_cuit, '\\D', '', 'g') = $2
+                   AND activo = true
+                 FOR UPDATE`,
+                [cliente_id, cuitNorm]
+              )
+            : await client.query(
+                `SELECT id, saldo FROM cuentas_corrientes_clientes
+                 WHERE cliente_id = $1
+                   AND lower(regexp_replace(trim(comprador_nombre), '\\s+', ' ', 'g')) = $2
+                   AND activo = true
+                 FOR UPDATE`,
+                [cliente_id, normNombre(comprador_nombre)]
+              );
+          if (ccRes.rows.length !== 1) {
+            throw new Error(
+              ccRes.rows.length === 0
+                ? 'No se encontró cuenta corriente para el comprador'
+                : 'Se encontró más de una cuenta corriente — no se puede determinar cuál afectar'
             );
-        if (ccRes.rows.length !== 1) {
-          throw new Error(
-            ccRes.rows.length === 0
-              ? 'No se encontró cuenta corriente para el comprador'
-              : 'Se encontró más de una cuenta corriente — no se puede determinar cuál afectar'
-          );
+          }
+          cc = ccRes.rows[0];
         }
-        const cc = ccRes.rows[0];
+        cuenta_corriente_id = cc.id;
         const nuevoSaldo = (parseFloat(cc.saldo) || 0) - parseFloat(totales.total);
         await client.query(
           `UPDATE cuentas_corrientes_clientes
@@ -472,7 +543,7 @@ router.post('/:cliente_id/credito', verificarClienteId, async (req, res) => {
     }
 
     // Stock: devolver unidades
-    if (afecta_stock) {
+    if (estado === 'emitida' && afecta_stock) {
       for (const it of items) {
         if (it.producto_id) {
           await client.query(
@@ -482,6 +553,48 @@ router.post('/:cliente_id/credito', verificarClienteId, async (req, res) => {
           );
         }
       }
+    }
+
+    // Devolución efectiva de dinero: un solo movimiento de egreso de caja
+    // (ya se validó arriba que las columnas necesarias existen si esto se ejecuta)
+    let caja_movimiento_id = null;
+    if (estado === 'emitida' && afecta_caja) {
+      const cajaRes = await client.query(
+        `SELECT id FROM cajas
+         WHERE cliente_id = $1 AND estado = 'abierta'
+         ORDER BY fecha_apertura DESC LIMIT 1
+         FOR UPDATE`,
+        [cliente_id]
+      );
+      if (!cajaRes.rows[0]) {
+        throw new Error('No hay una caja abierta para registrar la devolución de dinero');
+      }
+      const caja_id = cajaRes.rows[0].id;
+      const movRes = await client.query(
+        `INSERT INTO caja_movimientos
+           (caja_id, cliente_id, tipo, tipo_operacion, monto, medio_pago, descripcion, numero_comprobante, nota_credito_id)
+         VALUES ($1,$2,'nota_credito','egreso',$3,'efectivo',$4,$5,$6)
+         RETURNING id`,
+        [caja_id, cliente_id, totales.total, `Devolución NC ${numero_completo}`, numero_completo, nota_id]
+      );
+      caja_movimiento_id = movRes.rows[0].id;
+      await client.query(
+        `UPDATE cajas
+         SET total_egresos = total_egresos + $1,
+             saldo_actual   = saldo_inicial + total_ingresos - (total_egresos + $1)
+         WHERE id = $2`,
+        [totales.total, caja_id]
+      );
+    }
+
+    const setClauses = [];
+    const setValues = [];
+    if (cols.ncCuentaCorrienteId) { setValues.push(cuenta_corriente_id); setClauses.push(`cuenta_corriente_id=$${setValues.length}`); }
+    if (cols.ncCajaMovimientoId)  { setValues.push(caja_movimiento_id);  setClauses.push(`caja_movimiento_id=$${setValues.length}`); }
+    if (cols.ncAfectaCaja)        { setValues.push(afecta_caja);        setClauses.push(`afecta_caja=$${setValues.length}`); }
+    if (setClauses.length) {
+      setValues.push(nota_id);
+      await client.query(`UPDATE notas_credito SET ${setClauses.join(', ')} WHERE id=$${setValues.length}`, setValues);
     }
 
     await client.query('COMMIT');
@@ -513,7 +626,8 @@ router.post('/:cliente_id/debito', verificarClienteId, async (req, res) => {
       tipo = 'emitida', comprador_nombre, comprador_cuit, proveedor_id,
       venta_id, compra_id, tipo_comprobante_origen, numero_comprobante_origen,
       motivo, descripcion_motivo, items = [],
-      afecta_cuenta_corriente = false, observaciones, estado = 'emitida',
+      afecta_cuenta_corriente = false, cuenta_corriente_id: ccIdEnviado = null,
+      observaciones, estado = 'emitida',
     } = req.body;
 
     await client.query('BEGIN');
@@ -564,34 +678,40 @@ router.post('/:cliente_id/debito', verificarClienteId, async (req, res) => {
       );
     }
 
-    if (afecta_cuenta_corriente) {
+    const cols = await columnasExtra();
+    let cuenta_corriente_id_nd = null;
+    if (estado === 'emitida' && afecta_cuenta_corriente) {
       if (tipo === 'emitida') {
-        const cuitNorm = normCuit(comprador_cuit);
-        const ccRes = cuitNorm
-          ? await client.query(
-              `SELECT id, saldo FROM cuentas_corrientes_clientes
-               WHERE cliente_id = $1
-                 AND regexp_replace(comprador_cuit, '\\D', '', 'g') = $2
-                 AND activo = true
-               FOR UPDATE`,
-              [cliente_id, cuitNorm]
-            )
-          : await client.query(
-              `SELECT id, saldo FROM cuentas_corrientes_clientes
-               WHERE cliente_id = $1
-                 AND comprador_nombre = $2
-                 AND activo = true
-               FOR UPDATE`,
-              [cliente_id, comprador_nombre || '']
+        let cc = await resolverCuentaCorriente(client, cliente_id, ccIdEnviado);
+        if (!cc) {
+          const cuitNorm = normCuit(comprador_cuit);
+          const ccRes = cuitNorm
+            ? await client.query(
+                `SELECT id, saldo FROM cuentas_corrientes_clientes
+                 WHERE cliente_id = $1
+                   AND regexp_replace(comprador_cuit, '\\D', '', 'g') = $2
+                   AND activo = true
+                 FOR UPDATE`,
+                [cliente_id, cuitNorm]
+              )
+            : await client.query(
+                `SELECT id, saldo FROM cuentas_corrientes_clientes
+                 WHERE cliente_id = $1
+                   AND lower(regexp_replace(trim(comprador_nombre), '\\s+', ' ', 'g')) = $2
+                   AND activo = true
+                 FOR UPDATE`,
+                [cliente_id, normNombre(comprador_nombre)]
+              );
+          if (ccRes.rows.length !== 1) {
+            throw new Error(
+              ccRes.rows.length === 0
+                ? 'No se encontró cuenta corriente para el comprador'
+                : 'Se encontró más de una cuenta corriente — no se puede determinar cuál afectar'
             );
-        if (ccRes.rows.length !== 1) {
-          throw new Error(
-            ccRes.rows.length === 0
-              ? 'No se encontró cuenta corriente para el comprador'
-              : 'Se encontró más de una cuenta corriente — no se puede determinar cuál afectar'
-          );
+          }
+          cc = ccRes.rows[0];
         }
-        const cc = ccRes.rows[0];
+        cuenta_corriente_id_nd = cc.id;
         const nuevoSaldo = (parseFloat(cc.saldo) || 0) + parseFloat(totales.total);
         await client.query(
           `UPDATE cuentas_corrientes_clientes
@@ -612,6 +732,13 @@ router.post('/:cliente_id/debito', verificarClienteId, async (req, res) => {
           [totales.total, proveedor_id, cliente_id]
         );
       }
+    }
+
+    if (cols.ndCuentaCorrienteId) {
+      await client.query(
+        `UPDATE notas_debito SET cuenta_corriente_id=$1 WHERE id=$2`,
+        [cuenta_corriente_id_nd, nota_id]
+      );
     }
 
     await client.query('COMMIT');
@@ -650,12 +777,15 @@ router.put('/:cliente_id/:tipo_nota/:id/estado', verificarClienteId, async (req,
 });
 
 // ─── PUT /:cliente_id/:tipo_nota/:id/anular ───────────────────
+// Todo o nada: se bloquea la nota, se revierte CC/stock/caja y se marca
+// anulada dentro de UNA sola transacción. Si cualquier paso falla, se hace
+// ROLLBACK completo y la nota queda exactamente como estaba.
 router.put('/:cliente_id/:tipo_nota/:id/anular', verificarClienteId, async (req, res) => {
   let client;
   try {
     const { cliente_id, tipo_nota, id } = req.params;
     const { motivo_anulacion } = req.body;
-    const tabla      = tipo_nota === 'debito' ? 'notas_debito'      : 'notas_credito';
+    const tabla = tipo_nota === 'debito' ? 'notas_debito' : 'notas_credito';
 
     client = await pool.connect();
     await client.query('BEGIN');
@@ -668,80 +798,120 @@ router.put('/:cliente_id/:tipo_nota/:id/anular', verificarClienteId, async (req,
       return res.status(404).json({ error: 'No encontrada' });
     }
     const nota = notaRes.rows[0];
+
     if (nota.anulada) {
       await client.query('ROLLBACK');
-      return res.status(409).json({ error: 'La nota ya está anulada' });
+      return res.status(409).json({ error: 'Esta nota ya fue anulada' });
     }
 
-    // Revertir movimiento CC si había
-    if (nota.afecta_cuenta_corriente) {
-      if (nota.tipo === 'emitida') {
-        const cuitNorm = normCuit(nota.comprador_cuit);
-        const ccRes = cuitNorm
-          ? await client.query(
-              `SELECT id, saldo FROM cuentas_corrientes_clientes
-               WHERE cliente_id = $1
-                 AND regexp_replace(comprador_cuit, '\\D', '', 'g') = $2
-                 AND activo = true
-               FOR UPDATE`,
-              [cliente_id, cuitNorm]
-            )
-          : await client.query(
-              `SELECT id, saldo FROM cuentas_corrientes_clientes
-               WHERE cliente_id = $1
-                 AND comprador_nombre = $2
-                 AND activo = true
-               FOR UPDATE`,
-              [cliente_id, nota.comprador_nombre || '']
+    // Un borrador nunca movió CC, stock ni caja — anularlo solo cambia su estado.
+    if (nota.estado === 'emitida') {
+      // Revertir cuenta corriente — usa la cuenta exacta que se afectó (guardada
+      // en la nota si la columna existe) y, si no, exige una coincidencia única
+      // por CUIT o nombre normalizado; nunca "cualquiera" del comercio.
+      if (nota.afecta_cuenta_corriente) {
+        let ccId = nota.cuenta_corriente_id || null;
+        if (!ccId) {
+          const cuitNorm = normCuit(nota.comprador_cuit);
+          const fallback = cuitNorm
+            ? await client.query(
+                `SELECT id FROM cuentas_corrientes_clientes
+                 WHERE cliente_id=$1 AND regexp_replace(comprador_cuit,'\\D','','g')=$2 AND activo=true
+                 FOR UPDATE`,
+                [cliente_id, cuitNorm]
+              )
+            : await client.query(
+                `SELECT id FROM cuentas_corrientes_clientes
+                 WHERE cliente_id=$1 AND lower(regexp_replace(trim(comprador_nombre), '\\s+', ' ', 'g'))=$2 AND activo=true
+                 FOR UPDATE`,
+                [cliente_id, normNombre(nota.comprador_nombre)]
+              );
+          if (fallback.rows.length !== 1) {
+            throw new Error(
+              fallback.rows.length === 0
+                ? 'No se encontró la cuenta corriente a revertir para este comprador'
+                : 'Hay más de una cuenta corriente que coincide — no se puede determinar cuál revertir'
             );
-        if (ccRes.rows.length !== 1) {
-          throw new Error(
-            ccRes.rows.length === 0
-              ? 'No se encontró cuenta corriente para anular la nota'
-              : 'Se encontró más de una cuenta corriente — no se puede determinar cuál revertir'
+          }
+          ccId = fallback.rows[0].id;
+        }
+
+        if (tipo_nota === 'credito' && nota.tipo === 'emitida') {
+          await client.query(
+            `INSERT INTO movimientos_cuentas_corrientes
+               (cuenta_corriente_id, cliente_id, tipo, debe, haber, saldo_acumulado, descripcion, estado)
+             SELECT cc.id, $3, 'anulacion_nc', $1, 0,
+                    COALESCE(cc.saldo, 0) + $1,
+                    $2, 'procesado'
+             FROM cuentas_corrientes_clientes cc WHERE cc.id=$4`,
+            [n(nota.total), `Anulación ${nota.numero_completo}`, cliente_id, ccId]
+          );
+          await client.query(
+            `UPDATE cuentas_corrientes_clientes SET saldo = COALESCE(saldo, 0) + $1, modificado_en = now()
+             WHERE id = $2`,
+            [n(nota.total), ccId]
+          );
+        } else if (tipo_nota === 'debito' && nota.tipo === 'emitida') {
+          await client.query(
+            `INSERT INTO movimientos_cuentas_corrientes
+               (cuenta_corriente_id, cliente_id, tipo, debe, haber, saldo_acumulado, descripcion, estado)
+             SELECT cc.id, $3, 'anulacion_nd', 0, $1,
+                    COALESCE(cc.saldo, 0) - $1,
+                    $2, 'procesado'
+             FROM cuentas_corrientes_clientes cc WHERE cc.id=$4`,
+            [n(nota.total), `Anulación ${nota.numero_completo}`, cliente_id, ccId]
+          );
+          await client.query(
+            `UPDATE cuentas_corrientes_clientes SET saldo = COALESCE(saldo, 0) - $1, modificado_en = now()
+             WHERE id = $2`,
+            [n(nota.total), ccId]
           );
         }
-        const cc = ccRes.rows[0];
-        const delta = tipo_nota === 'credito' ? n(nota.total) : -n(nota.total);
-        const nuevoSaldo = (parseFloat(cc.saldo) || 0) + delta;
-
-        await client.query(
-          `UPDATE cuentas_corrientes_clientes
-           SET saldo = $1, modificado_en = now()
-           WHERE id = $2 AND cliente_id = $3`,
-          [nuevoSaldo.toFixed(4), cc.id, cliente_id]
-        );
-        await client.query(
-          `INSERT INTO movimientos_cuentas_corrientes
-             (cuenta_corriente_id, cliente_id, tipo, debe, haber, saldo_acumulado, descripcion, estado)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, 'procesado')`,
-          [cc.id, cliente_id,
-           tipo_nota === 'credito' ? 'anulacion_nc' : 'anulacion_nd',
-           tipo_nota === 'credito' ? n(nota.total) : 0,
-           tipo_nota === 'debito' ? n(nota.total) : 0,
-           nuevoSaldo.toFixed(4), `Anulación ${nota.numero_completo}`]
-        );
-      } else if (nota.tipo === 'recibida' && nota.proveedor_id) {
-        const deltaProveedor = tipo_nota === 'credito' ? n(nota.total) : -n(nota.total);
-        const proveedorRes = await client.query(
-          `UPDATE proveedores SET saldo = COALESCE(saldo, 0) + $1
-           WHERE id = $2 AND cliente_id = $3`,
-          [deltaProveedor, nota.proveedor_id, cliente_id]
-        );
-        if (proveedorRes.rowCount !== 1) {
-          throw new Error('No se encontró el proveedor de la nota para revertir su saldo');
-        }
       }
-    }
 
-    // Revertir stock si NC con stock
-    if (tipo_nota === 'credito' && nota.afecta_stock) {
-      await client.query(
-        `UPDATE productos_propios pp SET stock_actual = COALESCE(pp.stock_actual, 0) - nci.cantidad, modificado_en = now()
-         FROM notas_credito_items nci
-         WHERE nci.nota_id=$1 AND nci.producto_id IS NOT NULL AND pp.id = nci.producto_id AND pp.cliente_id = $2`,
-        [id, cliente_id]
-      );
+      // Revertir stock si la NC lo había afectado
+      if (tipo_nota === 'credito' && nota.afecta_stock) {
+        await client.query(
+          `UPDATE productos_propios pp SET stock_actual = COALESCE(pp.stock_actual, 0) - nci.cantidad, modificado_en = now()
+           FROM notas_credito_items nci
+           WHERE nci.nota_id=$1 AND nci.producto_id IS NOT NULL AND pp.id = nci.producto_id AND pp.cliente_id = $2`,
+          [id, cliente_id]
+        );
+      }
+
+      // Revertir devolución de caja si la NC había generado un egreso — se
+      // repone en la MISMA caja donde se registró (nunca en otra "de paso"),
+      // y si esa caja ya está cerrada, la anulación completa falla en vez de
+      // inventar un movimiento en una caja distinta.
+      if (tipo_nota === 'credito' && nota.caja_movimiento_id) {
+        const movOriginal = await client.query(
+          `SELECT cm.caja_id, c.estado FROM caja_movimientos cm
+           JOIN cajas c ON c.id = cm.caja_id
+           WHERE cm.id = $1 AND cm.cliente_id = $2
+           FOR UPDATE OF c`,
+          [nota.caja_movimiento_id, cliente_id]
+        );
+        if (!movOriginal.rows[0]) {
+          throw new Error('No se encontró el movimiento de caja original de esta NC');
+        }
+        if (movOriginal.rows[0].estado !== 'abierta') {
+          throw new Error('La caja donde se registró la devolución de esta NC ya está cerrada. Reabrila antes de anular, o revertí el movimiento manualmente.');
+        }
+        const caja_id = movOriginal.rows[0].caja_id;
+        await client.query(
+          `INSERT INTO caja_movimientos
+             (caja_id, cliente_id, tipo, tipo_operacion, monto, medio_pago, descripcion, numero_comprobante, nota_credito_id)
+           VALUES ($1,$2,'anulacion_nc','ingreso',$3,'efectivo',$4,$5,$6)`,
+          [caja_id, cliente_id, n(nota.total), `Anulación devolución NC ${nota.numero_completo}`, nota.numero_completo, nota.id]
+        );
+        await client.query(
+          `UPDATE cajas
+           SET total_ingresos = total_ingresos + $1,
+               saldo_actual    = saldo_inicial + (total_ingresos + $1) - total_egresos
+           WHERE id = $2`,
+          [n(nota.total), caja_id]
+        );
+      }
     }
 
     await client.query(

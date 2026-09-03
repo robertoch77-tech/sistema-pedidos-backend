@@ -62,6 +62,22 @@ router.get('/ventas/:cliente_id', verificarClienteId, async (req, res) => {
     const variacion = montoAnt === 0 ? null
       : parseFloat(((montoAct - montoAnt) / montoAnt * 100).toFixed(2));
 
+    // Notas de crédito válidas del período — para reportar ventas netas.
+    // Válida = emitida a un cliente (tipo), efectivamente confirmada (estado),
+    // no anulada, y dentro del mismo período y cliente que el reporte.
+    // Sin .catch(): si esta consulta falla, el reporte entero debe fallar con
+    // un error visible en vez de mostrar "ventas netas = ventas brutas".
+    const ncQ = await pool.query(`
+      SELECT COALESCE(SUM(nc.total), 0) AS total_nc
+      FROM notas_credito nc
+      WHERE nc.cliente_id = $1
+        AND nc.anulada = false
+        AND nc.tipo = 'emitida'
+        AND nc.estado = 'emitida'
+        AND DATE(nc.creado_en) BETWEEN $2 AND $3
+    `, [cliente_id, fecha_desde, fecha_hasta]);
+    const totalNC = n(ncQ.rows[0].total_nc);
+
     // Por período
     const truncMap = { dia: 'day', semana: 'week', mes: 'month' };
     const trunc    = truncMap[agrupar_por] || 'day';
@@ -84,8 +100,8 @@ router.get('/ventas/:cliente_id', verificarClienteId, async (req, res) => {
       SELECT
         p.descripcion,
         SUM(vi.cantidad)                   AS cantidad,
-        SUM(vi.cantidad * vi.precio_unit)  AS monto,
-        RANK() OVER (ORDER BY SUM(vi.cantidad * vi.precio_unit) DESC) AS ranking
+        SUM(vi.cantidad * vi.precio_unitario)  AS monto,
+        RANK() OVER (ORDER BY SUM(vi.cantidad * vi.precio_unitario) DESC) AS ranking
       FROM ventas v
       JOIN ventas_items vi ON vi.venta_id = v.id
       LEFT JOIN productos_propios p ON p.id = vi.producto_id
@@ -119,7 +135,9 @@ router.get('/ventas/:cliente_id', verificarClienteId, async (req, res) => {
     res.json({
       resumen: {
         total_ventas:        parseInt(resQ.rows[0].total_ventas),
-        total_monto:         n(resQ.rows[0].total_monto),
+        total_monto:         montoAct,
+        total_notas_credito: totalNC,
+        total_monto_neto:    montoAct - totalNC,
         ticket_promedio:     n(resQ.rows[0].ticket_promedio),
         variacion_vs_anterior: variacion,
       },
@@ -150,9 +168,9 @@ router.get('/stock/:cliente_id', verificarClienteId, async (req, res) => {
     const resQ = await pool.query(`
       SELECT
         COUNT(*)                                    AS total_productos,
-        COALESCE(SUM(p.stock), 0)                  AS total_unidades,
-        COALESCE(SUM(p.stock * p.precio_costo), 0) AS valor_costo,
-        COALESCE(SUM(p.stock * p.precio), 0)       AS valor_venta
+        COALESCE(SUM(p.stock_actual), 0)                        AS total_unidades,
+        COALESCE(SUM(p.stock_actual * p.precio_costo), 0)       AS valor_costo,
+        COALESCE(SUM(p.stock_actual * p.precio_venta_final), 0) AS valor_venta
       FROM productos_propios p
       WHERE p.cliente_id = $1 AND p.activo = true ${filtros}
     `, params);
@@ -163,11 +181,11 @@ router.get('/stock/:cliente_id', verificarClienteId, async (req, res) => {
 
     // Bajo mínimo
     const minQ = await pool.query(`
-      SELECT p.descripcion AS producto, p.stock, p.stock_minimo AS minimo,
-             (p.stock_minimo - p.stock) AS diferencia
+      SELECT p.descripcion AS producto, p.stock_actual AS stock, p.stock_minimo AS minimo,
+             (p.stock_minimo - p.stock_actual) AS diferencia
       FROM productos_propios p
       WHERE p.cliente_id = $1 AND p.activo = true
-        AND p.stock_minimo IS NOT NULL AND p.stock < p.stock_minimo
+        AND p.stock_minimo IS NOT NULL AND p.stock_actual < p.stock_minimo
         ${filtros}
       ORDER BY diferencia DESC
       LIMIT 50
@@ -177,7 +195,7 @@ router.get('/stock/:cliente_id', verificarClienteId, async (req, res) => {
     const sinQ = await pool.query(`
       SELECT p.descripcion AS producto
       FROM productos_propios p
-      WHERE p.cliente_id = $1 AND p.activo = true AND p.stock = 0 ${filtros}
+      WHERE p.cliente_id = $1 AND p.activo = true AND p.stock_actual = 0 ${filtros}
       ORDER BY p.descripcion
       LIMIT 50
     `, params);
@@ -187,7 +205,7 @@ router.get('/stock/:cliente_id', verificarClienteId, async (req, res) => {
       SELECT
         COALESCE(pr.nombre, 'Sin proveedor')        AS proveedor,
         COUNT(*)                                     AS productos,
-        COALESCE(SUM(p.stock * p.precio_costo), 0)  AS valor
+        COALESCE(SUM(p.stock_actual * p.precio_costo), 0)  AS valor
       FROM productos_propios p
       LEFT JOIN proveedores pr ON pr.id = p.proveedor_id
       WHERE p.cliente_id = $1 AND p.activo = true ${filtros}
@@ -199,7 +217,7 @@ router.get('/stock/:cliente_id', verificarClienteId, async (req, res) => {
       SELECT
         COALESCE(p.rubro, 'Sin rubro')              AS rubro,
         COUNT(*)                                     AS productos,
-        COALESCE(SUM(p.stock * p.precio_costo), 0)  AS valor
+        COALESCE(SUM(p.stock_actual * p.precio_costo), 0)  AS valor
       FROM productos_propios p
       WHERE p.cliente_id = $1 AND p.activo = true ${filtros}
       GROUP BY 1 ORDER BY valor DESC LIMIT 20
@@ -210,15 +228,15 @@ router.get('/stock/:cliente_id', verificarClienteId, async (req, res) => {
       SELECT
         p.descripcion   AS producto,
         COALESCE(SUM(vi.cantidad), 0)  AS ventas_mes,
-        p.stock                         AS stock_actual,
+        p.stock_actual                  AS stock_actual,
         CASE WHEN COALESCE(SUM(vi.cantidad), 0) = 0 THEN NULL
-             ELSE ROUND(p.stock / (SUM(vi.cantidad) / 30.0), 1)
+             ELSE ROUND(p.stock_actual / (SUM(vi.cantidad) / 30.0), 1)
         END AS dias_cobertura
       FROM productos_propios p
       LEFT JOIN ventas_items vi ON vi.producto_id = p.id
         AND vi.creado_en >= NOW() - INTERVAL '30 days'
       WHERE p.cliente_id = $1 AND p.activo = true ${filtros}
-      GROUP BY p.id, p.descripcion, p.stock
+      GROUP BY p.id, p.descripcion, p.stock_actual
       ORDER BY ventas_mes DESC
       LIMIT 30
     `, params);
@@ -268,7 +286,7 @@ router.get('/iva/:cliente_id', verificarClienteId, async (req, res) => {
       WHERE cliente_id = $1
         AND DATE(fecha_emision) BETWEEN $2 AND $3
         AND estado <> 'anulada'
-    `, [cliente_id, fechaDesde, fechaHasta]).catch(() => ({ rows: [{}] }));
+    `, [cliente_id, fechaDesde, fechaHasta]);
 
     // Si no hay arca_comprobantes, estimar de ventas (21% por defecto)
     const ventasEstQ = await pool.query(`
@@ -307,7 +325,7 @@ router.get('/iva/:cliente_id', verificarClienteId, async (req, res) => {
       WHERE cliente_id = $1
         AND DATE(fecha) BETWEEN $2 AND $3
         AND estado != 'anulada'
-    `, [cliente_id, fechaDesde, fechaHasta]).catch(() => ({ rows: [{}] }));
+    `, [cliente_id, fechaDesde, fechaHasta]);
 
     const rowc = ivaComprasQ.rows[0] || {};
     const neto21c  = n(rowc.neto_21),  iva21c  = n(rowc.iva_21);
@@ -365,9 +383,9 @@ router.get('/cobranzas/:cliente_id', verificarClienteId, async (req, res) => {
         COUNT(*)                   AS cantidad_cobros
       FROM caja_movimientos m
       WHERE m.cliente_id = $1
-        AND m.tipo = 'ingreso'
-        AND DATE(m.fecha) BETWEEN $2 AND $3
-    `, [cliente_id, fecha_desde, fecha_hasta]).catch(() => ({ rows: [{ total_cobrado: 0, cantidad_cobros: 0 }] }));
+        AND m.tipo_operacion = 'ingreso'
+        AND DATE(m.creado_en) BETWEEN $2 AND $3
+    `, [cliente_id, fecha_desde, fecha_hasta]);
 
     const totalCobrado = n(resQ.rows[0].total_cobrado);
     const cantidadCobros = parseInt(resQ.rows[0].cantidad_cobros) || 0;
@@ -380,12 +398,12 @@ router.get('/cobranzas/:cliente_id', verificarClienteId, async (req, res) => {
         COALESCE(SUM(m.monto), 0)                        AS monto
       FROM caja_movimientos m
       WHERE m.cliente_id = $1
-        AND m.tipo = 'ingreso'
-        AND DATE(m.fecha) BETWEEN $2 AND $3
+        AND m.tipo_operacion = 'ingreso'
+        AND DATE(m.creado_en) BETWEEN $2 AND $3
       GROUP BY 1
       ORDER BY monto DESC
       LIMIT 20
-    `, [cliente_id, fecha_desde, fecha_hasta]).catch(() => ({ rows: [] }));
+    `, [cliente_id, fecha_desde, fecha_hasta]);
 
     // Pendiente por CC
     const pendienteQ = await pool.query(`
@@ -401,7 +419,7 @@ router.get('/cobranzas/:cliente_id', verificarClienteId, async (req, res) => {
       HAVING (COALESCE(SUM(m.debe), 0) - COALESCE(SUM(m.haber), 0)) > 0
       ORDER BY monto DESC
       LIMIT 20
-    `, [cliente_id]).catch(() => ({ rows: [] }));
+    `, [cliente_id]);
 
     // Por medio de pago (desde caja movimientos concepto)
     const medioQ = await pool.query(`
@@ -411,11 +429,11 @@ router.get('/cobranzas/:cliente_id', verificarClienteId, async (req, res) => {
         COALESCE(SUM(m.monto), 0)                        AS monto
       FROM caja_movimientos m
       WHERE m.cliente_id = $1
-        AND m.tipo = 'ingreso'
-        AND DATE(m.fecha) BETWEEN $2 AND $3
+        AND m.tipo_operacion = 'ingreso'
+        AND DATE(m.creado_en) BETWEEN $2 AND $3
       GROUP BY 1
       ORDER BY monto DESC
-    `, [cliente_id, fecha_desde, fecha_hasta]).catch(() => ({ rows: [] }));
+    `, [cliente_id, fecha_desde, fecha_hasta]);
 
     res.json({
       resumen: {
@@ -473,7 +491,7 @@ router.get('/rentabilidad/:cliente_id', verificarClienteId, async (req, res) => 
       WHERE cliente_id = $1
         AND DATE(fecha) BETWEEN $2 AND $3
         AND estado != 'anulada'
-    `, [cliente_id, fecha_desde, fecha_hasta]).catch(() => ({ rows: [{ compras: 0 }] }));
+    `, [cliente_id, fecha_desde, fecha_hasta]);
 
     const mes  = new Date(fecha_desde).getMonth() + 1;
     const anio = new Date(fecha_desde).getFullYear();
@@ -485,34 +503,27 @@ router.get('/rentabilidad/:cliente_id', verificarClienteId, async (req, res) => 
       WHERE cliente_id = $1 AND activo = true
         AND (mes IS NULL OR mes = $2)
         AND (anio IS NULL OR anio = $3)
-    `, [cliente_id, mes, anio]).catch(() => ({ rows: [{ total: 0 }] }));
+    `, [cliente_id, mes, anio]);
 
     // Gastos variables desde tabla gastos_variables
     const gastosVarQ = await pool.query(`
       SELECT COALESCE(SUM(monto), 0) AS total
       FROM gastos_variables
       WHERE cliente_id = $1 AND fecha BETWEEN $2 AND $3
-    `, [cliente_id, fecha_desde, fecha_hasta]).catch(() => ({ rows: [{ total: 0 }] }));
+    `, [cliente_id, fecha_desde, fecha_hasta]);
 
-    // También sumar gastos desde caja_movimientos (legado)
+    // También sumar egresos manuales de caja (gasto/retiro) no cargados como gasto fijo/variable
     const cajaQ = await pool.query(`
-      SELECT
-        tipo,
-        COALESCE(SUM(monto), 0) AS total
+      SELECT COALESCE(SUM(monto), 0) AS total
       FROM caja_movimientos
       WHERE cliente_id = $1
-        AND tipo = 'egreso'
-        AND DATE(fecha) BETWEEN $2 AND $3
-      GROUP BY tipo
-    `, [cliente_id, fecha_desde, fecha_hasta]).catch(() => ({ rows: [] }));
+        AND tipo_operacion = 'egreso'
+        AND tipo IN ('gasto', 'retiro')
+        AND DATE(creado_en) BETWEEN $2 AND $3
+    `, [cliente_id, fecha_desde, fecha_hasta]);
 
     let gastosFijos     = n(gastosFijosQ.rows[0].total);
-    let gastosVariables = n(gastosVarQ.rows[0].total);
-    for (const g of cajaQ.rows) {
-      if (g.tipo === 'fijo')          gastosFijos     += n(g.total);
-      else if (g.tipo === 'variable') gastosVariables += n(g.total);
-      else                            gastosVariables += n(g.total);
-    }
+    let gastosVariables = n(gastosVarQ.rows[0].total) + n(cajaQ.rows[0].total);
 
     const ventas    = n(ingresosQ.rows[0].ventas);
     const compras   = n(comprasQ.rows[0].compras);
@@ -523,9 +534,9 @@ router.get('/rentabilidad/:cliente_id', verificarClienteId, async (req, res) => 
     const porProdQ = await pool.query(`
       SELECT
         p.descripcion,
-        SUM(vi.cantidad * vi.precio_unit)               AS ventas,
+        SUM(vi.cantidad * vi.precio_unitario)               AS ventas,
         SUM(vi.cantidad * COALESCE(p.precio_costo, 0))  AS costo,
-        SUM(vi.cantidad * vi.precio_unit) - SUM(vi.cantidad * COALESCE(p.precio_costo, 0)) AS margen
+        SUM(vi.cantidad * vi.precio_unitario) - SUM(vi.cantidad * COALESCE(p.precio_costo, 0)) AS margen
       FROM ventas v
       JOIN ventas_items vi ON vi.venta_id = v.id
       LEFT JOIN productos_propios p ON p.id = vi.producto_id
@@ -547,7 +558,7 @@ router.get('/rentabilidad/:cliente_id', verificarClienteId, async (req, res) => 
       LEFT JOIN compras cc ON cc.proveedor_id = pr.id
         AND cc.cliente_id = $1 AND DATE(cc.fecha) BETWEEN $2 AND $3
       LEFT JOIN LATERAL (
-        SELECT SUM(vi.cantidad * vi.precio_unit) AS ventas_prov
+        SELECT SUM(vi.cantidad * vi.precio_unitario) AS ventas_prov
         FROM ventas_items vi
         JOIN productos_propios p2 ON p2.id = vi.producto_id AND p2.proveedor_id = pr.id
         JOIN ventas v2 ON v2.id = vi.venta_id
@@ -559,7 +570,7 @@ router.get('/rentabilidad/:cliente_id', verificarClienteId, async (req, res) => 
       GROUP BY pr.nombre
       ORDER BY compras DESC
       LIMIT 20
-    `, [cliente_id, fecha_desde, fecha_hasta]).catch(() => ({ rows: [] }));
+    `, [cliente_id, fecha_desde, fecha_hasta]);
 
     res.json({
       ingresos: {

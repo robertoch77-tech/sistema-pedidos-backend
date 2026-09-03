@@ -216,6 +216,25 @@ router.post('/:cliente_id', verificarClienteId, async (req, res) => {
 
     if (!comprador_nombre?.trim()) return res.status(400).json({ mensaje: 'El nombre es requerido' });
 
+    // Evitar duplicados por espacios, mayúsculas o formato de CUIT:
+    // si ya existe un cliente activo con el mismo CUIT (o, sin CUIT, el mismo
+    // nombre normalizado), se reutiliza en vez de crear uno nuevo.
+    const cuitNorm   = (comprador_cuit || '').replace(/\D/g, '');
+    const nombreNorm = comprador_nombre.trim().toLowerCase().replace(/\s+/g, ' ');
+    const dupRes = await pool.query(
+      `SELECT id FROM cuentas_corrientes_clientes
+       WHERE cliente_id = $1 AND activo = true
+         AND (
+           ($2 <> '' AND regexp_replace(comprador_cuit, '\\D', '', 'g') = $2)
+           OR ($2 = '' AND lower(regexp_replace(trim(comprador_nombre), '\\s+', ' ', 'g')) = $3)
+         )
+       LIMIT 1`,
+      [cliente_id, cuitNorm, nombreNorm]
+    );
+    if (dupRes.rows[0]) {
+      return res.json({ ok: true, id: dupRes.rows[0].id, existente: true });
+    }
+
     const result = await pool.query(
       `INSERT INTO cuentas_corrientes_clientes
          (cliente_id, comprador_nombre, comprador_cuit, comprador_razon_social,
