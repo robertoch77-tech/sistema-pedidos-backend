@@ -3,6 +3,8 @@ const router  = express.Router();
 const pool    = require('../../db');
 const { verificarCualquierToken, verificarClienteId } = require('./authMiddleware');
 const { calcularTotalesIVA } = require('../../utils/calcularTotalesIVA');
+const { registrarCobroCliente } = require('../../services/cobrosClientes');
+const { fallo, bloquearOperacion, bloquearCuenta, resolverCuentaVenta, cuentaDeVenta, huellaOperacion } = require('../../services/cuentaCorrienteVentas');
 
 // ── Asegurar tablas ───────────────────────────────────────────
 async function asegurarTablas() {
@@ -137,15 +139,67 @@ router.post('/:cliente_id', verificarClienteId, async (req, res) => {
     monto_recibido   = 0,
     vuelto           = 0,
     modo_iva         = 'off',
+    cuenta_corriente_cliente_id = null,
+    presupuesto_origen_id = null,
   } = req.body;
 
   if (!items.length) {
     return res.status(400).json({ mensaje: 'La venta debe tener al menos un ítem' });
   }
+  if (forma_pago === 'cuenta_corriente' && !va_a_cuenta_corriente) {
+    return res.status(400).json({ mensaje: 'Activá la cuenta corriente del cliente antes de usar esa forma de pago' });
+  }
+  const formaPagoFinal = va_a_cuenta_corriente ? 'cuenta_corriente' : forma_pago;
 
+  let client;
   try {
+    client = await pool.connect();
+    await client.query('BEGIN');
+
+    await bloquearOperacion(client, cliente_id);
+    const operacionId = String(req.headers['x-operacion-id'] || '');
+    const referenciaOperacion = operacionId ? 'cc-venta:' + operacionId + ':' + huellaOperacion(req.body) : '';
+    if (operacionId && !/^[a-zA-Z0-9_-]{16,100}$/.test(operacionId)) {
+      throw fallo('Identificador de operación inválido.');
+    }
+    if (va_a_cuenta_corriente && operacionId) {
+      const previa = await client.query(
+        `SELECT v.id, v.numero_completo, m.referencia FROM movimientos_cuentas_corrientes m
+         JOIN ventas v ON v.id=m.venta_id AND v.cliente_id=m.cliente_id
+         WHERE m.cliente_id=$1 AND m.tipo='venta' AND split_part(m.referencia, ':', 1)='cc-venta'
+           AND split_part(m.referencia, ':', 2)=$2`,
+        [cliente_id, operacionId]);
+      if (previa.rows[0]) {
+        if (previa.rows[0].referencia !== referenciaOperacion) throw fallo('Esta venta ya se registró con otros datos. Revisá el comprobante antes de iniciar otra.', 409);
+        await client.query('COMMIT');
+        return res.json({ ok: true, venta_id: previa.rows[0].id, numero_completo: previa.rows[0].numero_completo, repetida: true });
+      }
+    }
+    const cuentaCorrienteSeleccionada = va_a_cuenta_corriente
+      ? await resolverCuentaVenta(client, cliente_id, req.body) : null;
+
+    if (presupuesto_origen_id) {
+      const presupuestoRes = await client.query(
+        `SELECT id, convertido_a_venta, venta_id
+         FROM presupuestos
+         WHERE id = $1 AND cliente_id = $2
+         FOR UPDATE`,
+        [presupuesto_origen_id, cliente_id]
+      );
+      if (!presupuestoRes.rows[0]) {
+        const error = new Error('Presupuesto de origen no encontrado');
+        error.statusCode = 404;
+        throw error;
+      }
+      if (presupuestoRes.rows[0].convertido_a_venta) {
+        const error = new Error('Este presupuesto ya fue convertido a venta');
+        error.statusCode = 409;
+        throw error;
+      }
+    }
+
     // 1. Número correlativo por cliente
-    const numRes = await pool.query(
+    const numRes = await client.query(
       `SELECT COALESCE(MAX(numero), 0) + 1 AS siguiente
        FROM ventas WHERE cliente_id = $1`,
       [cliente_id]
@@ -169,9 +223,8 @@ router.post('/:cliente_id', verificarClienteId, async (req, res) => {
       iva_pct:  parseFloat(it.alicuota_iva),
       orden:    idx + 1,
     }));
-
     // 3. INSERT venta
-    const ventaRes = await pool.query(
+    const ventaRes = await client.query(
       `INSERT INTO ventas
          (cliente_id, numero, numero_completo, prefijo, tipo_comprobante,
           comprador_nombre, comprador_cuit,
@@ -191,9 +244,9 @@ router.post('/:cliente_id', verificarClienteId, async (req, res) => {
         sumaSubtotales.toFixed(4), iva_total.toFixed(4), total_venta.toFixed(4),
         va_a_cuenta_corriente, observaciones,
         parseFloat(descuento_global) || 0, parseFloat(recargo_global) || 0, (modoIvaValidado === 'discriminar'),
-        forma_pago,
-        parseFloat(monto_recibido) || 0,
-        parseFloat(vuelto) || 0,
+        formaPagoFinal,
+        va_a_cuenta_corriente ? 0 : (parseFloat(monto_recibido) || 0),
+        va_a_cuenta_corriente ? 0 : (parseFloat(vuelto) || 0),
         modoIvaValidado,
         va_a_cuenta_corriente ? 'pendiente' : 'cobrada',
         !va_a_cuenta_corriente,
@@ -201,6 +254,8 @@ router.post('/:cliente_id', verificarClienteId, async (req, res) => {
       ]
     );
     const venta_id = ventaRes.rows[0].id;
+    await client.query('UPDATE ventas SET saldo=$1 WHERE id=$2 AND cliente_id=$3',
+      [va_a_cuenta_corriente ? total_venta.toFixed(4) : '0', venta_id, cliente_id]);
 
     // 4. INSERT items + descontar stock
     for (let i = 0; i < itemsCalculados.length; i++) {
@@ -211,7 +266,7 @@ router.post('/:cliente_id', verificarClienteId, async (req, res) => {
       const iva_item   = det.iva_monto;
       const total_item = det.total_item;
 
-      await pool.query(
+      await client.query(
         `INSERT INTO ventas_items
            (venta_id, cliente_id, producto_id, es_libre, descripcion_libre,
             cantidad, precio_unitario, descuento_porcentaje, descuento_monto,
@@ -230,110 +285,85 @@ router.post('/:cliente_id', verificarClienteId, async (req, res) => {
         ]
       );
 
-      // Descontar stock si es producto real
+      // Descontar stock de la venta, dentro de la misma transacción
       if (!it.es_libre && it.producto_id) {
-        const stPrev = await pool.query(
-          `SELECT COALESCE(stock_actual, 0) AS stock FROM productos_propios WHERE id=$1 AND cliente_id=$2`,
+        const stPrev = await client.query(
+          `SELECT COALESCE(stock_actual, 0) AS stock
+           FROM productos_propios
+           WHERE id=$1 AND cliente_id=$2
+           FOR UPDATE`,
           [it.producto_id, cliente_id]
-        ).catch(() => ({ rows: [{ stock: 0 }] }));
+        );
+        if (!stPrev.rows[0]) {
+          const error = new Error(`Producto ${it.producto_id} no encontrado para este cliente`);
+          error.statusCode = 400;
+          throw error;
+        }
         const stockAnterior = parseFloat(stPrev.rows[0]?.stock) || 0;
-        await pool.query(
+        await client.query(
           `UPDATE productos_propios
            SET stock_actual = COALESCE(stock_actual, 0) - $1, modificado_en = now()
            WHERE id = $2 AND cliente_id = $3`,
           [it.cantidad, it.producto_id, cliente_id]
         );
-        await pool.query(
+        await client.query(
           `INSERT INTO stock_movimientos
              (cliente_id, producto_id, tipo, cantidad, stock_anterior, stock_posterior,
               motivo, referencia_tipo, referencia_id, creado_en)
            VALUES ($1,$2,'venta',$3,$4,$5,'Venta','venta',$6,now())`,
           [cliente_id, it.producto_id, it.cantidad, stockAnterior, stockAnterior - it.cantidad, venta_id]
-        ).catch(() => {});
+        );
       }
     }
 
     // 5. Movimiento cuenta corriente (tabla nueva)
     if (va_a_cuenta_corriente) {
-
-      // 1. Buscar registro en tabla nueva
-      let ccRes = await pool.query(
-        `SELECT id, saldo, plazo_pago_dias
-         FROM cuentas_corrientes_clientes
-         WHERE cliente_id = $1
-         AND (
-           (comprador_cuit != '' AND comprador_cuit = $2)
-           OR
-           (comprador_nombre = $3)
-         )
-         AND activo = true
-         LIMIT 1`,
-        [cliente_id, comprador_cuit || '', comprador_nombre]
+      const cc_id = cuentaCorrienteSeleccionada.id;
+      const saldoActualizado = await client.query(
+        `UPDATE cuentas_corrientes_clientes
+         SET saldo = saldo + $1::numeric,
+             ultima_compra = now()
+         WHERE id = $2 AND cliente_id = $3
+         RETURNING saldo`,
+        [total_venta.toFixed(4), cc_id, cliente_id]
       );
 
-      let cc_id;
-      let saldo_anterior;
-
-      // 2. Si no existe, crear registro nuevo
-      if (ccRes.rows.length === 0) {
-        const nuevaCC = await pool.query(
-          `INSERT INTO cuentas_corrientes_clientes
-             (cliente_id, comprador_nombre, comprador_cuit,
-              saldo, activo)
-           VALUES ($1, $2, $3, 0, true)
-           RETURNING id, saldo, plazo_pago_dias`,
-          [cliente_id, comprador_nombre, comprador_cuit || '']
-        );
-        cc_id = nuevaCC.rows[0].id;
-        saldo_anterior = 0;
-      } else {
-        cc_id = ccRes.rows[0].id;
-        saldo_anterior = parseFloat(ccRes.rows[0].saldo) || 0;
-      }
-
-      const saldo_nuevo = saldo_anterior + total_venta;
-
       // 3. Insertar movimiento en tabla nueva
-      await pool.query(
+      await client.query(
         `INSERT INTO movimientos_cuentas_corrientes
            (cuenta_corriente_id, cliente_id, tipo,
             debe, haber, saldo_acumulado,
             descripcion, numero_comprobante,
-            venta_id, estado)
-         VALUES ($1,$2,'venta',$3,0,$4,$5,$6,$7,'pendiente')`,
+            venta_id, estado, referencia)
+         VALUES ($1,$2,'venta',$3,0,$4,$5,$6,$7,'pendiente',$8)`,
         [
           cc_id,
           cliente_id,
           total_venta.toFixed(4),
-          saldo_nuevo.toFixed(4),
+          saldoActualizado.rows[0].saldo,
           `Venta ${numero_completo}`,
           numero_completo,
-          venta_id
+          venta_id,
+          referenciaOperacion
         ]
       );
 
-      // 4. Actualizar saldo en cabecera
-      await pool.query(
-        `UPDATE cuentas_corrientes_clientes
-         SET saldo = $1,
-             ultima_compra = now()
-         WHERE id = $2`,
-        [saldo_nuevo.toFixed(4), cc_id]
-      );
     }
 
-    // 6. Movimiento de caja (si hay caja abierta)
-    try {
-      const cajaRes = await pool.query(
+    // 6. Movimiento de caja (si hay caja abierta y no es cuenta corriente)
+    if (!va_a_cuenta_corriente) {
+      const cajaRes = await client.query(
         `SELECT id FROM cajas
          WHERE cliente_id = $1
          AND estado = 'abierta'
-         LIMIT 1`,
+         ORDER BY fecha_apertura DESC
+         LIMIT 1
+         FOR UPDATE`,
         [cliente_id]
       );
       if (cajaRes.rows.length > 0) {
         const caja_id = cajaRes.rows[0].id;
-        await pool.query(
+        await client.query(
           `INSERT INTO caja_movimientos
              (caja_id, cliente_id, tipo, tipo_operacion,
               monto, medio_pago, descripcion,
@@ -344,13 +374,13 @@ router.post('/:cliente_id', verificarClienteId, async (req, res) => {
             caja_id,
             cliente_id,
             total_venta,
-            forma_pago,
+            formaPagoFinal,
             `Venta ${numero_completo}`,
             numero_completo,
             venta_id
           ]
         );
-        await pool.query(
+        await client.query(
           `UPDATE cajas
            SET total_ingresos = total_ingresos + $1,
                saldo_actual = saldo_actual + $1
@@ -358,15 +388,35 @@ router.post('/:cliente_id', verificarClienteId, async (req, res) => {
           [total_venta, caja_id]
         );
       }
-    } catch (err) {
-      console.error('Error registrando en caja:', err.message);
     }
 
+    if (presupuesto_origen_id) {
+      const convertido = await client.query(
+        `UPDATE presupuestos
+         SET estado = 'convertido', convertido_a_venta = true,
+             venta_id = $1, modificado_en = now()
+         WHERE id = $2 AND cliente_id = $3 AND convertido_a_venta = false
+         RETURNING id`,
+        [venta_id, presupuesto_origen_id, cliente_id]
+      );
+      if (!convertido.rows[0]) {
+        const error = new Error('El presupuesto ya fue convertido por otra operación');
+        error.statusCode = 409;
+        throw error;
+      }
+    }
+
+    await client.query('COMMIT');
     res.json({ ok: true, venta_id, numero_completo });
 
   } catch (err) {
+    if (client) {
+      try { await client.query('ROLLBACK'); } catch (_) {}
+    }
     console.error('POST /ventas error:', err.message);
-    res.status(500).json({ mensaje: 'Error al crear venta', detalle: err.message });
+    res.status(err.statusCode || 500).json({ mensaje: err.message || 'Error al crear venta' });
+  } finally {
+    if (client) client.release();
   }
 });
 
@@ -452,7 +502,9 @@ router.get('/:cliente_id/:id', verificarClienteId, async (req, res) => {
 
     const [ventaRes, itemsRes] = await Promise.all([
       pool.query(
-        `SELECT * FROM ventas WHERE id = $1 AND cliente_id = $2`,
+         `SELECT v.*, (SELECT m.cuenta_corriente_id FROM movimientos_cuentas_corrientes m
+           WHERE m.venta_id=v.id AND m.cliente_id=v.cliente_id AND m.tipo='venta' ORDER BY m.id LIMIT 1) AS cuenta_corriente_cliente_id
+         FROM ventas v WHERE v.id = $1 AND v.cliente_id = $2`,
         [id, cliente_id]
       ),
       pool.query(
@@ -480,22 +532,32 @@ router.get('/:cliente_id/:id', verificarClienteId, async (req, res) => {
 // PUT /:cliente_id/:id/cobrar — marcar venta como cobrada
 // ═══════════════════════════════════════════════════════════════
 router.put('/:cliente_id/:id/cobrar', verificarClienteId, async (req, res) => {
+  let client;
   try {
     const { cliente_id, id } = req.params;
-    const venta = await pool.query('SELECT estado, anulada FROM ventas WHERE id=$1 AND cliente_id=$2', [id, cliente_id]);
-    if (!venta.rows.length) return res.status(404).json({ mensaje: 'Venta no encontrada' });
-    if (venta.rows[0].anulada) return res.status(400).json({ mensaje: 'No se puede cobrar una venta anulada' });
-    if (venta.rows[0].estado === 'cobrada') return res.status(400).json({ mensaje: 'La venta ya está cobrada' });
-
-    await pool.query(
-      `UPDATE ventas SET estado = 'cobrada', cobrada = true, modificado_en = now() WHERE id = $1 AND cliente_id = $2`,
-      [id, cliente_id]
-    );
-    res.json({ ok: true });
+    client = await pool.connect();
+    await client.query('BEGIN');
+    await bloquearOperacion(client, cliente_id);
+    const v = await client.query(
+      'SELECT id, saldo, estado, anulada, va_a_cuenta_corriente FROM ventas WHERE id=$1 AND cliente_id=$2 FOR UPDATE', [id, cliente_id]);
+    if (!v.rows[0]) throw fallo('Venta no encontrada.', 404);
+    const venta = v.rows[0];
+    if (venta.anulada) throw fallo('No se puede cobrar una venta anulada.');
+    if (venta.estado === 'cobrada') throw fallo('La venta ya está cobrada.', 409);
+    if (!venta.va_a_cuenta_corriente) throw fallo('Esta venta no tiene deuda en cuenta corriente.', 409);
+    const cuentaId = await cuentaDeVenta(client, cliente_id, id);
+    const medio = req.body?.medio_pago || 'efectivo';
+    if (!['efectivo','transferencia','tarjeta_debito','tarjeta_credito','otro'].includes(medio)) throw fallo('Seleccioná el medio de pago recibido.');
+    const resultado = await registrarCobroCliente(client, cliente_id, {
+      cuenta_corriente_id: cuentaId, venta_id: id, monto_total: venta.saldo,
+      medios_pago: [{ tipo: medio, monto: venta.saldo }], observaciones: 'Cobro desde Ventas'
+    }, String(req.headers['x-operacion-id'] || ''));
+    await client.query('COMMIT');
+    res.json(resultado);
   } catch (err) {
-    console.error('PUT cobrar error:', err.message);
-    res.status(500).json({ mensaje: 'Error del servidor' });
-  }
+    if (client) { try { await client.query('ROLLBACK'); } catch (_) {} }
+    res.status(err.statusCode || 500).json({ mensaje: err.message });
+  } finally { if (client) client.release(); }
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -507,10 +569,11 @@ router.put('/:cliente_id/:id/anular', verificarClienteId, async (req, res) => {
     const { cliente_id, id } = req.params;
     client = await pool.connect();
     await client.query('BEGIN');
+    await bloquearOperacion(client, cliente_id);
 
     const venta = await client.query(
       `SELECT id, estado, anulada, numero_completo, total,
-              va_a_cuenta_corriente, cuenta_corriente_cliente_id,
+              va_a_cuenta_corriente,
               comprador_cuit, comprador_nombre
        FROM ventas
        WHERE id=$1 AND cliente_id=$2
@@ -534,27 +597,7 @@ router.put('/:cliente_id/:id/anular', verificarClienteId, async (req, res) => {
     );
 
     if (v.va_a_cuenta_corriente) {
-      let cuentaId = Number(v.cuenta_corriente_cliente_id) || 0;
-      if (!cuentaId) {
-        const movOrigen = await client.query(
-          `SELECT cuenta_corriente_id FROM movimientos_cuentas_corrientes
-           WHERE venta_id=$1 AND cliente_id=$2
-           ORDER BY id ASC LIMIT 1`,
-          [id, cliente_id]
-        );
-        cuentaId = Number(movOrigen.rows[0]?.cuenta_corriente_id) || 0;
-      }
-      if (!cuentaId) {
-        const ccRes = await client.query(
-          `SELECT id, saldo FROM cuentas_corrientes_clientes
-           WHERE cliente_id = $1 AND (
-             (comprador_cuit != '' AND comprador_cuit = $2) OR comprador_nombre = $3
-           ) AND activo = true LIMIT 1
-           FOR UPDATE`,
-          [cliente_id, v.comprador_cuit || '', v.comprador_nombre]
-        );
-        cuentaId = ccRes.rows[0]?.id || 0;
-      }
+      const cuentaId = await cuentaDeVenta(client, cliente_id, id);
       if (cuentaId) {
         const ccLock = await client.query(
           `SELECT id, saldo FROM cuentas_corrientes_clientes
@@ -651,14 +694,18 @@ router.put('/:cliente_id/:id', verificarClienteId, async (req, res) => {
     return res.status(400).json({ mensaje: 'La venta debe tener al menos un ítem' });
   }
 
+  let client;
   try {
-    const check = await pool.query(
-      `SELECT id, estado, anulada FROM ventas WHERE id=$1 AND cliente_id=$2`,
+    client = await pool.connect();
+    await client.query('BEGIN');
+    await bloquearOperacion(client, cliente_id);
+    const check = await client.query(
+      `SELECT id, estado, anulada, total, saldo, va_a_cuenta_corriente FROM ventas WHERE id=$1 AND cliente_id=$2 FOR UPDATE`,
       [id, cliente_id]
     );
-    if (!check.rows[0]) return res.status(404).json({ mensaje: 'Venta no encontrada' });
-    if (check.rows[0].anulada) return res.status(400).json({ mensaje: 'No se puede editar una venta anulada' });
-    if (check.rows[0].estado !== 'pendiente') return res.status(400).json({ mensaje: 'Solo se pueden editar ventas pendientes' });
+    if (!check.rows[0]) throw fallo('Venta no encontrada', 404);
+    if (check.rows[0].anulada) throw fallo('No se puede editar una venta anulada');
+    if (check.rows[0].estado !== 'pendiente') throw fallo('Solo se pueden editar ventas pendientes');
 
     const modoIvaValidado = (['off','agregar','discriminar'].includes(modo_iva) ? modo_iva : 'discriminar');
     const calc = calcularTotalesIVA(items, descuento_global, recargo_global, modoIvaValidado);
@@ -676,25 +723,47 @@ router.put('/:cliente_id/:id', verificarClienteId, async (req, res) => {
       orden:    idx + 1,
     }));
 
+    const anterior = check.rows[0];
+    const cuentaId = anterior.va_a_cuenta_corriente ? await cuentaDeVenta(client, cliente_id, id) : null;
+    if (cuentaId && req.body.cuenta_corriente_cliente_id != null && Number(req.body.cuenta_corriente_cliente_id) !== Number(cuentaId)) {
+      throw fallo('Esta venta ya tiene un deudor registrado. No se cambió la cuenta; elegí la cuenta original para editarla.', 409);
+    }
+    const pagado = Math.max(0, Number(anterior.total) - Number(anterior.saldo));
+    const saldoPendiente = Math.max(0, total_venta - pagado);
+    if (cuentaId) {
+      await bloquearCuenta(client, cliente_id, cuentaId);
+      const diferencia = total_venta - Number(anterior.total);
+      if (diferencia !== 0) {
+        const cuenta = await client.query(
+          'UPDATE cuentas_corrientes_clientes SET saldo=saldo+$1::numeric, modificado_en=now() WHERE id=$2 AND cliente_id=$3 RETURNING saldo',
+          [diferencia.toFixed(4), cuentaId, cliente_id]);
+        await client.query(
+          `INSERT INTO movimientos_cuentas_corrientes
+           (cuenta_corriente_id,cliente_id,tipo,debe,haber,saldo_acumulado,descripcion,venta_id,estado)
+           VALUES($1,$2,'ajuste',$3,$4,$5,'Edición de venta pendiente',$6,'procesado')`,
+          [cuentaId, cliente_id, Math.max(0,diferencia).toFixed(4), Math.max(0,-diferencia).toFixed(4), cuenta.rows[0].saldo, id]);
+      }
+    }
+
     // Revertir stock de items anteriores
-    const oldItems = await pool.query(
-      'SELECT producto_id, cantidad FROM ventas_items WHERE venta_id=$1 AND producto_id IS NOT NULL',
-      [id]
+    const oldItems = await client.query(
+      'SELECT producto_id, cantidad FROM ventas_items WHERE venta_id=$1 AND cliente_id=$2 AND producto_id IS NOT NULL',
+      [id, cliente_id]
     );
     for (const oi of oldItems.rows) {
-      await pool.query(
+      await client.query(
         `UPDATE productos_propios SET stock_actual = COALESCE(stock_actual, 0) + $1, modificado_en = now() WHERE id = $2 AND cliente_id = $3`,
         [oi.cantidad, oi.producto_id, cliente_id]
       );
     }
 
     // Actualizar venta
-    await pool.query(
+    await client.query(
       `UPDATE ventas SET
          comprador_nombre=$1, comprador_cuit=$2,
          comprador_telefono=$3, comprador_email=$4,
          comprador_direccion=$5, comprador_ciudad=$6,
-         subtotal=$7, iva_monto=$8, total=$9, saldo=$9,
+         subtotal=$7, iva_monto=$8, total=$9, saldo=$20,
          descuento_global=$10, recargo_global=$11,
          precio_con_iva=$12, modo_iva=$13,
          forma_pago=$14, monto_recibido=$15, vuelto=$16,
@@ -711,12 +780,12 @@ router.put('/:cliente_id/:id', verificarClienteId, async (req, res) => {
         parseFloat(monto_recibido) || 0,
         parseFloat(vuelto) || 0,
         observaciones,
-        id, cliente_id,
+        id, cliente_id, saldoPendiente.toFixed(4),
       ]
     );
 
     // Reemplazar items
-    await pool.query(`DELETE FROM ventas_items WHERE venta_id=$1`, [id]);
+    await client.query(`DELETE FROM ventas_items WHERE venta_id=$1 AND cliente_id=$2`, [id, cliente_id]);
     for (let i = 0; i < itemsCalculados.length; i++) {
       const it  = itemsCalculados[i];
       const det = calc.itemsDetalle[i];
@@ -725,7 +794,7 @@ router.put('/:cliente_id/:id', verificarClienteId, async (req, res) => {
       const iva_item   = det.iva_monto;
       const total_item = det.total_item;
 
-      await pool.query(
+      await client.query(
         `INSERT INTO ventas_items
            (venta_id, cliente_id, producto_id, es_libre, descripcion_libre,
             cantidad, precio_unitario, descuento_porcentaje, descuento_monto,
@@ -746,18 +815,33 @@ router.put('/:cliente_id/:id', verificarClienteId, async (req, res) => {
 
       // Descontar stock nuevo
       if (!it.es_libre && it.producto_id) {
-        await pool.query(
+        const stockActualizado = await client.query(
           `UPDATE productos_propios SET stock_actual = COALESCE(stock_actual, 0) - $1, modificado_en=now() WHERE id=$2 AND cliente_id=$3`,
           [it.cantidad, it.producto_id, cliente_id]
         );
+        if (!stockActualizado.rowCount) throw fallo('No se encontró un producto de esta venta para el negocio. No se guardó la edición.');
       }
     }
 
+    // Mantener pendiente mientras no se cobre. Cambiar el medio no inventa dinero.
+    if (cuentaId) {
+      await client.query(`UPDATE ventas SET forma_pago='cuenta_corriente', monto_recibido=0, vuelto=0,
+        cobrada=(saldo<=0.005), estado=CASE WHEN saldo<=0.005 THEN 'cobrada' ELSE 'pendiente' END
+        WHERE id=$1 AND cliente_id=$2`, [id,cliente_id]);
+      if (forma_pago !== 'cuenta_corriente' && saldoPendiente > 0) {
+        await registrarCobroCliente(client, cliente_id, {
+          cuenta_corriente_id:cuentaId,venta_id:id,monto_total:saldoPendiente,
+          medios_pago:[{tipo:forma_pago,monto:saldoPendiente}],observaciones:'Cobro al editar venta'
+        }, String(req.headers['x-operacion-id'] || ''));
+      }
+    }
+    await client.query('COMMIT');
     res.json({ ok: true, venta_id: parseInt(id) });
   } catch (err) {
+    if (client) { try { await client.query('ROLLBACK'); } catch (_) {} }
     console.error('PUT editar venta error:', err.message);
-    res.status(500).json({ mensaje: 'Error al editar venta', detalle: err.message });
-  }
+    res.status(err.statusCode || 500).json({ mensaje: err.message || 'Error al editar venta' });
+  } finally { if (client) client.release(); }
 });
 
 module.exports = router;
