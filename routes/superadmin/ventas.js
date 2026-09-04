@@ -4,16 +4,12 @@ const pool    = require('../../db');
 const { verificarCualquierToken, verificarClienteId } = require('./authMiddleware');
 const { calcularTotalesIVA } = require('../../utils/calcularTotalesIVA');
 const { registrarCobroCliente } = require('../../services/cobrosClientes');
+const { resolverSucursalVenta } = require('../../services/sucursalVenta');
 const { fallo, bloquearOperacion, bloquearCuenta, resolverCuentaVenta, cuentaDeVenta, huellaOperacion } = require('../../services/cuentaCorrienteVentas');
 
 // ── Asegurar tablas ───────────────────────────────────────────
 async function asegurarTablas() {
   try {
-    // sucursal_id no tiene tabla de referencia aún — hacerlo nullable
-    await pool.query(
-      `ALTER TABLE ventas ALTER COLUMN sucursal_id DROP NOT NULL`
-    ).catch(() => {});
-
     // Nuevas columnas IVA / descuento / recargo
     await pool.query(`ALTER TABLE ventas ADD COLUMN IF NOT EXISTS descuento_global NUMERIC DEFAULT 0`).catch(() => {});
     await pool.query(`ALTER TABLE ventas ADD COLUMN IF NOT EXISTS recargo_global   NUMERIC DEFAULT 0`).catch(() => {});
@@ -198,6 +194,8 @@ router.post('/:cliente_id', verificarClienteId, async (req, res) => {
       }
     }
 
+    const sucursalVentaId = await resolverSucursalVenta(client, cliente_id, req.body.sucursal_id ?? null);
+
     // 1. Número correlativo por cliente
     const numRes = await client.query(
       `SELECT COALESCE(MAX(numero), 0) + 1 AS siguiente
@@ -223,6 +221,14 @@ router.post('/:cliente_id', verificarClienteId, async (req, res) => {
       iva_pct:  parseFloat(it.alicuota_iva),
       orden:    idx + 1,
     }));
+    // Validar IDs antes de insertar detalles: las FK reales no permiten
+    // productos inexistentes, y cada producto debe ser del mismo negocio.
+    for (const it of itemsCalculados) {
+      if (!it.es_libre && it.producto_id) {
+        const producto = await client.query('SELECT id FROM productos_propios WHERE id=$1 AND cliente_id=$2 FOR UPDATE', [it.producto_id, cliente_id]);
+        if (!producto.rows[0]) throw fallo('Uno de los productos no existe en este negocio. No se guardó la venta.');
+      }
+    }
     // 3. INSERT venta
     const ventaRes = await client.query(
       `INSERT INTO ventas
@@ -234,8 +240,8 @@ router.post('/:cliente_id', verificarClienteId, async (req, res) => {
           va_a_cuenta_corriente, observaciones,
           descuento_global, recargo_global, precio_con_iva,
           forma_pago, monto_recibido, vuelto, modo_iva, condicion_iva,
-          fecha, creado_en, modificado_en)
-       VALUES ($1,$2,$3,'V','VENTA',$4,$5,$6,$7,$8,$9,$10,$11,$12,$12,$22,$23,false,$13,$14,$15,$16,$17,$18,$19,$20,$21,$24,now(),now(),now())
+          fecha, creado_en, modificado_en, sucursal_id)
+       VALUES ($1,$2,$3,'V','VENTA',$4,$5,$6,$7,$8,$9,$10,$11,$12,$12,$22,$23,false,$13,$14,$15,$16,$17,$18,$19,$20,$21,$24,now(),now(),now(),$25)
        RETURNING id`,
       [
         cliente_id, numero, numero_completo,
@@ -251,6 +257,7 @@ router.post('/:cliente_id', verificarClienteId, async (req, res) => {
         va_a_cuenta_corriente ? 'pendiente' : 'cobrada',
         !va_a_cuenta_corriente,
         condicion_iva,
+        sucursalVentaId,
       ]
     );
     const venta_id = ventaRes.rows[0].id;
@@ -309,9 +316,9 @@ router.post('/:cliente_id', verificarClienteId, async (req, res) => {
         await client.query(
           `INSERT INTO stock_movimientos
              (cliente_id, producto_id, tipo, cantidad, stock_anterior, stock_posterior,
-              motivo, referencia_tipo, referencia_id, creado_en)
-           VALUES ($1,$2,'venta',$3,$4,$5,'Venta','venta',$6,now())`,
-          [cliente_id, it.producto_id, it.cantidad, stockAnterior, stockAnterior - it.cantidad, venta_id]
+              motivo, referencia_tipo, referencia_id, creado_en, sucursal_id, venta_id)
+           VALUES ($1,$2,'venta',$3,$4,$5,'Venta','venta',$6,now(),$7,$6)`,
+          [cliente_id, it.producto_id, it.cantidad, stockAnterior, stockAnterior - it.cantidad, venta_id, sucursalVentaId]
         );
       }
     }
@@ -572,7 +579,7 @@ router.put('/:cliente_id/:id/anular', verificarClienteId, async (req, res) => {
     await bloquearOperacion(client, cliente_id);
 
     const venta = await client.query(
-      `SELECT id, estado, anulada, numero_completo, total,
+      `SELECT id, estado, anulada, numero_completo, total, sucursal_id,
               va_a_cuenta_corriente,
               comprador_cuit, comprador_nombre
        FROM ventas
@@ -590,10 +597,12 @@ router.put('/:cliente_id/:id/anular', verificarClienteId, async (req, res) => {
       return res.status(400).json({ mensaje: 'La venta ya está anulada' });
     }
 
+    const sucursalVentaId = await resolverSucursalVenta(client, cliente_id, v.sucursal_id, { historica: true });
+
     await client.query(
-      `UPDATE ventas SET estado = 'anulada', anulada = true, modificado_en = now()
+      `UPDATE ventas SET estado = 'anulada', anulada = true, modificado_en = now(), sucursal_id=$3
        WHERE id = $1 AND cliente_id = $2`,
-      [id, cliente_id]
+      [id, cliente_id, sucursalVentaId]
     );
 
     if (v.va_a_cuenta_corriente) {
@@ -650,9 +659,9 @@ router.put('/:cliente_id/:id/anular', verificarClienteId, async (req, res) => {
         await client.query(
           `INSERT INTO stock_movimientos
              (cliente_id, producto_id, tipo, cantidad, stock_anterior, stock_posterior,
-              motivo, referencia_tipo, referencia_id, creado_en)
-           VALUES ($1,$2,'anulacion',$3,$4,$5,'Anulación de venta','venta',$6,now())`,
-          [cliente_id, it.producto_id, it.cantidad, stockAnterior, stockAnterior + Number(it.cantidad), id]
+              motivo, referencia_tipo, referencia_id, creado_en, sucursal_id, venta_id)
+           VALUES ($1,$2,'anulacion',$3,$4,$5,'Anulación de venta','venta',$6,now(),$7,$6)`,
+          [cliente_id, it.producto_id, it.cantidad, stockAnterior, stockAnterior + Number(it.cantidad), id, sucursalVentaId]
         );
       }
     }

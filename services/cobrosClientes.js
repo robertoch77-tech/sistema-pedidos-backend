@@ -41,19 +41,18 @@ async function registrarCobroCliente(client, cliente_id, datos, operacionId = ''
   if (venta_id && Number(monto_total) > Number(cuenta.saldo) + 0.005) {
     throw fallo('Esta cuenta tiene pagos o créditos previos. Registrá el saldo real desde Cuenta corriente para no cobrarlo dos veces.', 409);
   }
-    // Número de cobranza
-    const numRes = await client.query(
-      `SELECT COALESCE(MAX(id),0)+1 AS num FROM cobranzas WHERE cliente_id=$1`, [cliente_id]
-    );
-    const numero = `COB-${String(numRes.rows[0].num).padStart(6, '0')}`;
-
     // INSERT cobranza
     const cobRes = await client.query(
-      `INSERT INTO cobranzas (cliente_id, cuenta_corriente_id, numero, fecha, total_cobrado, observaciones)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-      [cliente_id, cuenta_corriente_id, numero, fecha || new Date().toISOString().slice(0,10), n(monto_total), observaciones || '']
+      `INSERT INTO cobranzas (cliente_id, cuenta_corriente_id, fecha, total_cobrado, observaciones)
+       VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+      [cliente_id, cuenta_corriente_id, fecha || new Date().toISOString().slice(0,10), n(monto_total), observaciones || '']
     );
     const cobranza_id = cobRes.rows[0].id;
+    // numero es BIGINT en Supabase; el texto pertenece a numero_completo.
+    const numero = `COB-${String(cobranza_id).padStart(6, '0')}`;
+    await client.query(
+      `UPDATE cobranzas SET numero=$1, numero_completo=$2, prefijo='COB' WHERE id=$1 AND cliente_id=$3`,
+      [cobranza_id, numero, cliente_id]);
 
     // Obtener nombre del comprador una sola vez para los cheques
     const compradorNombreRes = await client.query(
@@ -64,23 +63,24 @@ async function registrarCobroCliente(client, cliente_id, datos, operacionId = ''
     // INSERT items
     for (const item of medios_pago) {
       await client.query(
-        `INSERT INTO cobranzas_items (cobranza_id, tipo, monto, referencia, medio_pago_id, cheque_datos)
-         VALUES ($1,$2,$3,$4,$5,$6)`,
+        `INSERT INTO cobranzas_items (cobranza_id, tipo, monto, referencia, medio_pago_id, cheque_datos, cliente_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
         [cobranza_id, item.tipo, n(item.monto), item.referencia || '', item.medio_pago_id || null,
-         item.cheque_datos ? JSON.stringify(item.cheque_datos) : null]
+         item.cheque_datos ? JSON.stringify(item.cheque_datos) : null, cliente_id]
       );
 
       // Si es cheque → registrar en tabla cheques
       if ((item.tipo === 'cheque_propio' || item.tipo === 'cheque_tercero' || item.tipo === 'echeq') && item.cheque_datos) {
         const ch = item.cheque_datos;
+        if (!ch.fecha_emision || !ch.fecha_cobro) throw fallo('El cheque necesita fecha de emisión y fecha de cobro. No se registró el pago.');
         await client.query(
           `INSERT INTO cheques (cliente_id, numero, banco, titular_nombre, titular_cuit, monto, fecha_cobro,
-            tipo, estado, origen, origen_id, cliente_proveedor)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'en_cartera','cobranza',$9,$10)`,
+            tipo, estado, origen, origen_id, cliente_proveedor, fecha_emision)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'en_cartera','cobranza',$9,$10,$11)`,
           [cliente_id, ch.numero || '', ch.banco || '', ch.titular || '', ch.cuit_titular || '',
            n(item.monto), ch.fecha_cobro || null,
            item.tipo === 'cheque_propio' ? 'propio' : item.tipo === 'echeq' ? 'echeq' : 'tercero',
-           cobranza_id, compradorNombreCC]
+           cobranza_id, compradorNombreCC, ch.fecha_emision]
         );
       }
     }
