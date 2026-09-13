@@ -238,7 +238,8 @@ function generarTRA(modo, servicio = 'wsfe') {
   const ahora  = new Date();
   const desde  = new Date(ahora.getTime() - 60000);
   const hasta  = new Date(ahora.getTime() + 14 * 3600000);
-  const uniRef = Math.floor(Math.random() * 9999999999);
+  // WSAA exige xsd:unsignedInt: rango de 0 a 4294967295.
+  const uniRef = Math.floor(Math.random() * 0x100000000);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <loginTicketRequest version="1.0">
   <header>
@@ -248,6 +249,28 @@ function generarTRA(modo, servicio = 'wsfe') {
   </header>
   <service>${servicio}</service>
 </loginTicketRequest>`;
+}
+
+async function interpretarRespuestaWSAA(xml) {
+  const opciones = { explicitArray: false, tagNameProcessors: [xml2js.processors.stripPrefix] };
+  const parsed = await xml2js.parseStringPromise(xml, opciones);
+  const body = parsed?.Envelope?.Body;
+  if (body?.Fault) throw new Error('ARCA/WSAA devolvio un error SOAP');
+  const respuesta = body?.loginCmsResponse;
+  const ticketXML = respuesta?.loginCmsReturn ?? respuesta?.return;
+  const contenido = typeof ticketXML === 'string' ? ticketXML : ticketXML?._;
+  if (!contenido) throw new Error('ARCA/WSAA no devolvio el ticket de acceso');
+  const ticket = (await xml2js.parseStringPromise(contenido, opciones))?.loginTicketResponse;
+  const token = ticket?.credentials?.token;
+  const sign = ticket?.credentials?.sign;
+  const expira = new Date(ticket?.header?.expirationTime || '');
+  if (typeof token !== 'string' || !token.trim() || typeof sign !== 'string' || !sign.trim()) {
+    throw new Error('ARCA/WSAA devolvio credenciales vacias o invalidas');
+  }
+  if (!Number.isFinite(expira.getTime()) || expira.getTime() <= Date.now()) {
+    throw new Error('ARCA/WSAA devolvio un vencimiento invalido o vencido');
+  }
+  return { token, sign, expira };
 }
 
 async function obtenerToken(config) {
@@ -300,16 +323,7 @@ async function obtenerToken(config) {
     throw new Error(detalleErrorWSAA(error));
   }
 
-  const parsed = await xml2js.parseStringPromise(resp.data, { explicitArray: false });
-  const loginResp = parsed?.['soapenv:Envelope']?.['soapenv:Body']?.['loginCmsReturn'] ||
-                    parsed?.['S:Envelope']?.['S:Body']?.['ns2:loginCmsResponse']?.['return'] || {};
-  const loginTicket = loginResp?.loginTicketResponse || {};
-
-  const token  = loginTicket?.credentials?.token || loginResp?.token  || '';
-  const sign   = loginTicket?.credentials?.sign  || loginResp?.sign   || '';
-  const expStr = loginTicket?.header?.expirationTime || '';
-
-  return { token, sign, expira: expStr ? new Date(expStr) : new Date(Date.now() + 12 * 3600000) };
+  return interpretarRespuestaWSAA(resp.data);
 }
 
 async function obtenerTokenPadron(config) {
@@ -320,7 +334,7 @@ async function obtenerTokenPadron(config) {
     }
   }
 
-  const tra = generarTRA(config.modo, 'ws_sr_padron_a5');
+  const tra = generarTRA(config.modo, 'ws_sr_constancia_inscripcion');
   const wsaaUrl = config.modo === 'produccion' ? WSAA_PROD : WSAA_HOMO;
   const credenciales = leerCredencialesArca(config);
 
@@ -360,15 +374,7 @@ async function obtenerTokenPadron(config) {
     throw new Error(detalleErrorWSAA(error));
   }
 
-  const parsed = await xml2js.parseStringPromise(resp.data, { explicitArray: false });
-  const loginResp = parsed?.['soapenv:Envelope']?.['soapenv:Body']?.['loginCmsReturn'] ||
-                    parsed?.['S:Envelope']?.['S:Body']?.['ns2:loginCmsResponse']?.['return'] || {};
-  const loginTicket = loginResp?.loginTicketResponse || {};
-
-  const token  = loginTicket?.credentials?.token || loginResp?.token  || '';
-  const sign   = loginTicket?.credentials?.sign  || loginResp?.sign   || '';
-  const expStr = loginTicket?.header?.expirationTime || '';
-  const expira = expStr ? new Date(expStr) : new Date(Date.now() + 12 * 3600000);
+  const { token, sign, expira } = await interpretarRespuestaWSAA(resp.data);
 
   await pool.query(
     `UPDATE arca_configuracion SET token_padron=$1, sign_padron=$2, token_padron_expira=$3 WHERE cliente_id=$4`,
@@ -812,19 +818,19 @@ router.post('/comprobante/:cliente_id/:id/pdf', verificarClienteId, async (req, 
     if (r.rows.length === 0) return res.status(404).json({ error: 'No encontrado' });
     const comp = r.rows[0];
 
-    // QR ARCA: datos codificados en base64
-    const qrData = {
-      ver: 1, fecha: comp.fecha_emision?.toISOString?.()?.slice(0,10) || new Date().toISOString().slice(0,10),
-      cuit: '', ptovta: comp.punto_venta, tipoCmp: comp.tipo_comprobante,
-      nroCmp: comp.numero, importe: n(comp.importe_total), moneda: 'PES', ctz: 1,
-      tipoDocRec: 80, nroDocRec: comp.receptor_cuit?.replace(/-/g,'') || '0',
-      tipoCodAut: 'E', codAut: comp.cae,
-    };
-    const qrBase64 = Buffer.from(JSON.stringify(qrData)).toString('base64');
-    const qrUrl = `https://www.afip.gob.ar/fe/qr/?p=${qrBase64}`;
-
-    const pdfBase64 = Buffer.from(`PDF:${comp.numero_completo}|CAE:${comp.cae}|QR:${qrUrl}`).toString('base64');
-    res.json({ ok: true, pdf_base64: pdfBase64, qr_url: qrUrl, numero_completo: comp.numero_completo });
+    const cfg = await pool.query(
+      `SELECT a.cuit, a.razon_social, a.condicion_iva, c.direccion_fiscal
+       FROM arca_configuracion a LEFT JOIN clientes_roberto c ON c.id=a.cliente_id
+       WHERE a.cliente_id=$1`, [cliente_id]);
+    if (!cfg.rows.length) return res.status(400).json({ error: 'Sin configuracion ARCA' });
+    const detalle = await pool.query(
+      `SELECT vi.*, p.descripcion AS producto_descripcion FROM ventas_items vi
+       JOIN ventas v ON v.id=vi.venta_id AND v.cliente_id=vi.cliente_id
+       LEFT JOIN productos_propios p ON p.id=vi.producto_id AND p.cliente_id=vi.cliente_id
+       WHERE vi.venta_id=$1 AND vi.cliente_id=$2 ORDER BY vi.orden ASC`, [comp.venta_id, cliente_id]);
+    const { generarPdfArca } = require('../../services/arcaPdf');
+    const { pdf, qrUrl } = await generarPdfArca(comp, cfg.rows[0], detalle.rows);
+    res.json({ ok: true, pdf_base64: pdf.toString('base64'), qr_url: qrUrl, numero_completo: comp.numero_completo });
   } catch (err) {
     console.error('arca pdf:', err.message);
     res.status(500).json({ error: err.message });
