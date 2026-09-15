@@ -3,9 +3,9 @@ const { test } = require('node:test');
 const { generarDatosQR, generarPdfArca } = require('../services/arcaPdf');
 const comp = { tipo_comprobante: '6', punto_venta: 4, numero: '23', importe_total: '1210.00',
   fecha_emision: '2026-09-13', cae: '70417054367476', cae_vencimiento: '2026-09-23',
-  receptor_cuit: '0', receptor_nombre: 'Consumidor Final', numero_completo: 'FB-0004-00000023' };
-const emisor = { cuit: '24259173554', razon_social: 'EMISOR DE PRUEBA', condicion_iva: 'Responsable Inscripto', direccion_fiscal: 'Domicilio de prueba 123' };
-const item = { cantidad: 2, descripcion_libre: 'Producto de prueba', precio_unitario: '605.00', subtotal: '1210.00' };
+  receptor_cuit: '0', receptor_nombre: 'Consumidor Final', receptor_cond_iva: '5', importe_neto: '1000.00', importe_iva: '210.00', numero_completo: 'FB-0004-00000023' };
+const emisor = { cuit: '24259173554', razon_social: 'EMISOR DE PRUEBA', condicion_iva: 'Responsable Inscripto', direccion_fiscal: 'Domicilio de prueba 123', ingresos_brutos: 'EXENTO - SOLO PRUEBA', inicio_actividades: '2000-01-01' };
+const item = { cantidad: 2, descripcion_libre: 'Producto de prueba', precio_unitario: '605.00', subtotal: '1000.00', iva_monto: '210.00' };
 test('QR con campos y tipos oficiales, sin documento inventado', () => {
   const qr = generarDatosQR(comp, emisor);
   assert.equal(qr.ptoVta, 4);
@@ -16,6 +16,12 @@ test('QR con campos y tipos oficiales, sin documento inventado', () => {
   assert.equal(qr.tipoDocRec, undefined);
   assert.equal(qr.ptovta, undefined);
   assert.equal(generarDatosQR({ ...comp, receptor_cuit: '30-00000000-7' }, emisor).nroDocRec, 30000000007);
+});
+test('PDF rechaza datos fiscales incompletos, fecha imposible y totales inconsistentes', async () => {
+  await assert.rejects(() => generarPdfArca(comp, { ...emisor, inicio_actividades: '' }, [item]));
+  await assert.rejects(() => generarPdfArca(comp, { ...emisor, ingresos_brutos: '' }, [item]));
+  await assert.rejects(() => generarPdfArca({ ...comp, fecha_emision: '2026-02-30' }, emisor, [item]));
+  await assert.rejects(() => generarPdfArca({ ...comp, importe_iva: '1.00' }, emisor, [item]));
 });
 test('rechaza CUIT, CAE, fecha, numero y receptor invalidos', () => {
   assert.throws(() => generarDatosQR(comp, { ...emisor, cuit: '' }));

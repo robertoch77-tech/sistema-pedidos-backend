@@ -497,6 +497,10 @@ function alicuotaAfipId(pct) {
 // ─── POST /facturar/:cliente_id ───────────────────────────────
 router.post('/facturar/:cliente_id', verificarClienteId, async (req, res) => {
   const { cliente_id } = req.params;
+  const controles = require('../../services/arcaEmision');
+  let db;
+  let intentoId;
+  let autorizado = false;
   try {
     const {
       venta_id, tipo_factura = '6', punto_venta,
@@ -504,70 +508,92 @@ router.post('/facturar/:cliente_id', verificarClienteId, async (req, res) => {
       receptor_condicion_iva = '5',
     } = req.body;
 
-    // Leer config
-    const cfgRes = await pool.query(`SELECT * FROM arca_configuracion WHERE cliente_id=$1`, [cliente_id]);
+    const ventaId = Number(venta_id);
+    if (!Number.isInteger(ventaId) || ventaId <= 0) throw new Error('Venta invalida');
+    db = await controles.iniciarEmision(pool, cliente_id, ventaId);
+    const existente = await db.query('SELECT * FROM arca_comprobantes WHERE cliente_id=$1 AND venta_id=$2', [cliente_id, ventaId]);
+    if (existente.rows.length) {
+      if (existente.rows.length !== 1 || !/^\d{14}$/.test(String(existente.rows[0].cae))) {
+        throw new Error('La venta tiene registros fiscales inconsistentes; requiere revision');
+      }
+      const comp = existente.rows[0];
+      await db.query('COMMIT');
+      return res.json({ ok: true, ya_emitida: true, cae: comp.cae, numero_completo: comp.numero_completo,
+        tipo_factura: comp.tipo_comprobante, vencimiento_cae: comp.cae_vencimiento });
+    }
+    const anteriores = await db.query(`SELECT id FROM arca_logs WHERE cliente_id=$1
+      AND tipo='factura_intento' AND request LIKE $2 AND response <> 'rechazada' LIMIT 1`,
+      [cliente_id, `venta:${ventaId}|%`]);
+    if (anteriores.rows.length) throw new Error('Hay un intento fiscal pendiente. No reintentar: requiere conciliacion con ARCA');
+    // Bloquear configuracion mientras se prepara y emite.
+    const cfgRes = await db.query(`SELECT * FROM arca_configuracion WHERE cliente_id=$1 FOR UPDATE`, [cliente_id]);
     if (cfgRes.rows.length === 0) throw new Error('Sin configuración ARCA');
     const config = cfgRes.rows[0];
 
-    const ventaId = Number(venta_id);
     const cbteTipo = parseInt(tipo_factura, 10);
+    if (!['produccion', 'homologacion'].includes(config.modo)) throw new Error('Modo ARCA invalido');
     if (!Number.isInteger(ventaId) || ventaId <= 0) {
       throw new Error('Debés seleccionar una venta válida antes de facturar');
     }
     if (![1, 6, 11].includes(cbteTipo) || !facturaHabilitada(config, cbteTipo)) {
       throw new Error('El tipo de factura solicitado no está habilitado para este cliente');
     }
-
-    // Obtener/renovar token
-    let tokenData;
-    try {
-      tokenData = await obtenerToken(config);
-    } catch (e) {
-      throw new Error('Error WSAA: ' + e.message);
+    if (!['1', 'Responsable Inscripto'].includes(String(config.condicion_iva)) || ![1, 6].includes(cbteTipo)) {
+      throw new Error('Este flujo requiere emisor Responsable Inscripto y factura A o B');
     }
-
-    // Guardar token actualizado
-    await pool.query(
-      `UPDATE arca_configuracion SET token_wsaa=$1, sign_wsaa=$2, token_expira=$3 WHERE cliente_id=$4`,
-      [tokenData.token, tokenData.sign, tokenData.expira ?? (config.token_expira), cliente_id]
-    );
+    const condicionReceptor = Number(receptor_condicion_iva);
+    if (![1, 4, 5, 6, 7, 8, 9, 10, 13, 15, 16].includes(condicionReceptor) ||
+        (cbteTipo === 1 && ![1, 6].includes(condicionReceptor))) throw new Error('Condicion IVA del receptor invalida para esta factura');
 
     // Leer venta
-    const pventa = parseInt(punto_venta) || config.punto_venta || 1;
-    let importe_neto = 0, importe_iva = 0, importe_total = 0, totalVenta = 0;
+    const pventa = Number(config.punto_venta);
+    if (!Number.isInteger(pventa) || pventa < 1 || pventa > 99999 ||
+        (punto_venta !== undefined && Number(punto_venta) !== pventa)) throw new Error('Punto de venta invalido o distinto de la configuracion');
+    await controles.bloquearSerie(db, config.modo, config.cuit, pventa, cbteTipo);
+    const pendientesSerie = await db.query(`SELECT request FROM arca_logs WHERE cliente_id=$1
+      AND tipo='factura_intento' AND response <> 'rechazada' AND response NOT LIKE 'registrada|%'`, [cliente_id]);
+    for (const row of pendientesSerie.rows) {
+      const previo = JSON.parse(row.request.slice(row.request.indexOf('|') + 1));
+      if (previo.modo === config.modo && previo.cuit === config.cuit && previo.punto === pventa && previo.tipo === cbteTipo) {
+        throw new Error('El punto y tipo tienen un intento pendiente; requiere conciliacion antes de emitir otra factura');
+      }
+    }
+    let importe_neto = 0, importe_iva = 0, importe_total = 0;
     let alicuotas = [];
 
     if (venta_id) {
       try {
-        const ventaRes = await pool.query(
-          `SELECT * FROM ventas WHERE id=$1 AND cliente_id=$2`, [ventaId, cliente_id]
+        const ventaRes = await db.query(
+          `SELECT * FROM ventas WHERE id=$1 AND cliente_id=$2 FOR UPDATE`, [ventaId, cliente_id]
         );
         if (ventaRes.rows.length > 0) {
           const venta = ventaRes.rows[0];
           if (venta.facturado) throw new Error('Esta venta ya tiene un comprobante emitido');
-          importe_total = n(venta.total ?? venta.monto_total ?? 0);
-          totalVenta = importe_total;
+          importe_total = controles.centavos(venta.total ?? venta.monto_total) / 100;
 
-          const itemsAgrup = await pool.query(
+          const itemsAgrup = await db.query(
             `SELECT
                COALESCE(alicuota_iva, 21) AS alicuota,
                SUM(subtotal::numeric)     AS base_imp,
                SUM(iva_monto::numeric)    AS iva_monto
              FROM ventas_items
-             WHERE venta_id = $1
+             WHERE venta_id = $1 AND cliente_id = $2
              GROUP BY COALESCE(alicuota_iva, 21)
              ORDER BY alicuota`,
-            [venta_id]
+            [ventaId, cliente_id]
           );
 
           if (itemsAgrup.rows.length > 0) {
+            if (venta.modo_iva === 'off' && itemsAgrup.rows.some(row => Number(row.alicuota) > 0)) {
+              throw new Error('No se puede emitir en ARCA: la venta está en "Sin IVA" y contiene productos con alícuota mayor a 0%. La venta no fue modificada.');
+            }
             importe_neto = 0;
             importe_iva  = 0;
             alicuotas = [];
             for (const row of itemsAgrup.rows) {
               const alic = parseFloat(row.alicuota);
-              const base = n(row.base_imp);
-              const iva  = n(row.iva_monto);
+              const base = controles.centavos(row.base_imp) / 100;
+              const iva  = controles.centavos(row.iva_monto) / 100;
               importe_neto += base;
               importe_iva  += iva;
               alicuotas.push({ alicuota: alic, base, iva });
@@ -581,9 +607,28 @@ router.post('/facturar/:cliente_id', verificarClienteId, async (req, res) => {
 
     // Obtener último número
     if (alicuotas.length === 0) throw new Error('La venta no existe o no pertenece a este cliente');
-    if (importe_total <= 0 || Math.abs(totalVenta - importe_total) > 0.02) {
-      throw new Error('Los importes de la venta no coinciden con sus ítems; revisala antes de facturar');
+    controles.validarImportes(importe_total, alicuotas);
+    const fiscalEmisor = await db.query(`SELECT a.cuit,a.razon_social,a.condicion_iva,
+      c.direccion_fiscal,c.ingresos_brutos,to_jsonb(c)->>'inicio_actividades' AS inicio_actividades
+      FROM arca_configuracion a JOIN clientes_roberto c ON c.id=a.cliente_id WHERE a.cliente_id=$1`, [cliente_id]);
+    require('../../services/arcaPdf').validarEmisor(fiscalEmisor.rows[0] || {});
+    const detalleFiscal = await db.query(`SELECT vi.*,p.descripcion AS producto_descripcion
+      FROM ventas_items vi LEFT JOIN productos_propios p ON p.id=vi.producto_id AND p.cliente_id=vi.cliente_id
+      WHERE vi.venta_id=$1 AND vi.cliente_id=$2 ORDER BY vi.orden FOR SHARE OF vi`, [ventaId, cliente_id]);
+    if (!detalleFiscal.rows.length) throw new Error('Sin detalle fiscal');
+    require('../../services/arcaPdf').validarDetalle({ importe_neto, importe_iva }, detalleFiscal.rows);
+
+    // Contactar WSAA solo despues de validar la venta; no cambiar sus importes.
+    let tokenData;
+    try {
+      tokenData = await obtenerToken(config);
+    } catch (e) {
+      throw new Error('Error WSAA: ' + e.message);
     }
+    await db.query(
+      `UPDATE arca_configuracion SET token_wsaa=$1, sign_wsaa=$2, token_expira=$3 WHERE cliente_id=$4`,
+      [tokenData.token, tokenData.sign, tokenData.expira ?? config.token_expira, cliente_id]
+    );
 
     const wsfeUrl = config.modo === 'produccion' ? WSFE_PROD : WSFE_HOMO;
     let ultimoNum = 0;
@@ -601,10 +646,7 @@ router.post('/facturar/:cliente_id', verificarClienteId, async (req, res) => {
 
     try {
       const rUltimo = await axios.post(wsfeUrl, soapUltimo, { headers: { 'Content-Type': 'text/xml', 'SOAPAction': '' }, timeout: 10000 });
-      const pUltimo = await xml2js.parseStringPromise(rUltimo.data, { explicitArray: false });
-      const nroStr = JSON.stringify(pUltimo);
-      const m = nroStr.match(/"CbteNro"\s*:\s*"?(\d+)"?/);
-      if (m) ultimoNum = parseInt(m[1]);
+      ultimoNum = await controles.ultimoAutorizado(rUltimo.data);
     } catch (e) {
       throw new Error('No se pudo consultar el último comprobante autorizado: ' + e.message);
     }
@@ -624,6 +666,7 @@ router.post('/facturar/:cliente_id', verificarClienteId, async (req, res) => {
     const tieneCuit  = receptor_cuit && receptor_cuit !== '0' && receptor_cuit.replace(/-/g,'').length >= 11;
     const docTipo    = esFacturaA ? 80 : (tieneCuit ? 80 : 99);
     const docNro     = docTipo === 80 ? receptor_cuit.replace(/-/g, '') : '0';
+    if (docTipo === 80 && !/^\d{11}$/.test(docNro)) throw new Error('CUIT receptor invalido');
 
     let alicIvaXml = '';
     for (const a of alicGravadas) {
@@ -662,6 +705,7 @@ router.post('/facturar/:cliente_id', verificarClienteId, async (req, res) => {
             <ar:ImpTrib>0.00</ar:ImpTrib>
             <ar:MonId>PES</ar:MonId>
             <ar:MonCotiz>1</ar:MonCotiz>
+            <ar:CondicionIVAReceptorId>${condicionReceptor}</ar:CondicionIVAReceptorId>
             ${bloqueIva}
           </ar:FECAEDetRequest>
         </ar:FeDetReq>
@@ -672,19 +716,32 @@ router.post('/facturar/:cliente_id', verificarClienteId, async (req, res) => {
 
     let cae = '', cae_vencimiento = null, resultadoOk = false, errorCAE = '';
 
+    // Diario durable ANTES de contactar ARCA, fuera de la transaccion contable.
+    // No contiene Token, Sign, certificado ni clave. Un resultado incierto nunca habilita otro CAE.
+    const datosIntento = { modo: config.modo, cuit: config.cuit, punto: pventa, tipo: cbteTipo,
+        numero: nuevoNum, fecha: fechaHoy, receptor_cuit, receptor_nombre, condicionReceptor,
+        neto: importe_neto, iva: importe_iva, total: importe_total, alicuotas,
+        emisor: fiscalEmisor.rows[0], items: detalleFiscal.rows.map(it => ({ cantidad: it.cantidad,
+          descripcion_libre: it.descripcion_libre, producto_descripcion: it.producto_descripcion,
+          precio_unitario: it.precio_unitario, subtotal: it.subtotal, iva_monto: it.iva_monto, alicuota_iva: it.alicuota_iva })) };
+    const intento = await pool.query(`INSERT INTO arca_logs (cliente_id,tipo,exitoso,request,response,error)
+      VALUES ($1,'factura_intento',false,$2,'','') RETURNING id`, [cliente_id,
+      `venta:${ventaId}|${JSON.stringify(datosIntento)}`]);
+    intentoId = intento.rows[0].id;
+
     try {
       const rCAE = await axios.post(wsfeUrl, soapCAE, { headers: { 'Content-Type': 'text/xml', 'SOAPAction': '' }, timeout: 15000 });
-      const pCAE = await xml2js.parseStringPromise(rCAE.data, { explicitArray: false });
-      const xmlStr = JSON.stringify(pCAE);
-      const mCAE = xmlStr.match(/"CAE"\s*:\s*"?(\d+)"?/);
-      const mVto = xmlStr.match(/"CAEFchVto"\s*:\s*"?(\d{8})"?/);
-      if (mCAE) { cae = mCAE[1]; resultadoOk = true; }
-      if (mVto) {
-        const v = mVto[1];
-        cae_vencimiento = `${v.slice(0,4)}-${v.slice(4,6)}-${v.slice(6,8)}`;
-      }
+      const fiscal = await controles.autorizacion(rCAE.data, nuevoNum, pventa, cbteTipo);
+      cae = fiscal.cae;
+      autorizado = true;
+      resultadoOk = true;
+      const v = fiscal.vencimiento;
+      cae_vencimiento = `${v.slice(0,4)}-${v.slice(4,6)}-${v.slice(6,8)}`;
+      await pool.query('UPDATE arca_logs SET exitoso=true,response=$1 WHERE id=$2 AND cliente_id=$3',
+        [JSON.stringify({ cae, cae_vencimiento }), intentoId, cliente_id]);
       await logARCA(cliente_id, 'fecaesolicitar', resultadoOk, 'Solicitud de CAE enviada', 'Respuesta de ARCA recibida', '');
     } catch (e) {
+      if (e.rechazoFiscal) await pool.query("UPDATE arca_logs SET response='rechazada' WHERE id=$1 AND cliente_id=$2", [intentoId, cliente_id]);
       errorCAE = e.message;
       await logARCA(cliente_id, 'fecaesolicitar', false, 'Solicitud de CAE enviada', '', e.message);
       throw new Error('Error obteniendo CAE de AFIP: ' + (e.message || 'Sin respuesta del servidor'));
@@ -692,51 +749,39 @@ router.post('/facturar/:cliente_id', verificarClienteId, async (req, res) => {
 
     if (!resultadoOk) throw new Error('ARCA no devolvió CAE; no se registró ningún comprobante');
 
-    const prefijos = { 1:'FA', 2:'NDA', 3:'NCA', 6:'FB', 7:'NDB', 8:'NCB', 11:'FC', 12:'NDC', 13:'NCC' };
-    const prefijo = prefijos[cbteTipo] || 'F';
-    const numero_completo = `${prefijo}-${String(pventa).padStart(4,'0')}-${String(nuevoNum).padStart(8,'0')}`;
-
-    // INSERT arca_comprobantes
-    const compRes = await pool.query(
-      `INSERT INTO arca_comprobantes
-         (cliente_id, venta_id, tipo_comprobante, numero_completo, punto_venta, numero,
-          receptor_cuit, receptor_nombre, receptor_cond_iva,
-          importe_neto, importe_iva, importe_total, cae, cae_vencimiento)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-       RETURNING id`,
-      [cliente_id, venta_id || null, String(cbteTipo), numero_completo, pventa, nuevoNum,
-       receptor_cuit, receptor_nombre, String(receptor_condicion_iva),
-       importe_neto, importe_iva, importe_total, cae,
-       cae_vencimiento || null]
-    );
-    const comp_id = compRes.rows[0].id;
-
-    // UPDATE ventas
-    if (venta_id) {
-      await pool.query(
-        `UPDATE ventas SET cae=$1, cae_vencimiento=$2, tipo_factura=$3, numero_arca=$4, facturado=true
-         WHERE id=$5`,
-        [cae, cae_vencimiento, String(cbteTipo), numero_completo, venta_id]
-      );
-    }
-
-    // INSERT libros_iva_ventas
-    const iva21  = alicuotas.filter(a => a.alicuota === 21).reduce((s, a) => s + a.iva, 0);
-    const iva105 = alicuotas.filter(a => a.alicuota === 10.5).reduce((s, a) => s + a.iva, 0);
-    await pool.query(
-      `INSERT INTO libros_iva_ventas
-         (cliente_id, comprobante_id, venta_id, tipo_comprobante, numero_completo,
-          cuit_receptor, nombre_receptor, importe_neto, importe_iva_21, importe_iva_105, importe_total, cae)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-      [cliente_id, comp_id, venta_id || null, String(cbteTipo), numero_completo,
-       receptor_cuit, receptor_nombre, impNetoGrav + impOpEx, iva21, iva105, importe_total, cae]
-    );
-
-    res.json({ ok: true, cae, numero_completo, tipo_factura: String(cbteTipo), vencimiento_cae: cae_vencimiento });
+    const resultado = await require('../../services/arcaConciliacion').guardarFactura(db,cliente_id,ventaId,intentoId,datosIntento,{ cae,cae_vencimiento });
+    await db.query('COMMIT');
+    res.json(resultado);
   } catch (err) {
+    if (db) await db.query('ROLLBACK').catch(() => {});
     console.error('arca facturar:', err.message);
     await logARCA(cliente_id, 'facturar', false, '', '', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: autorizado ? 'ARCA autorizo, pero el guardado quedo pendiente. No reintentar: requiere conciliacion.' : err.message });
+  } finally {
+    if (db) db.release();
+  }
+});
+
+// ─── POST /conciliar/:cliente_id/:venta_id — solo consulta, nunca solicita otro CAE ───
+router.post('/conciliar/:cliente_id/:venta_id', verificarClienteId, async (req,res) => {
+  try {
+    const { conciliarFactura } = require('../../services/arcaConciliacion');
+    const resultado = await conciliarFactura({ pool,obtenerToken,
+      consultar: async (config,token,datos) => {
+        const soap = `<?xml version="1.0" encoding="UTF-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ar="http://ar.gov.afip.dif.FEV1/">
+  <soap:Body><ar:FECompConsultar><ar:Auth><ar:Token>${token.token}</ar:Token><ar:Sign>${token.sign}</ar:Sign><ar:Cuit>${config.cuit}</ar:Cuit></ar:Auth>
+    <ar:FeCompConsReq><ar:CbteTipo>${datos.tipo}</ar:CbteTipo><ar:CbteNro>${datos.numero}</ar:CbteNro><ar:PtoVta>${datos.punto}</ar:PtoVta></ar:FeCompConsReq>
+  </ar:FECompConsultar></soap:Body>
+</soap:Envelope>`;
+        const r = await axios.post(config.modo === 'produccion' ? WSFE_PROD : WSFE_HOMO,soap,
+          { headers: { 'Content-Type': 'text/xml; charset=utf-8', SOAPAction: 'http://ar.gov.afip.dif.FEV1/FECompConsultar' },timeout: 15000 });
+        return r.data;
+      },
+    },req.params.cliente_id,req.params.venta_id);
+    res.json(resultado);
+  } catch (error) {
+    res.status(409).json({ error: error.message, requiere_revision: true });
   }
 });
 
@@ -814,22 +859,26 @@ router.get('/logs/:cliente_id', verificarClienteId, async (req, res) => {
 router.post('/comprobante/:cliente_id/:id/pdf', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, id } = req.params;
-    const r = await pool.query(`SELECT * FROM arca_comprobantes WHERE id=$1 AND cliente_id=$2`, [id, cliente_id]);
+    const r = await pool.query(`SELECT *,fecha_emision::text AS fecha_emision,cae_vencimiento::text AS cae_vencimiento
+      FROM arca_comprobantes WHERE id=$1 AND cliente_id=$2`, [id, cliente_id]);
     if (r.rows.length === 0) return res.status(404).json({ error: 'No encontrado' });
     const comp = r.rows[0];
-
-    const cfg = await pool.query(
-      `SELECT a.cuit, a.razon_social, a.condicion_iva, c.direccion_fiscal
-       FROM arca_configuracion a LEFT JOIN clientes_roberto c ON c.id=a.cliente_id
-       WHERE a.cliente_id=$1`, [cliente_id]);
-    if (!cfg.rows.length) return res.status(400).json({ error: 'Sin configuracion ARCA' });
-    const detalle = await pool.query(
-      `SELECT vi.*, p.descripcion AS producto_descripcion FROM ventas_items vi
-       JOIN ventas v ON v.id=vi.venta_id AND v.cliente_id=vi.cliente_id
-       LEFT JOIN productos_propios p ON p.id=vi.producto_id AND p.cliente_id=vi.cliente_id
-       WHERE vi.venta_id=$1 AND vi.cliente_id=$2 ORDER BY vi.orden ASC`, [comp.venta_id, cliente_id]);
+    if([3,8].includes(Number(comp.tipo_comprobante))) {
+      const snapshot=await require('../../services/arcaPdfNC').snapshotPdfNC(pool,cliente_id,comp);
+      const {pdf,qrUrl}=await require('../../services/arcaPdf').generarPdfArca(snapshot.comp,snapshot.emisor,snapshot.items);
+      return res.json({ok:true,pdf_base64:pdf.toString('base64'),qr_url:qrUrl,numero_completo:comp.numero_completo});
+    }
+    const diarios = await pool.query(`SELECT request,response FROM arca_logs WHERE cliente_id=$1
+      AND tipo='factura_intento' AND request LIKE $2 AND response LIKE 'registrada|%'`,
+      [cliente_id, `venta:${comp.venta_id}|%`]);
+    const snapshots = diarios.rows.map(row => ({
+      datos: JSON.parse(row.request.slice(row.request.indexOf('|') + 1)),
+      resultado: JSON.parse(row.response.slice('registrada|'.length)),
+    })).filter(row => row.resultado.cae === String(comp.cae));
+    if (snapshots.length !== 1) throw new Error('Sin detalle fiscal inmutable; requiere revision antes de generar PDF');
+    const snapshot = snapshots[0].datos;
     const { generarPdfArca } = require('../../services/arcaPdf');
-    const { pdf, qrUrl } = await generarPdfArca(comp, cfg.rows[0], detalle.rows);
+    const { pdf, qrUrl } = await generarPdfArca(comp, snapshot.emisor, snapshot.items);
     res.json({ ok: true, pdf_base64: pdf.toString('base64'), qr_url: qrUrl, numero_completo: comp.numero_completo });
   } catch (err) {
     console.error('arca pdf:', err.message);
@@ -973,20 +1022,60 @@ router.post('/padron/:cliente_id/consultar', verificarClienteId, async (req, res
 // ─── EMITIR NOTA DE CRÉDITO EN ARCA ──────────────────────────
 router.post('/emitir-nc/:cliente_id', verificarClienteId, async (req, res) => {
   const { cliente_id } = req.params;
+  let db, intentoId, autorizado = false;
   try {
-    const {
-      nota_id,
-      tipo_factura_origen,
-      numero_factura_origen,
-      punto_venta_origen,
-      receptor_cuit = '0',
-      receptor_nombre = 'Consumidor Final',
-      items = [],
-    } = req.body;
+    const { nota_id } = req.body;
 
-    const cfgRes = await pool.query('SELECT * FROM arca_configuracion WHERE cliente_id=$1', [cliente_id]);
+    if (!Number.isSafeInteger(Number(nota_id)) || Number(nota_id) <= 0) throw new Error('N/C invalida');
+    const controlesNC = require('../../services/arcaEmision');
+    db = await controlesNC.iniciarEmision(pool, cliente_id, `nc:${nota_id}`);
+    const cfgRes = await db.query('SELECT * FROM arca_configuracion WHERE cliente_id=$1 FOR UPDATE', [cliente_id]);
     if (cfgRes.rows.length === 0) throw new Error('Sin configuración ARCA');
     const config = cfgRes.rows[0];
+    if (!['produccion', 'homologacion'].includes(config.modo)) throw new Error('Modo ARCA invalido');
+    const notaRes = await db.query('SELECT * FROM notas_credito WHERE id=$1 AND cliente_id=$2 FOR UPDATE', [nota_id, cliente_id]);
+    const nota = notaRes.rows[0];
+    if (!nota || nota.tipo !== 'emitida' || nota.estado !== 'emitida' || nota.anulada) {
+      throw new Error('Se requiere una N/C comercial emitida, vigente y del cliente');
+    }
+    const diarios = await db.query(`SELECT response FROM arca_logs WHERE cliente_id=$1
+      AND tipo='nc_intento' AND request LIKE $2 AND response <> 'rechazada'`,
+      [cliente_id, `nc:${nota_id}|%`]);
+    if (diarios.rows.length) {
+      if (diarios.rows.length === 1 && diarios.rows[0].response?.startsWith('registrada|')) {
+        const resultado = await require('../../services/arcaConciliacionNC').registradaNC(db,cliente_id,diarios.rows[0].response);
+        await db.query('COMMIT');
+        return res.json(resultado);
+      }
+      throw new Error('N/C con autorizacion pendiente de conciliacion. No volver a emitir');
+    }
+    if (/^NC[ABC]-/.test(String(nota.numero_completo || ''))) {
+      throw new Error('N/C fiscal historica sin diario de control. Revisar antes de volver a emitir');
+    }
+    const origenRes = await db.query(`SELECT ac.*,v.comprador_cuit FROM arca_comprobantes ac
+      JOIN ventas v ON v.id=ac.venta_id AND v.cliente_id=ac.cliente_id
+      WHERE ac.cliente_id=$1 AND ac.venta_id=$2`, [cliente_id, nota.venta_id]);
+    if (origenRes.rows.length !== 1 || !['1','6'].includes(String(origenRes.rows[0].tipo_comprobante)) ||
+        !/^\d{14}$/.test(String(origenRes.rows[0].cae))) throw new Error('Factura de origen local invalida o ambigua');
+    const origen = origenRes.rows[0];
+    if (!Number.isSafeInteger(Number(origen.numero)) || Number(origen.numero)<1 ||
+        !Number.isInteger(Number(origen.punto_venta)) || Number(origen.punto_venta)<1 || Number(origen.punto_venta)>99999) {
+      throw new Error('Numeracion del comprobante de origen invalida');
+    }
+    const condicionReceptorNC = Number(origen.receptor_cond_iva);
+    if (![1,4,5,6,7,8,9,10,13,15,16].includes(condicionReceptorNC)) {
+      throw new Error('Condicion IVA del receptor original ausente o invalida; requiere revision');
+    }
+    const itemsRes = await db.query(`SELECT to_jsonb(i) AS item FROM notas_credito_items i
+      WHERE COALESCE(to_jsonb(i)->>'nota_id',to_jsonb(i)->>'nota_credito_id')=$1 FOR SHARE`, [String(nota_id)]);
+    const guardados = require('../../services/arcaNotaCredito').importesGuardados(nota, itemsRes.rows.map(r => r.item));
+    const emisorNC=(await db.query(`SELECT a.cuit,a.razon_social,a.condicion_iva,c.direccion_fiscal,c.ingresos_brutos,
+      to_jsonb(c)->>'inicio_actividades' AS inicio_actividades FROM arca_configuracion a
+      JOIN clientes_roberto c ON c.id=a.cliente_id WHERE a.cliente_id=$1`,[cliente_id])).rows[0];
+    const detalleNC=require('../../services/arcaPdfNC').detalleNC(itemsRes.rows.map(r=>r.item));
+    require('../../services/arcaPdf').validarEmisor(emisorNC||{});
+    require('../../services/arcaPdf').validarDetalle({importe_neto:guardados.importe_neto,importe_iva:guardados.impIVA},detalleNC);
+    if (Number(nota.total) > Number(origen.importe_total)) throw new Error('N/C supera el total de la factura de origen');
 
     let tokenData;
     try {
@@ -994,59 +1083,50 @@ router.post('/emitir-nc/:cliente_id', verificarClienteId, async (req, res) => {
     } catch (e) {
       throw new Error('Error WSAA: ' + e.message);
     }
-    await pool.query(
+    await db.query(
       'UPDATE arca_configuracion SET token_wsaa=$1, sign_wsaa=$2, token_expira=$3 WHERE cliente_id=$4',
       [tokenData.token, tokenData.sign, tokenData.expira ?? config.token_expira, cliente_id]
     );
 
-    const tipoOrigen = parseInt(tipo_factura_origen) || 6;
+    const tipoOrigen = Number(origen.tipo_comprobante);
     if (!config.emite_nota_credito) {
       throw new Error('Las notas de crédito no están habilitadas para este cliente');
     }
-    if (!Number.isInteger(Number(nota_id)) || Number(nota_id) <= 0 || !Array.isArray(items) || items.length === 0) {
-      throw new Error('La nota de crédito debe tener un registro e ítems válidos');
-    }
-    if (!Number.isInteger(Number(numero_factura_origen)) || Number(numero_factura_origen) <= 0) {
-      throw new Error('La nota de crédito debe estar asociada a un comprobante válido');
-    }
-    const notaRes = await pool.query(
-      `SELECT estado FROM notas_credito WHERE id=$1 AND cliente_id=$2`, [nota_id, cliente_id]
-    );
-    if (notaRes.rows.length === 0) throw new Error('La nota de crédito no existe o no pertenece a este cliente');
-    if (notaRes.rows[0].estado === 'emitida') throw new Error('Esta nota de crédito ya fue emitida');
 
     let cbteTipo;
     if ([1, 2, 3].includes(tipoOrigen))   cbteTipo = 3;
     else if ([6, 7, 8].includes(tipoOrigen)) cbteTipo = 8;
     else                                     cbteTipo = 13;
 
-    const pventa = parseInt(punto_venta_origen) || config.punto_venta || 1;
+    const pventa = Number(config.punto_venta);
+    if (!Number.isInteger(pventa) || pventa < 1 || pventa > 99999) throw new Error('Punto de venta invalido');
+    await controlesNC.bloquearSerie(db,config.modo,config.cuit,pventa,cbteTipo);
+    const pendientesNC = await db.query(`SELECT request FROM arca_logs WHERE cliente_id=$1
+      AND tipo='nc_intento' AND response <> 'rechazada' AND response NOT LIKE 'registrada|%'`, [cliente_id]);
+    for (const pendiente of pendientesNC.rows) {
+      const datos = JSON.parse(pendiente.request.slice(pendiente.request.indexOf('|')+1));
+      if (datos.modo===config.modo && datos.cuit===config.cuit && datos.punto===pventa && datos.tipo===cbteTipo) {
+        throw new Error('La serie N/C tiene un intento pendiente; requiere conciliacion');
+      }
+    }
     const wsfeUrl = config.modo === 'produccion' ? WSFE_PROD : WSFE_HOMO;
 
-    let alicuotas = [];
-    const alicMap = {};
-    for (const it of items) {
-      const base = it.cantidad * it.precio_unitario * (1 - (it.descuento_pct || 0) / 100);
-      const alic = parseFloat(it.alicuota_iva) || 21;
-      const iva  = base * (alic / 100);
-      if (!alicMap[alic]) alicMap[alic] = { alicuota: alic, base: 0, iva: 0 };
-      alicMap[alic].base += base;
-      alicMap[alic].iva  += iva;
-    }
-    alicuotas = Object.values(alicMap);
+    const alicuotas = guardados.alicuotas;
 
     const alicGravadas = alicuotas.filter(a => a.alicuota > 0);
     const alicExentas  = alicuotas.filter(a => a.alicuota === 0);
     const impNetoGrav  = alicGravadas.reduce((s, a) => s + a.base, 0);
-    const impIVA       = alicGravadas.reduce((s, a) => s + a.iva, 0);
+    const impIVA       = guardados.impIVA;
     const impOpEx      = alicExentas.reduce((s, a) => s + a.base, 0);
-    const importe_total = impNetoGrav + impIVA + impOpEx;
-    const importe_neto  = impNetoGrav + impOpEx;
+    const importe_total = guardados.importe_total;
+    const importe_neto  = guardados.importe_neto;
 
     const esNCA = cbteTipo === 3;
-    const tieneCuit = receptor_cuit && receptor_cuit !== '0' && receptor_cuit.replace(/-/g, '').length >= 11;
+    const cuitReceptor = String(origen.receptor_cuit || '').replace(/[^0-9]/g,'');
+    const tieneCuit = /^\d{11}$/.test(cuitReceptor);
     const docTipo = esNCA ? 80 : (tieneCuit ? 80 : 99);
-    const docNro  = docTipo === 80 ? receptor_cuit.replace(/-/g, '') : '0';
+    const docNro  = docTipo === 80 ? cuitReceptor : '0';
+    if (esNCA && !tieneCuit) throw new Error('N/C A requiere CUIT receptor');
 
     let ultimoNum = 0;
     const soapUltimo = `<?xml version="1.0" encoding="utf-8"?>
@@ -1062,9 +1142,7 @@ router.post('/emitir-nc/:cliente_id', verificarClienteId, async (req, res) => {
 
     try {
       const rU = await axios.post(wsfeUrl, soapUltimo, { headers: { 'Content-Type': 'text/xml', 'SOAPAction': '' }, timeout: 10000 });
-      const pU = await xml2js.parseStringPromise(rU.data, { explicitArray: false });
-      const m = JSON.stringify(pU).match(/"CbteNro"\s*:\s*"?(\d+)"?/);
-      if (m) ultimoNum = parseInt(m[1]);
+      ultimoNum = await controlesNC.ultimoAutorizado(rU.data);
     } catch (e) {
       throw new Error('No se pudo consultar el último comprobante autorizado: ' + e.message);
     }
@@ -1083,12 +1161,12 @@ router.post('/emitir-nc/:cliente_id', verificarClienteId, async (req, res) => {
     }
     const bloqueIva = alicGravadas.length > 0 ? `<ar:Iva>${alicIvaXml}\n            </ar:Iva>` : '';
 
-    const nroOrigen = parseInt(numero_factura_origen) || 0;
+    const nroOrigen = Number(origen.numero);
     const cbtesAsocXml = `
             <ar:CbtesAsoc>
               <ar:CbteAsoc>
                 <ar:Tipo>${tipoOrigen}</ar:Tipo>
-                <ar:PtoVta>${pventa}</ar:PtoVta>
+                <ar:PtoVta>${Number(origen.punto_venta)}</ar:PtoVta>
                 <ar:Nro>${nroOrigen}</ar:Nro>
               </ar:CbteAsoc>
             </ar:CbtesAsoc>`;
@@ -1116,6 +1194,7 @@ router.post('/emitir-nc/:cliente_id', verificarClienteId, async (req, res) => {
             <ar:ImpTrib>0.00</ar:ImpTrib>
             <ar:MonId>PES</ar:MonId>
             <ar:MonCotiz>1</ar:MonCotiz>
+            <ar:CondicionIVAReceptorId>${condicionReceptorNC}</ar:CondicionIVAReceptorId>
             ${cbtesAsocXml}
             ${bloqueIva}
           </ar:FECAEDetRequest>
@@ -1126,76 +1205,63 @@ router.post('/emitir-nc/:cliente_id', verificarClienteId, async (req, res) => {
 </soap:Envelope>`;
 
     let cae = '', cae_vencimiento = null, resultadoOk = false;
+    const datosNC = { modo:config.modo,cuit:config.cuit,punto:pventa,tipo:cbteTipo,numero:nuevoNum,
+      nota_id:Number(nota_id),fecha:fechaHoy,origen_id:origen.id,importes:guardados,
+      receptor_cuit:docNro,receptor_nombre:origen.receptor_nombre,condicionReceptor:condicionReceptorNC,
+      neto:importe_neto,iva:impIVA,total:importe_total,alicuotas,emisor:emisorNC,items:detalleNC,
+      comprobante_asociado:{tipo:Number(origen.tipo_comprobante),punto:Number(origen.punto_venta),numero:Number(origen.numero)} };
+    const intento = await pool.query(`INSERT INTO arca_logs (cliente_id,tipo,exitoso,request,response,error)
+      VALUES ($1,'nc_intento',false,$2,'','') RETURNING id`, [cliente_id,`nc:${nota_id}|${JSON.stringify(datosNC)}`]);
+    intentoId = intento.rows[0].id;
 
     try {
       const rCAE = await axios.post(wsfeUrl, soapCAE, { headers: { 'Content-Type': 'text/xml', 'SOAPAction': '' }, timeout: 15000 });
-      const pCAE = await xml2js.parseStringPromise(rCAE.data, { explicitArray: false });
-      const xmlStr = JSON.stringify(pCAE);
-      const mCAE = xmlStr.match(/"CAE"\s*:\s*"?(\d+)"?/);
-      const mVto = xmlStr.match(/"CAEFchVto"\s*:\s*"?(\d{8})"?/);
-      if (mCAE) { cae = mCAE[1]; resultadoOk = true; }
-      if (mVto) {
-        const v = mVto[1];
-        cae_vencimiento = `${v.slice(0,4)}-${v.slice(4,6)}-${v.slice(6,8)}`;
-      }
+      const fiscal = await controlesNC.autorizacion(rCAE.data,nuevoNum,pventa,cbteTipo);
+      cae = fiscal.cae; autorizado = true; resultadoOk = true;
+      const v = fiscal.vencimiento;
+      cae_vencimiento = `${v.slice(0,4)}-${v.slice(4,6)}-${v.slice(6,8)}`;
+      await pool.query('UPDATE arca_logs SET exitoso=true,response=$1 WHERE id=$2 AND cliente_id=$3',
+        [JSON.stringify({cae,cae_vencimiento}),intentoId,cliente_id]);
       await logARCA(cliente_id, 'emitir_nc', resultadoOk, 'Solicitud de nota de crédito enviada', 'Respuesta de ARCA recibida', '');
     } catch (e) {
+      if (e.rechazoFiscal) await pool.query("UPDATE arca_logs SET response='rechazada' WHERE id=$1 AND cliente_id=$2",[intentoId,cliente_id]);
       await logARCA(cliente_id, 'emitir_nc', false, 'Solicitud de nota de crédito enviada', '', e.message);
       throw new Error('Error obteniendo CAE de ARCA: ' + e.message);
     }
 
     if (!resultadoOk) throw new Error('ARCA no devolvió CAE');
 
-    const prefijos = { 3: 'NCA', 8: 'NCB', 13: 'NCC' };
-    const prefijo = prefijos[cbteTipo] || 'NC';
-    const numero_completo = `${prefijo}-${String(pventa).padStart(4, '0')}-${String(nuevoNum).padStart(8, '0')}`;
-
-    const compRes = await pool.query(
-      `INSERT INTO arca_comprobantes
-         (cliente_id, tipo_comprobante, numero_completo, punto_venta, numero,
-          receptor_cuit, receptor_nombre,
-          importe_neto, importe_iva, importe_total, cae, cae_vencimiento)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-       RETURNING id`,
-      [cliente_id, String(cbteTipo), numero_completo, pventa, nuevoNum,
-       receptor_cuit, receptor_nombre,
-       importe_neto, impIVA, importe_total, cae, cae_vencimiento || null]
-    );
-
-    const iva21  = alicuotas.filter(a => a.alicuota === 21).reduce((s, a) => s + a.iva, 0);
-    const iva105 = alicuotas.filter(a => a.alicuota === 10.5).reduce((s, a) => s + a.iva, 0);
-    await pool.query(
-      `INSERT INTO libros_iva_ventas
-         (cliente_id, comprobante_id, tipo_comprobante, numero_completo,
-          cuit_receptor, nombre_receptor, importe_neto, importe_iva_21, importe_iva_105, importe_total, cae)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-      [cliente_id, compRes.rows[0].id, String(cbteTipo), numero_completo,
-       receptor_cuit, receptor_nombre,
-       -(impNetoGrav + impOpEx), -iva21, -iva105, -importe_total, cae]
-    );
-
-    if (nota_id) {
-      await pool.query(
-        `UPDATE notas_credito SET
-           numero_completo=$1, estado='emitida',
-           tipo_comprobante_origen=$2, numero_comprobante_origen=$3,
-           actualizado_en=now()
-         WHERE id=$4 AND cliente_id=$5`,
-        [numero_completo, String(tipoOrigen), String(nroOrigen), nota_id, cliente_id]
-      );
-    }
-
-    res.json({
-      ok: true, cae, numero_completo,
-      tipo_nc: String(cbteTipo),
-      vencimiento_cae: cae_vencimiento,
-      importe_total: importe_total.toFixed(2),
-    });
+    const resultadoNC = await require('../../services/arcaConciliacionNC').guardarNC(db,cliente_id,intentoId,datosNC,{cae,cae_vencimiento});
+    await db.query('COMMIT');
+    res.json(resultadoNC);
   } catch (err) {
+    if (db) await db.query('ROLLBACK').catch(()=>{});
     console.error('arca emitir-nc:', err.message);
     await logARCA(cliente_id, 'emitir_nc', false, '', '', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(409).json({ error: autorizado ? 'ARCA autorizo la N/C, pero falta completar el guardado. No emitir otra: requiere conciliacion.' : err.message,
+      nota_comercial_guardada: true, requiere_revision: Boolean(intentoId) });
+  } finally {
+    if (db) db.release();
   }
+});
+
+// ─── CONCILIAR N/C: consulta un CAE existente, nunca solicita una nueva emision.
+router.post('/conciliar-nc/:cliente_id/:nota_id', verificarClienteId, async (req,res) => {
+  try {
+    const resultado = await require('../../services/arcaConciliacionNC').conciliarNC({pool,obtenerToken,
+      consultar:async(config,token,datos)=>{
+        const xml=`<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ar="http://ar.gov.afip.dif.FEV1/">
+<soap:Body><ar:FECompConsultar>
+<ar:Auth><ar:Token>${token.token}</ar:Token><ar:Sign>${token.sign}</ar:Sign><ar:Cuit>${config.cuit}</ar:Cuit></ar:Auth>
+<ar:FeCompConsReq><ar:CbteTipo>${datos.tipo}</ar:CbteTipo><ar:CbteNro>${datos.numero}</ar:CbteNro><ar:PtoVta>${datos.punto}</ar:PtoVta></ar:FeCompConsReq>
+</ar:FECompConsultar></soap:Body></soap:Envelope>`;
+        const respuesta=await axios.post(config.modo==='produccion'?WSFE_PROD:WSFE_HOMO,xml,
+          {headers:{'Content-Type':'text/xml; charset=utf-8',SOAPAction:'http://ar.gov.afip.dif.FEV1/FECompConsultar'},timeout:15000});
+        return respuesta.data;
+      }},req.params.cliente_id,req.params.nota_id);
+    res.json(resultado);
+  } catch(error) {res.status(409).json({error:error.message,requiere_revision:true});}
 });
 
 module.exports = router;
