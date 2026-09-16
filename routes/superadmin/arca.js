@@ -521,14 +521,15 @@ router.post('/facturar/:cliente_id', verificarClienteId, async (req, res) => {
       return res.json({ ok: true, ya_emitida: true, cae: comp.cae, numero_completo: comp.numero_completo,
         tipo_factura: comp.tipo_comprobante, vencimiento_cae: comp.cae_vencimiento });
     }
-    const anteriores = await db.query(`SELECT id FROM arca_logs WHERE cliente_id=$1
-      AND tipo='factura_intento' AND request LIKE $2 AND response <> 'rechazada' LIMIT 1`,
-      [cliente_id, `venta:${ventaId}|%`]);
-    if (anteriores.rows.length) throw new Error('Hay un intento fiscal pendiente. No reintentar: requiere conciliacion con ARCA');
     // Bloquear configuracion mientras se prepara y emite.
     const cfgRes = await db.query(`SELECT * FROM arca_configuracion WHERE cliente_id=$1 FOR UPDATE`, [cliente_id]);
     if (cfgRes.rows.length === 0) throw new Error('Sin configuración ARCA');
     const config = cfgRes.rows[0];
+    const anteriores = await db.query(`SELECT id FROM arca_logs WHERE cliente_id=$1
+      AND tipo='factura_intento' AND request::text LIKE $2
+      AND trim(both '"' from response::text) <> 'rechazada' LIMIT 1`,
+      [cliente_id, `%venta:${ventaId}|%`]);
+    if (anteriores.rows.length) throw new Error('Hay un intento fiscal pendiente. No reintentar: requiere conciliacion con ARCA');
 
     const cbteTipo = parseInt(tipo_factura, 10);
     if (!['produccion', 'homologacion'].includes(config.modo)) throw new Error('Modo ARCA invalido');
@@ -551,9 +552,11 @@ router.post('/facturar/:cliente_id', verificarClienteId, async (req, res) => {
         (punto_venta !== undefined && Number(punto_venta) !== pventa)) throw new Error('Punto de venta invalido o distinto de la configuracion');
     await controles.bloquearSerie(db, config.modo, config.cuit, pventa, cbteTipo);
     const pendientesSerie = await db.query(`SELECT request FROM arca_logs WHERE cliente_id=$1
-      AND tipo='factura_intento' AND response <> 'rechazada' AND response NOT LIKE 'registrada|%'`, [cliente_id]);
+      AND tipo='factura_intento' AND trim(both '"' from response::text) <> 'rechazada'
+      AND response::text NOT LIKE '%registrada|%'`, [cliente_id]);
     for (const row of pendientesSerie.rows) {
-      const previo = JSON.parse(row.request.slice(row.request.indexOf('|') + 1));
+      const requestPrevio = typeof row.request === 'string' ? row.request : JSON.stringify(row.request);
+      const previo = JSON.parse(requestPrevio.slice(requestPrevio.indexOf('|') + 1).replace(/"$/, ''));
       if (previo.modo === config.modo && previo.cuit === config.cuit && previo.punto === pventa && previo.tipo === cbteTipo) {
         throw new Error('El punto y tipo tienen un intento pendiente; requiere conciliacion antes de emitir otra factura');
       }
@@ -869,8 +872,8 @@ router.post('/comprobante/:cliente_id/:id/pdf', verificarClienteId, async (req, 
       return res.json({ok:true,pdf_base64:pdf.toString('base64'),qr_url:qrUrl,numero_completo:comp.numero_completo});
     }
     const diarios = await pool.query(`SELECT request,response FROM arca_logs WHERE cliente_id=$1
-      AND tipo='factura_intento' AND request LIKE $2 AND response LIKE 'registrada|%'`,
-      [cliente_id, `venta:${comp.venta_id}|%`]);
+      AND tipo='factura_intento' AND request::text LIKE $2 AND response::text LIKE '%registrada|%'`,
+      [cliente_id, `%venta:${comp.venta_id}|%`]);
     const snapshots = diarios.rows.map(row => ({
       datos: JSON.parse(row.request.slice(row.request.indexOf('|') + 1)),
       resultado: JSON.parse(row.response.slice('registrada|'.length)),
