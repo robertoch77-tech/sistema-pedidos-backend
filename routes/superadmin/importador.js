@@ -661,15 +661,32 @@ router.get('/productos/:cliente_id', verificarClienteId, async (req, res) => {
       limit       = '25',
     } = req.query;
 
-    const pageNum  = Math.max(1, parseInt(page, 10) || 1);
-    const limitNum = Math.min(5000, Math.max(1, parseInt(limit, 10) || 25));
+    const buscarTexto = String(buscar).trim();
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limiteSolicitado = Math.max(1, parseInt(limit, 10) || 25);
+    const limitNum = buscarTexto
+      ? Math.min(50, limiteSolicitado)
+      : Math.min(5000, limiteSolicitado);
     const offset   = (pageNum - 1) * limitNum;
+
+    // La ruta también alimenta el listado general sin búsqueda. Solo evitamos
+    // consultar PostgreSQL cuando el usuario empezó a buscar pero todavía no
+    // alcanzó el mínimo de dos caracteres.
+    if (buscarTexto.length === 1) {
+      return res.json({
+        productos: [],
+        total: 0,
+        pagina: pageNum,
+        paginas: 1,
+        por_pagina: limitNum,
+      });
+    }
 
     const values  = [cliente_id];
     const where   = ['cliente_id = $1'];
 
-    if (buscar.trim()) {
-      const { condition, newIdx } = buildSearchConditions(buscar, values.length + 1, values);
+    if (buscarTexto) {
+      const { condition } = buildSearchConditions(buscarTexto, values.length + 1, values);
       if (condition) where.push(condition);
     }
     if (proveedor_id) {
@@ -706,6 +723,17 @@ router.get('/productos/:cliente_id', verificarClienteId, async (req, res) => {
     }
 
     const whereStr = where.join(' AND ');
+    const priorizarPrefijo = buscarTexto.length >= 2;
+    const dataValues = priorizarPrefijo ? [...values, `${buscarTexto}%`] : values;
+    const orderBy = priorizarPrefijo
+      ? `CASE
+           WHEN descripcion ILIKE $${dataValues.length} OR codigo ILIKE $${dataValues.length} THEN 0
+           ELSE 1
+         END,
+         descripcion ASC,
+         codigo ASC,
+         id ASC`
+      : 'descripcion ASC';
 
     const [dataRes, countRes] = await Promise.all([
       pool.query(
@@ -726,9 +754,9 @@ router.get('/productos/:cliente_id', verificarClienteId, async (req, res) => {
                 activo, destacado, COALESCE(visible_catalogo, true) AS visible_catalogo, creado_en, modificado_en
          FROM productos_propios
          WHERE ${whereStr}
-         ORDER BY descripcion ASC
-         LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
-        [...values, limitNum, offset]
+         ORDER BY ${orderBy}
+         LIMIT $${dataValues.length + 1} OFFSET $${dataValues.length + 2}`,
+        [...dataValues, limitNum, offset]
       ),
       pool.query(
         `SELECT COUNT(*) FROM productos_propios WHERE ${whereStr}`,
