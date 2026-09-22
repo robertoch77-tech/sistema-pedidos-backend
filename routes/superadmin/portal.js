@@ -141,14 +141,16 @@ router.get('/dashboard/:cliente_id', verificarTokenPortal, async (req, res) => {
     ),
     safeQuery(
       `SELECT COUNT(*)::int AS cantidad
-       FROM productos_roberto
-       WHERE cliente_id = $1 AND activo = true`,
+       FROM productos_propios
+       WHERE cliente_id = $1 AND activo IS NOT FALSE`,
       [cliente_id]
     ),
     safeQuery(
       `SELECT COUNT(*)::int AS cantidad
-       FROM stock_roberto
-       WHERE cliente_id = $1 AND cantidad <= stock_minimo`,
+       FROM productos_propios
+       WHERE cliente_id = $1 AND activo IS NOT FALSE
+         AND stock_minimo > 0 AND stock_actual > 0
+         AND stock_actual <= stock_minimo`,
       [cliente_id]
     ),
     safeQuery(
