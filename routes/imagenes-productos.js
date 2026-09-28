@@ -1,6 +1,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const dns = require('dns').promises;
+const http = require('http');
 const https = require('https');
 const net = require('net');
 const axios = require('axios');
@@ -65,8 +66,12 @@ function ipv4Publica(value) {
 async function descargarImagenPublica(urlTexto) {
   let url;
   try { url = new URL(urlTexto); } catch (_) { throw new Error('La imagen de origen no tiene una dirección válida.'); }
-  if (url.protocol !== 'https:' || url.username || url.password || url.port && url.port !== '443') {
-    throw new Error('Por seguridad, solo se procesan imágenes HTTPS públicas.');
+  const protocoloPermitido = url.protocol === 'https:' || url.protocol === 'http:';
+  const puertoPermitido = !url.port ||
+    (url.protocol === 'https:' && url.port === '443') ||
+    (url.protocol === 'http:' && url.port === '80');
+  if (!protocoloPermitido || !puertoPermitido || url.username || url.password) {
+    throw new Error('url_no_segura');
   }
   const direcciones = await dns.lookup(url.hostname, { family: 4, all: true, verbatim: true });
   const ipv4 = direcciones.filter(x => net.isIPv4(x.address));
@@ -74,10 +79,12 @@ async function descargarImagenPublica(urlTexto) {
     throw new Error('No se pudo validar el servidor de la imagen como público.');
   }
   const address = ipv4[0].address;
-  const agent = new https.Agent({ lookup: (_host, opts, cb) => opts && opts.all ? cb(null, [{ address, family: 4 }]) : cb(null, address, 4) });
+  const lookup = (_host, opts, cb) => opts && opts.all ? cb(null, [{ address, family: 4 }]) : cb(null, address, 4);
   const response = await axios.get(url.href, {
     proxy: false, responseType: 'arraybuffer', timeout: 15000, maxRedirects: 0,
-    maxContentLength: MAX_IMAGEN_BYTES, httpsAgent: agent,
+    maxContentLength: MAX_IMAGEN_BYTES,
+    httpAgent: url.protocol === 'http:' ? new http.Agent({ lookup }) : undefined,
+    httpsAgent: url.protocol === 'https:' ? new https.Agent({ lookup }) : undefined,
     validateStatus: status => status >= 200 && status < 300,
   });
   const mime = String(response.headers['content-type'] || '').split(';')[0].toLowerCase();
@@ -116,8 +123,8 @@ function codigoDiagnosticoSeguro(error) {
     [/producto_no_encontrado/i, 'producto_no_encontrado'],
     [/sin_original/i, 'producto_sin_imagen'],
     [/No hay conexión de catálogo/i, 'catalogo_sin_conexion'],
+    [/url_no_segura/i, 'url_no_segura'],
     [/dirección válida/i, 'url_invalida'],
-    [/solo se procesan imágenes HTTPS/i, 'url_no_https'],
     [/validar el servidor.*público/i, 'servidor_no_publico'],
     [/Formato no compatible/i, 'formato_no_compatible'],
     [/supera el límite de 8 MB/i, 'imagen_supera_8mb'],
