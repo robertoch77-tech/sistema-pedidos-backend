@@ -110,6 +110,26 @@ async function consultarProducto(mayoristaId, productoId) {
   return result.rows[0] || null;
 }
 
+function codigoDiagnosticoSeguro(error) {
+  const mensaje = String(error?.message || '');
+  const conocidos = [
+    [/producto_no_encontrado/i, 'producto_no_encontrado'],
+    [/sin_original/i, 'producto_sin_imagen'],
+    [/No hay conexión de catálogo/i, 'catalogo_sin_conexion'],
+    [/dirección válida/i, 'url_invalida'],
+    [/solo se procesan imágenes HTTPS/i, 'url_no_https'],
+    [/validar el servidor.*público/i, 'servidor_no_publico'],
+    [/Formato no compatible/i, 'formato_no_compatible'],
+    [/supera el límite de 8 MB/i, 'imagen_supera_8mb'],
+    [/respuesta_proveedor_invalida/i, 'respuesta_proveedor_invalida'],
+  ];
+  const coincidencia = conocidos.find(([patron]) => patron.test(mensaje));
+  if (coincidencia) return coincidencia[1];
+  if (typeof error?.code === 'string' && /^[A-Z0-9_]{1,40}$/.test(error.code)) return error.code;
+  if (Number.isInteger(error?.response?.status)) return 'http_' + error.response.status;
+  return 'no_clasificado';
+}
+
 const ESTADOS_COPIA = "('procesando','pendiente','aprobada','revisar','eliminando')";
 const TRANSFORMACION = 'c_limit,w_1200,h_1200/e_contrast:10/e_sharpen:60';
 const asyncRoute = handler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
@@ -181,13 +201,18 @@ router.post('/:mayorista_id/:producto_id/procesar', asyncRoute(async (req, res) 
   } finally { client.release(); }
   let uploadIniciado = false;
   let uploadConfirmado = false;
+  let etapaFallida = 'consulta_producto';
   try {
     const producto = await consultarProducto(mayoristaId, productoId);
-    if (!producto?.imagen_producto) throw new Error('sin_original');
+    if (!producto) throw new Error('producto_no_encontrado');
+    if (!producto.imagen_producto) throw new Error('sin_original');
+    etapaFallida = 'guardar_referencia_original';
     await pool.query(
       'UPDATE ivan_imagen_producto_procesos SET codigo_producto=$1, descripcion=$2, imagen_original_url=$3 WHERE id=$4 AND mayorista_id=$5',
       [producto.cod_producto, producto.des_producto, producto.imagen_producto, proceso, mayoristaId]);
+    etapaFallida = 'descargar_validar_original';
     const file = await descargarImagenPublica(producto.imagen_producto);
+    etapaFallida = 'cloudinary_upload';
     uploadIniciado = true;
     const asset = await cloudinaryPost('image/upload', {
       file, public_id: publicId, overwrite: 'false', transformation: TRANSFORMACION,
@@ -197,16 +222,14 @@ router.post('/:mayorista_id/:producto_id/procesar', asyncRoute(async (req, res) 
         !asset.secure_url.startsWith('https://res.cloudinary.com/' + config.cloud + '/image/upload/')) {
       throw new Error('respuesta_proveedor_invalida');
     }
+    etapaFallida = 'guardar_resultado';
     await pool.query(
       "UPDATE ivan_imagen_producto_procesos SET imagen_mejorada_url=$1, estado='pendiente', actualizado_en=now()" +
       " WHERE id=$2 AND mayorista_id=$3 AND estado='procesando'", [asset.secure_url, proceso, mayoristaId]);
     return res.status(201).json({ id: proceso, mensaje: 'Vista previa lista. Aprobala para usar la copia en el catálogo.' });
   } catch (error) {
-    const etapa = uploadIniciado ? 'cloudinary' : 'antes_upload';
-    const codigo = typeof error?.code === 'string' && /^[A-Z0-9_]{1,40}$/.test(error.code)
-      ? error.code
-      : error?.response?.status ? 'http_' + error.response.status : 'no_clasificado';
-    console.error('[IVAN_IMAGENES] Falló el procesamiento', { etapa, codigo });
+    const etapa = uploadIniciado ? 'cloudinary_upload' : etapaFallida;
+    console.error('[IVAN_IMAGENES] Falló el procesamiento', { etapa, codigo: codigoDiagnosticoSeguro(error) });
     let estado = uploadIniciado ? 'revisar' : 'error';
     if (uploadConfirmado) {
       try {
