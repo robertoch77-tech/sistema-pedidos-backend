@@ -31,9 +31,19 @@ async function validarMayorista(req, res, next) {
 }
 
 function cloudinaryConfig() {
-  const cloud = process.env.CLOUDINARY_CLOUD_NAME;
-  const key = process.env.CLOUDINARY_API_KEY;
-  const secret = process.env.CLOUDINARY_API_SECRET;
+  let cloud = process.env.CLOUDINARY_CLOUD_NAME;
+  let key = process.env.CLOUDINARY_API_KEY;
+  let secret = process.env.CLOUDINARY_API_SECRET;
+  // Render integrations commonly provide one CLOUDINARY_URL instead of three vars.
+  if ((!cloud || !key || !secret) && process.env.CLOUDINARY_URL) {
+    try {
+      const parsed = new URL(process.env.CLOUDINARY_URL);
+      if (parsed.protocol !== 'cloudinary:' || !parsed.hostname || !parsed.username || !parsed.password) return null;
+      cloud ||= parsed.hostname;
+      key ||= decodeURIComponent(parsed.username);
+      secret ||= decodeURIComponent(parsed.password);
+    } catch (_) { return null; }
+  }
   if (!cloud || !key || !secret) return null;
   return { cloud, key, secret };
 }
