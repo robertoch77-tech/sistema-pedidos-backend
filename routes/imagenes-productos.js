@@ -31,13 +31,13 @@ async function validarMayorista(req, res, next) {
 }
 
 function cloudinaryConfig() {
-  let cloud = process.env.CLOUDINARY_CLOUD_NAME;
-  let key = process.env.CLOUDINARY_API_KEY;
-  let secret = process.env.CLOUDINARY_API_SECRET;
-  // Render integrations commonly provide one CLOUDINARY_URL instead of three vars.
-  if ((!cloud || !key || !secret) && process.env.CLOUDINARY_URL) {
+  // Iván-only variables: never reuse generic Cloudinary settings from shared services.
+  let cloud = process.env.IVAN_CLOUDINARY_CLOUD_NAME;
+  let key = process.env.IVAN_CLOUDINARY_API_KEY;
+  let secret = process.env.IVAN_CLOUDINARY_API_SECRET;
+  if ((!cloud || !key || !secret) && process.env.IVAN_CLOUDINARY_URL) {
     try {
-      const parsed = new URL(process.env.CLOUDINARY_URL);
+      const parsed = new URL(process.env.IVAN_CLOUDINARY_URL);
       if (parsed.protocol !== 'cloudinary:' || !parsed.hostname || !parsed.username || !parsed.password) return null;
       cloud ||= parsed.hostname;
       key ||= decodeURIComponent(parsed.username);
