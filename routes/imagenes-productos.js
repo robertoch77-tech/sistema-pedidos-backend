@@ -201,7 +201,12 @@ router.post('/:mayorista_id/:producto_id/procesar', asyncRoute(async (req, res) 
       "UPDATE ivan_imagen_producto_procesos SET imagen_mejorada_url=$1, estado='pendiente', actualizado_en=now()" +
       " WHERE id=$2 AND mayorista_id=$3 AND estado='procesando'", [asset.secure_url, proceso, mayoristaId]);
     return res.status(201).json({ id: proceso, mensaje: 'Vista previa lista. Aprobala para usar la copia en el catálogo.' });
-  } catch (_) {
+  } catch (error) {
+    const etapa = uploadIniciado ? 'cloudinary' : 'antes_upload';
+    const codigo = typeof error?.code === 'string' && /^[A-Z0-9_]{1,40}$/.test(error.code)
+      ? error.code
+      : error?.response?.status ? 'http_' + error.response.status : 'no_clasificado';
+    console.error('[IVAN_IMAGENES] Falló el procesamiento', { etapa, codigo });
     let estado = uploadIniciado ? 'revisar' : 'error';
     if (uploadConfirmado) {
       try {
