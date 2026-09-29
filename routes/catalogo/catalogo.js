@@ -49,6 +49,8 @@ async function clienteYConfig(codigo) {
   const r = await pool.query(
     `SELECT c.id AS cliente_id, c.nombre_comercial, c.codigo_acceso,
             m.config_habilitada,
+            m.tipo_fuente,
+            CASE WHEN m.tipo_fuente IS DISTINCT FROM 'roberto' THEN m.logo_url ELSE NULL END AS logo_mayorista_url,
             cc.activo, cc.tipo, cc.mostrar_stock, cc.whatsapp, cc.banners,
             cc.texto_bienvenida, cc.mensaje_cierre, cc.modo_catalogo
      FROM clientes_roberto c
@@ -331,12 +333,19 @@ router.get('/:codigo/manifest.json', async (req, res) => {
       if (cfg.rows[0]) logo_url = cfg.rows[0].logo_url || '';
     } catch { /* config_negocio puede no existir aún */ }
 
+    const esRoberto = row.tipo_fuente === 'roberto';
+    const logoMayorista = esRoberto ? '' : (row.logo_mayorista_url || '');
+    const logoExistenteRoberto = esRoberto ? logo_url : '';
     const tipo      = row.tipo || 'productos';
     const startPath = tipo === 'autos' ? 'autos' : 'productos';
     const nombre    = row.nombre_comercial || 'Catálogo';
     const shortName = nombre.slice(0, 12);
-    const iconSrc192 = logo_url || '/logo192.png';
-    const iconSrc512 = logo_url || '/logo512.png';
+    const iconSrc192 = logoMayorista
+      ? iconoCloudinaryCuadrado(logoMayorista, 192)
+      : (logoExistenteRoberto || (esRoberto ? '/logo192.png' : '/logo-ivan-192.png'));
+    const iconSrc512 = logoMayorista
+      ? iconoCloudinaryCuadrado(logoMayorista, 512)
+      : (logoExistenteRoberto || (esRoberto ? '/logo512.png' : '/logo-ivan-512.png'));
 
     res.setHeader('Content-Type', 'application/manifest+json');
     res.json({
@@ -358,5 +367,15 @@ router.get('/:codigo/manifest.json', async (req, res) => {
     res.status(500).json({ error: 'Error del servidor' });
   }
 });
+
+function iconoCloudinaryCuadrado(url, size) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname !== 'res.cloudinary.com') return url;
+    return url.replace('/image/upload/', `/image/upload/c_pad,b_white,w_${size},h_${size},f_png/`);
+  } catch {
+    return url;
+  }
+}
 
 module.exports = router;
