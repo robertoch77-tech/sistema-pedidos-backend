@@ -196,6 +196,7 @@ app.get('/api/imagen', (req, res) => {
 // Rutas
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/mayoristas', require('./routes/mayoristas'));
+app.use('/api/marca-mayorista', require('./routes/marca-mayorista'));
 app.use('/api/clientes', require('./routes/clientes'));
 app.use('/api/productos', require('./routes/productos'));
 app.use('/api/perfil-presupuesto', require('./routes/perfil-presupuesto'));
