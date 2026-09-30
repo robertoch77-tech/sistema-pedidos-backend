@@ -147,6 +147,19 @@ async function asegurarTablas() {
       )
     `);
     await pool.query(`
+      CREATE TABLE IF NOT EXISTS importaciones_v2_operaciones (
+        id              UUID PRIMARY KEY,
+        cliente_id      BIGINT NOT NULL,
+        proveedor       TEXT,
+        estado          TEXT NOT NULL DEFAULT 'en_curso',
+        filas_evaluadas INT NOT NULL DEFAULT 0,
+        resultado       JSONB,
+        error           TEXT,
+        creado_en       TIMESTAMPTZ NOT NULL DEFAULT now(),
+        actualizado_en TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS importaciones_detalle (
         id                   BIGSERIAL PRIMARY KEY,
         importacion_id       BIGINT NOT NULL,
@@ -1830,10 +1843,58 @@ router.post('/analizar-v2', upload.single('archivo'), async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // POST /importar-v2  — importar con selección de hojas
 // ═══════════════════════════════════════════════════════════════
+const OPERACION_IMPORTACION_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function estadoOperacionImportacion(row) {
+  const sinConfirmacion = row.estado === 'en_curso' &&
+    Date.now() - new Date(row.actualizado_en).getTime() > 15 * 60 * 1000;
+  return {
+    operacion_id: row.id,
+    estado: sinConfirmacion ? 'sin_confirmacion' : row.estado,
+    filas_evaluadas: row.filas_evaluadas,
+    resultado: row.resultado,
+    mensaje: row.error,
+  };
+}
+
+function responderOperacionExistente(res, row) {
+  const estado = estadoOperacionImportacion(row);
+  if (row.estado === 'completada') return res.json({ ...row.resultado, operacion_id: row.id, estado: 'completada' });
+  if (row.estado === 'fallida') return res.status(409).json(estado);
+  return res.status(202).json(estado);
+}
+
+router.get('/importar-v2/estado/:cliente_id/:operacion_id', verificarClienteId, async (req, res) => {
+  try {
+    const { cliente_id, operacion_id } = req.params;
+    if (!OPERACION_IMPORTACION_RE.test(operacion_id)) return res.status(400).json({ mensaje: 'ID de importacion invalido' });
+    const op = await pool.query(
+      'SELECT id, estado, filas_evaluadas, resultado, error, actualizado_en FROM importaciones_v2_operaciones WHERE id=$1 AND cliente_id=$2',
+      [operacion_id, cliente_id]
+    );
+    if (!op.rows[0]) return res.status(404).json({ mensaje: 'Operacion no encontrada' });
+    return res.json(estadoOperacionImportacion(op.rows[0]));
+  } catch (err) {
+    console.error('GET /importar-v2/estado error:', err.message);
+    return res.status(500).json({ mensaje: 'No se pudo consultar la importacion' });
+  }
+});
 router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next(); }, upload.single('archivo'), verificarClienteIdBody, async (req, res) => {
   const client = await pool.connect();
   let tempEntrada = null;
+  let operacionRegistrada = false;
+  let operacionConfirmada = false;
   try {
+    const { cliente_id, operacion_id } = req.body;
+    if (!OPERACION_IMPORTACION_RE.test(String(operacion_id || ''))) {
+      return res.status(400).json({ mensaje: 'ID de importacion invalido' });
+    }
+    const anterior = await pool.query(
+      'SELECT id, estado, filas_evaluadas, resultado, error, actualizado_en FROM importaciones_v2_operaciones WHERE id=$1 AND cliente_id=$2',
+      [operacion_id, cliente_id]
+    );
+    if (anterior.rows[0]) return responderOperacionExistente(res, anterior.rows[0]);
+
     // Aceptar archivo subido O temp_id del análisis previo
     let fileBuffer;
     if (req.file) {
@@ -1853,7 +1914,7 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
       fileBuffer = tmp.buffer;
     }
 
-    const { cliente_id, proveedor } = req.body;
+    const { proveedor } = req.body;
     const cfg = typeof req.body.configuracion === 'string'
       ? JSON.parse(req.body.configuracion) : (req.body.configuracion || {});
     const { hojas_seleccionadas = [], mapeo = {}, marca_defecto, rubro_defecto } = cfg;
@@ -1897,6 +1958,21 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
         return res.status(409).json({ mensaje: 'El reintento contiene filas que no fallaron en la ejecución anterior' });
       }
     }
+
+    const creada = await pool.query(
+      `INSERT INTO importaciones_v2_operaciones (id, cliente_id, proveedor, estado)
+       VALUES ($1,$2,$3,'en_curso') ON CONFLICT (id) DO NOTHING RETURNING id`,
+      [operacion_id, cliente_id, proveedor || null]
+    );
+    if (!creada.rowCount) {
+      const existente = await pool.query(
+        'SELECT id, estado, filas_evaluadas, resultado, error, actualizado_en FROM importaciones_v2_operaciones WHERE id=$1 AND cliente_id=$2',
+        [operacion_id, cliente_id]
+      );
+      if (!existente.rows[0]) return res.status(409).json({ mensaje: 'ID de importacion ya utilizado' });
+      return responderOperacionExistente(res, existente.rows[0]);
+    }
+    operacionRegistrada = true;
 
     let totalSolicitados = 0, totalNuevos = 0, totalActualizados = 0, totalOmitidos = 0, totalFallidos = 0;
     let filasConPerfilAplicado = 0;
@@ -2096,6 +2172,11 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
             console.error(`POST /importar-v2 fila ${rowId}:`, errFila.message);
           }
         }
+        await pool.query(
+          `UPDATE importaciones_v2_operaciones SET filas_evaluadas=$3, actualizado_en=now()
+           WHERE id=$1 AND cliente_id=$2 AND estado='en_curso'`,
+          [operacion_id, cliente_id, totalSolicitados]
+        );
       }
       totalNuevos += nuevos; totalActualizados += actualizados;
       porHoja.push({ hoja: hojaName, solicitados, nuevos, actualizados, omitidos, fallidos, errores: omitidos + fallidos });
@@ -2114,23 +2195,37 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
         [cliente_id, proveedor_id, totalNuevos, totalNuevos + totalActualizados, totalOmitidos + totalFallidos]
       );
     }
-    await client.query('COMMIT');
-    if (tempEntrada) {
-      filasExitosas.forEach(id => tempEntrada.procesadas.add(id));
-      if (soloFilas) soloFilas.forEach(id => tempEntrada.reintentables.delete(id));
-      filasFallidas.forEach(id => tempEntrada.reintentables.add(id));
-    }
-    res.json({ ok: true, importados: totalNuevos + totalActualizados, nuevos: totalNuevos,
+    const resultado = { ok: true, importados: totalNuevos + totalActualizados, nuevos: totalNuevos,
       actualizados: totalActualizados, errores: totalOmitidos + totalFallidos,
       solicitados: totalSolicitados, omitidos: totalOmitidos, fallidos: totalFallidos,
       total: totalSolicitados, por_hoja: porHoja, detalle,
       filas_reintentables: filasFallidas, ausentes: ausentes.length, ausentes_detalle: ausentes,
       procesados, conflictos_perfiles: conflictosPerfiles, alcance_importacion: alcance,
-      perfiles_por_fila: { proveedor: proveedor || '', excepciones_aplicadas: filasConPerfilAplicado } });
+      perfiles_por_fila: { proveedor: proveedor || '', excepciones_aplicadas: filasConPerfilAplicado } };
+    await client.query(
+      `UPDATE importaciones_v2_operaciones SET estado='completada', resultado=$3::jsonb,
+       filas_evaluadas=$4, error=NULL, actualizado_en=now() WHERE id=$1 AND cliente_id=$2`,
+      [operacion_id, cliente_id, JSON.stringify(resultado), totalSolicitados]
+    );
+    await client.query('COMMIT');
+    operacionConfirmada = true;
+    if (tempEntrada) {
+      filasExitosas.forEach(id => tempEntrada.procesadas.add(id));
+      if (soloFilas) soloFilas.forEach(id => tempEntrada.reintentables.delete(id));
+      filasFallidas.forEach(id => tempEntrada.reintentables.add(id));
+    }
+    if (!res.destroyed) res.json({ ...resultado, operacion_id, estado: 'completada' });
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
+    if (!operacionConfirmada) await client.query('ROLLBACK').catch(() => {});
+    if (operacionRegistrada && !operacionConfirmada) {
+      await pool.query(
+        `UPDATE importaciones_v2_operaciones SET estado='fallida', error=$3, actualizado_en=now()
+         WHERE id=$1 AND cliente_id=$2 AND estado='en_curso'`,
+        [req.body.operacion_id, req.body.cliente_id, 'La importacion fallo; no se confirmaron cambios de esta operacion']
+      ).catch(() => {});
+    }
     console.error('POST /importar-v2 error:', err.message);
-    res.status(500).json({ mensaje: 'Error al importar' });
+    if (!res.destroyed) res.status(500).json({ mensaje: 'Error al importar', operacion_id: req.body.operacion_id });
   } finally {
     if (tempEntrada) tempEntrada.enProceso = false;
     client.release();
