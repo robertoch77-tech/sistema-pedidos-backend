@@ -70,4 +70,30 @@ function parseNumeroImportacion(input) {
     : resultado('invalido', original, null, 'No se pudo interpretar el número');
 }
 
-module.exports = { parseNumeroImportacion };
+// Los porcentajes usan coma o punto decimal, nunca separadores de miles.
+// Sin %: solo se escala una fraccion cuando el formato Excel marca la celda como porcentaje.
+// Con %: el valor ya esta expresado en puntos porcentuales (0,5 % = 0,5).
+function parsePorcentajeImportacion(input, celdaExcel = null) {
+  const original = input === undefined || input === null ? '' : String(input);
+  const texto = original.trim();
+  if (!texto) return resultado('vacio', original, null, 'Celda vacía');
+
+  const explicito = texto.endsWith('%');
+  const numero = explicito ? texto.slice(0, -1).trim() : texto;
+  if (typeof input !== 'number' && !/^[+-]?\d+(?:[.,]\d+)?$/.test(numero)) {
+    return resultado('invalido', original, null, 'Formato porcentual inválido');
+  }
+
+  const valor = typeof input === 'number' ? input : Number(numero.replace(',', '.'));
+  if (!Number.isFinite(valor)) {
+    return resultado('invalido', original, null, 'El número no es finito');
+  }
+
+  const formatoPorcentual = typeof celdaExcel?.z === 'string' && celdaExcel.z.includes('%');
+  const porcentaje = !explicito && formatoPorcentual && typeof celdaExcel.v === 'number'
+    ? celdaExcel.v * 100
+    : valor;
+  return resultado('valido', original, porcentaje);
+}
+
+module.exports = { parseNumeroImportacion, parsePorcentajeImportacion };

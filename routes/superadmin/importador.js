@@ -7,7 +7,7 @@ const pool     = require('../../db');
 const { verificarCualquierToken, verificarClienteId, verificarClienteIdBody } = require('./authMiddleware');
 const { registrarCambios, registrarEvento } = require('./historial-helper');
 const { buildSearchConditions } = require('./search-helper');
-const { parseNumeroImportacion } = require('../../utils/parseNumeroImportacion');
+const { parseNumeroImportacion, parsePorcentajeImportacion } = require('../../utils/parseNumeroImportacion');
 
 // ── Multer en memoria ─────────────────────────────────────────
 const upload = multer({
@@ -68,6 +68,8 @@ async function asegurarTablas() {
       ['proveedores_mapeo_excel', 'proveedor_nombre', 'TEXT'],
       ['proveedores_mapeo_excel', 'fila_encabezado',  'INT DEFAULT 0'],
       ['proveedores_mapeo_excel', 'actualizado_en',   'TIMESTAMPTZ DEFAULT now()'],
+      ['proveedores_mapeo_excel', 'perfiles_por_rubro', "JSONB NOT NULL DEFAULT '{}'::jsonb"],
+      ['proveedores_mapeo_excel', 'perfiles_por_marca', "JSONB NOT NULL DEFAULT '{}'::jsonb"],
       ['productos_propios', 'precio_costo_anterior', 'NUMERIC DEFAULT 0'],
       ['productos_propios', 'unidad_medida',         'TEXT'],
       ['productos_propios', 'ean',                   'TEXT'],
@@ -237,18 +239,30 @@ const CAMPOS_NUMERICOS_V2 = [
   { campo: 'precio_venta_1',   mapeo: 'precio_venta_1', label: 'Precio venta 1' },
   { campo: 'precio_venta_2',   mapeo: 'precio_venta_2', label: 'Precio venta 2' },
   { campo: 'precio_venta_3',   mapeo: 'precio_venta_3', label: 'Precio venta 3' },
-  { campo: 'dto_1',            mapeo: 'descuento_1',    label: 'Descuento 1%' },
-  { campo: 'dto_2',            mapeo: 'descuento_2',    label: 'Descuento 2%' },
-  { campo: 'dto_3',            mapeo: 'descuento_3',    label: 'Descuento 3%' },
-  { campo: 'alicuota_iva',     mapeo: 'iva',            label: 'IVA%' },
+  { campo: 'dto_1',            mapeo: 'descuento_1',    label: 'Descuento 1%', porcentaje: true },
+  { campo: 'dto_2',            mapeo: 'descuento_2',    label: 'Descuento 2%', porcentaje: true },
+  { campo: 'dto_3',            mapeo: 'descuento_3',    label: 'Descuento 3%', porcentaje: true },
+  { campo: 'alicuota_iva',     mapeo: 'iva',            label: 'IVA%', porcentaje: true },
   { campo: 'stock_actual',     mapeo: 'stock',          label: 'Stock' },
   { campo: 'stock_minimo',     mapeo: 'stock_minimo',   label: 'Stock mínimo' },
-  { campo: 'utilidad_1',       mapeo: 'utilidad_1',     label: 'Utilidad 1%' },
-  { campo: 'utilidad_2',       mapeo: 'utilidad_2',     label: 'Utilidad 2%' },
-  { campo: 'utilidad_3',       mapeo: 'utilidad_3',     label: 'Utilidad 3%' },
+  { campo: 'utilidad_1',       mapeo: 'utilidad_1',     label: 'Utilidad 1%', porcentaje: true },
+  { campo: 'utilidad_2',       mapeo: 'utilidad_2',     label: 'Utilidad 2%', porcentaje: true },
+  { campo: 'utilidad_3',       mapeo: 'utilidad_3',     label: 'Utilidad 3%', porcentaje: true },
 ];
 
-function leerNumerosV2(fila, mapeo, encabezados, hoja, filaExcel) {
+function celdaExcelImportacion(hojaExcel, filaExcel, indiceColumna) {
+  if (!hojaExcel) return null;
+  const rango = hojaExcel['!ref']
+    ? XLSX.utils.decode_range(hojaExcel['!ref'])
+    : { s: { r: 0, c: 0 } };
+  const direccion = XLSX.utils.encode_cell({
+    r: rango.s.r + filaExcel - 1,
+    c: rango.s.c + indiceColumna,
+  });
+  return hojaExcel[direccion] || null;
+}
+
+function leerNumerosV2(fila, mapeo, encabezados, hoja, filaExcel, hojaExcel = null) {
   const valores = {};
   const celdas = [];
   const errores = [];
@@ -270,7 +284,9 @@ function leerNumerosV2(fila, mapeo, encabezados, hoja, filaExcel) {
       continue;
     }
 
-    const parsed = parseNumeroImportacion(fila[idx]);
+    const parsed = def.porcentaje
+      ? parsePorcentajeImportacion(fila[idx], celdaExcelImportacion(hojaExcel, filaExcel, idx))
+      : parseNumeroImportacion(fila[idx]);
     valores[def.campo] = parsed.estado === 'valido' ? parsed.valor : null;
     celdas.push({
       hoja, fila: filaExcel, columna, campo: def.campo, label: def.label,
@@ -330,7 +346,9 @@ router.post('/analizar', upload.single('archivo'), async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 router.post('/mapear', verificarClienteIdBody, async (req, res) => {
   try {
-    const { cliente_id, proveedor_nombre, mapeo, fila_encabezado = 0 } = req.body;
+    const { cliente_id, proveedor_nombre, mapeo, fila_encabezado = 0, perfiles_por_rubro, perfiles_por_marca } = req.body;
+    const perfilesRubroJson = perfiles_por_rubro === undefined ? null : JSON.stringify(normalizarPerfilesMapeo(perfiles_por_rubro));
+    const perfilesMarcaJson = perfiles_por_marca === undefined ? null : JSON.stringify(normalizarPerfilesMapeo(perfiles_por_marca));
     if (!cliente_id || !proveedor_nombre || !mapeo) {
       return res.status(400).json({ mensaje: 'Faltan campos obligatorios' });
     }
@@ -360,16 +378,18 @@ router.post('/mapear', verificarClienteIdBody, async (req, res) => {
     if (mapeoExiste.rows[0]) {
       await pool.query(
         `UPDATE proveedores_mapeo_excel
-         SET mapeo=$1, fila_encabezado=$2, proveedor_nombre=$3, actualizado_en=now()
-         WHERE cliente_id=$4 AND proveedor_id=$5`,
-        [JSON.stringify(mapeo), fila_encabezado, proveedor_nombre.trim(), cliente_id, proveedor_id]
+         SET mapeo=$1, fila_encabezado=$2, proveedor_nombre=$3,
+             perfiles_por_rubro=COALESCE($4::jsonb, perfiles_por_rubro),
+             perfiles_por_marca=COALESCE($5::jsonb, perfiles_por_marca), actualizado_en=now()
+         WHERE cliente_id=$6 AND proveedor_id=$7`,
+        [JSON.stringify(mapeo), fila_encabezado, proveedor_nombre.trim(), perfilesRubroJson, perfilesMarcaJson, cliente_id, proveedor_id]
       );
     } else {
       await pool.query(
         `INSERT INTO proveedores_mapeo_excel
-           (cliente_id, proveedor_id, proveedor_nombre, mapeo, fila_encabezado)
-         VALUES ($1,$2,$3,$4,$5)`,
-        [cliente_id, proveedor_id, proveedor_nombre.trim(), JSON.stringify(mapeo), fila_encabezado]
+           (cliente_id, proveedor_id, proveedor_nombre, mapeo, fila_encabezado, perfiles_por_rubro, perfiles_por_marca)
+         VALUES ($1,$2,$3,$4,$5,COALESCE($6::jsonb,'{}'::jsonb),COALESCE($7::jsonb,'{}'::jsonb))`,
+        [cliente_id, proveedor_id, proveedor_nombre.trim(), JSON.stringify(mapeo), fila_encabezado, perfilesRubroJson, perfilesMarcaJson]
       );
     }
 
@@ -458,14 +478,14 @@ router.post('/comparar', upload.single('archivo'), verificarClienteIdBody, async
       });
     }
 
-    // Productos quitados (en DB pero no en Excel)
+    // Productos ausentes (en DB pero no en Excel): solo informar
     let quitados = 0;
     for (const [codigo, row] of dbMap) {
       if (!codigosExcel.has(codigo)) {
         quitados++;
         detalle.push({
-          codigo: row.codigo, descripcion: '', precio_actual: parseFloat(row.precio_costo),
-          precio_nuevo: null, variacion_porcentaje: null, tipo: 'quitado',
+          codigo: row.codigo, descripcion: row.descripcion, precio_actual: parseFloat(row.precio_costo),
+          precio_nuevo: null, variacion_porcentaje: null, tipo: 'ausente',
         });
       }
     }
@@ -480,7 +500,7 @@ router.post('/comparar', upload.single('archivo'), verificarClienteIdBody, async
     res.json({
       resumen: {
         total_excel: datos.filter(f => f.some(c => c !== '' && c != null)).length,
-        nuevos, subieron, bajaron, sin_cambio, quitados, variacion_promedio,
+        nuevos, subieron, bajaron, sin_cambio, ausentes: quitados, variacion_promedio,
       },
       detalle,
     });
@@ -507,6 +527,7 @@ router.post('/aplicar', verificarClienteIdBody, async (req, res) => {
       await client.query('BEGIN');
 
       for (const prod of productos_aprobados) {
+        if (prod.tipo === 'ausente' || prod.tipo === 'quitado') continue;
         try {
           if (prod.tipo === 'nuevo') {
             const pcNuevo = prod.precio_nuevo ?? 0;
@@ -573,18 +594,6 @@ router.post('/aplicar', verificarClienteIdBody, async (req, res) => {
               tipo_operacion: 'importacion',
               origen: 'Importar Excel'
             });
-          } else if (prod.tipo === 'quitado') {
-            await client.query(
-              `UPDATE productos_propios SET activo=false, modificado_en=now()
-               WHERE cliente_id=$1 AND proveedor_id=$2 AND codigo=$3`,
-              [cliente_id, proveedor_id, prod.codigo]
-            );
-            registrarEvento({
-              cliente_id, producto_id: null,
-              codigo: prod.codigo, descripcion: prod.descripcion || '',
-              campo: 'activo', valor_anterior: 'true', valor_nuevo: 'false',
-              tipo_operacion: 'desactivado', origen: 'Importar Excel'
-            });
           }
           aplicados++;
         } catch {
@@ -605,7 +614,7 @@ router.post('/aplicar', verificarClienteIdBody, async (req, res) => {
           productos_aprobados.filter(p => p.tipo === 'subio').length,
           productos_aprobados.filter(p => p.tipo === 'bajo').length,
           productos_aprobados.filter(p => p.tipo === 'sin_cambio').length,
-          productos_aprobados.filter(p => p.tipo === 'quitado').length,
+          0,
           aplicados, errores,
         ]
       );
@@ -613,6 +622,7 @@ router.post('/aplicar', verificarClienteIdBody, async (req, res) => {
 
       // Guardar detalle
       for (const prod of productos_aprobados) {
+        if (prod.tipo === 'ausente' || prod.tipo === 'quitado') continue;
         await client.query(
           `INSERT INTO importaciones_detalle
              (importacion_id, cliente_id, proveedor_id, codigo, descripcion,
@@ -1083,6 +1093,143 @@ function calcPCF(pc, d1, d2, d3) {
   return n(pc) * (1 - n(d1)/100) * (1 - n(d2)/100) * (1 - n(d3)/100);
 }
 
+function normalizarPerfilesMapeo(valor) {
+  if (typeof valor === 'string') {
+    try { valor = JSON.parse(valor); } catch { return {}; }
+  }
+  if (!valor || typeof valor !== 'object' || Array.isArray(valor)) return {};
+  return Object.fromEntries(Object.entries(valor).flatMap(([nombre, mapeo]) => {
+    if (!nombre.trim() || !mapeo || typeof mapeo !== 'object' || Array.isArray(mapeo)) return [];
+    const campos = Object.fromEntries(Object.entries(mapeo).filter(([campo, columna]) =>
+      !['codigo', 'descripcion', 'rubro', 'marca'].includes(campo) && typeof columna === 'string'
+    ));
+    return [[nombre.trim(), campos]];
+  }));
+}
+
+function mezclarPerfilesMapeo(guardados, recibidos) {
+  return { ...normalizarPerfilesMapeo(guardados), ...normalizarPerfilesMapeo(recibidos) };
+}
+
+async function cargarPerfilesMapeo(cliente_id, proveedor_id, recibidos = {}) {
+  let guardados = {};
+  if (proveedor_id) {
+    const result = await pool.query(
+      'SELECT perfiles_por_rubro, perfiles_por_marca FROM proveedores_mapeo_excel WHERE cliente_id=$1 AND proveedor_id=$2 LIMIT 1',
+      [cliente_id, proveedor_id]
+    );
+    guardados = result.rows[0] || {};
+  }
+  return {
+    porRubro: mezclarPerfilesMapeo(guardados.perfiles_por_rubro, recibidos.perfiles_por_rubro),
+    porMarca: mezclarPerfilesMapeo(guardados.perfiles_por_marca, recibidos.perfiles_por_marca),
+  };
+}
+
+function normalizarClavePerfil(valor) {
+  return String(valor || '').trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase();
+}
+
+function obtenerPerfilMapeo(perfiles, valor) {
+  const clave = normalizarClavePerfil(valor);
+  if (!clave) return {};
+  const entrada = Object.entries(perfiles).find(([nombre]) => normalizarClavePerfil(nombre) === clave);
+  return entrada ? entrada[1] : {};
+}
+
+function normalizarIdentidadImportacion(valor) {
+  return String(valor || '').trim().toLocaleLowerCase();
+}
+
+function normalizarAlcanceImportacion(valor, proveedor) {
+  const tipo = ['proveedor', 'rubro', 'marca'].includes(valor?.tipo) ? valor.tipo : 'proveedor';
+  const clave = String(tipo === 'proveedor' ? proveedor || '' : valor?.clave || '').trim();
+  if (!clave) return null;
+  return { tipo, clave };
+}
+
+function perteneceAlcanceImportacion(row, alcance, proveedor_id) {
+  if (alcance.tipo === 'proveedor') {
+    return proveedor_id != null && row.proveedor_id != null &&
+      Number(row.proveedor_id) === Number(proveedor_id);
+  }
+  return normalizarClavePerfil(row[alcance.tipo]) === normalizarClavePerfil(alcance.clave);
+}
+
+function identidadExcelImportacion(codigo, descripcion) {
+  return String(codigo || '').trim().toUpperCase() + '\u0000' +
+    normalizarIdentidadImportacion(descripcion);
+}
+function mapearProductosPorCodigo(rows) {
+  const mapa = new Map();
+  for (const row of rows) {
+    const clave = String(row.codigo || '').trim().toUpperCase();
+    if (!clave) continue;
+    if (!mapa.has(clave)) mapa.set(clave, []);
+    mapa.get(clave).push(row);
+  }
+  return mapa;
+}
+
+function codigoAlternativoImportacion(codigo, prefix, rubro, marca) {
+  const slug = valor => normalizarClavePerfil(valor).toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 16) || 'SIN';
+  return [prefix || 'P', slug(rubro), slug(marca), codigo].join('-');
+}
+
+function candidatosCodigoImportacion(codigoOriginal, prefix, rubro, marca) {
+  return [...new Set([
+    codigoOriginal,
+    prefix ? prefix + '-' + codigoOriginal : null,
+    codigoAlternativoImportacion(codigoOriginal, prefix, rubro, marca),
+  ].filter(Boolean).map(v => String(v).trim()))];
+}
+function resolverDestinoImportacion(codigo, descripcion, rubro, marca, alcance, proveedor_id, prefix, dbPorCodigo) {
+  const codigoOriginal = String(codigo || '').trim();
+  if (!codigoOriginal || !String(descripcion || '').trim()) {
+    return { tipo: 'omitido', motivo: 'Código y descripción son obligatorios para identificar el producto' };
+  }
+  const alternativas = candidatosCodigoImportacion(codigoOriginal, prefix, rubro, marca);
+  for (const codigoFinal of alternativas) {
+    const filas = dbPorCodigo.get(codigoFinal.toUpperCase()) || [];
+    const coincidentes = filas.filter(row =>
+      perteneceAlcanceImportacion(row, alcance, proveedor_id) &&
+      normalizarIdentidadImportacion(row.descripcion) === normalizarIdentidadImportacion(descripcion)
+    );
+    if (coincidentes.length > 1) return { tipo: 'omitido', motivo: 'Coincidencia ambigua: varios productos tienen código y descripción en el alcance elegido' };
+    if (coincidentes.length === 1) {
+      if (coincidentes[0].id == null) return { tipo: 'omitido', motivo: 'Código alternativo reservado por otra fila del Excel' };
+      return { tipo: 'actualizar', existing: coincidentes[0], codigo_final: codigoFinal };
+    }
+  }
+
+  const libre = alternativas.find(codigoFinal => !(dbPorCodigo.get(codigoFinal.toUpperCase()) || []).length);
+  if (libre) return { tipo: 'nuevo', codigo_final: libre, prefijado: libre.toUpperCase() !== codigoOriginal.toUpperCase() };
+  return { tipo: 'omitido', motivo: 'Código ocupado por otro producto; no hay un código alternativo libre en este alcance' };
+}
+function resolverMapeoFila(mapeo, fila, encabezados, perfiles, defaults = {}) {
+  const rubro = val(fila, mapeo.rubro, encabezados) || defaults.rubro || '';
+  const marca = val(fila, mapeo.marca, encabezados) || defaults.marca || '';
+  const permitido = perfil => Object.fromEntries(Object.entries(perfil).filter(([campo]) =>
+    !['codigo', 'descripcion', 'rubro', 'marca'].includes(campo)
+  ));
+  const porRubro = permitido(obtenerPerfilMapeo(perfiles.porRubro, rubro));
+  const porMarca = permitido(obtenerPerfilMapeo(perfiles.porMarca, marca));
+  const conflictos = Object.keys(porRubro).filter(campo =>
+    Object.prototype.hasOwnProperty.call(porMarca, campo) && porRubro[campo] !== porMarca[campo]
+  ).map(campo => ({
+    campo, columna_rubro: porRubro[campo], columna_marca: porMarca[campo],
+    prevalece: 'marca',
+  }));
+  const perfilesAplicados = [];
+  if (Object.keys(porRubro).length) perfilesAplicados.push({ tipo: 'rubro', clave: rubro });
+  if (Object.keys(porMarca).length) perfilesAplicados.push({ tipo: 'marca', clave: marca });
+  return {
+    mapeo: { ...mapeo, ...porRubro, ...porMarca },
+    rubro, marca, perfiles_aplicados: perfilesAplicados, conflictos,
+    prevalece: conflictos.length ? 'marca' : null,
+  };
+}
 async function getOrCreateProveedor(cliente_id, nombre) {
   const row = await pool.query(
     'SELECT id FROM proveedores WHERE cliente_id=$1 AND LOWER(nombre)=LOWER($2) LIMIT 1',
@@ -1127,12 +1274,12 @@ router.get('/mapeo-proveedor/:cliente_id/:proveedor', verificarClienteId, async 
   try {
     const { cliente_id, proveedor } = req.params;
     const r = await pool.query(
-      `SELECT mapeo FROM proveedores_mapeo_excel
+      `SELECT mapeo, perfiles_por_rubro, perfiles_por_marca FROM proveedores_mapeo_excel
        WHERE cliente_id=$1 AND proveedor_nombre=$2
        ORDER BY actualizado_en DESC LIMIT 1`,
       [cliente_id, decodeURIComponent(proveedor)]
     );
-    res.json({ mapeo: r.rows[0]?.mapeo || null });
+    res.json({ mapeo: r.rows[0]?.mapeo || null, perfiles_por_rubro: r.rows[0]?.perfiles_por_rubro || {}, perfiles_por_marca: r.rows[0]?.perfiles_por_marca || {} });
   } catch (err) {
     console.error('GET /mapeo-proveedor error:', err.message);
     res.status(500).json({ mensaje: 'Error', detalle: err.message });
@@ -1145,8 +1292,10 @@ router.get('/mapeo-proveedor/:cliente_id/:proveedor', verificarClienteId, async 
 router.post('/mapeo-proveedor/:cliente_id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
-    const { proveedor, mapeo } = req.body;
+    const { proveedor, mapeo, perfiles_por_rubro, perfiles_por_marca } = req.body;
     if (!cliente_id || !proveedor || !mapeo) return res.status(400).json({ mensaje: 'Faltan campos' });
+    const perfilesRubroJson = perfiles_por_rubro === undefined ? null : JSON.stringify(normalizarPerfilesMapeo(perfiles_por_rubro));
+    const perfilesMarcaJson = perfiles_por_marca === undefined ? null : JSON.stringify(normalizarPerfilesMapeo(perfiles_por_marca));
     const proveedor_id = await getOrCreateProveedor(cliente_id, proveedor);
     const existe = await pool.query(
       'SELECT id FROM proveedores_mapeo_excel WHERE cliente_id=$1 AND proveedor_id=$2 LIMIT 1',
@@ -1155,15 +1304,18 @@ router.post('/mapeo-proveedor/:cliente_id', verificarClienteId, async (req, res)
     if (existe.rows[0]) {
       await pool.query(
         `UPDATE proveedores_mapeo_excel
-         SET mapeo=$1, proveedor_nombre=$2, actualizado_en=now()
-         WHERE cliente_id=$3 AND proveedor_id=$4`,
-        [JSON.stringify(mapeo), proveedor.trim(), cliente_id, proveedor_id]
+         SET mapeo=$1, proveedor_nombre=$2,
+             perfiles_por_rubro=COALESCE($3::jsonb, perfiles_por_rubro),
+             perfiles_por_marca=COALESCE($4::jsonb, perfiles_por_marca), actualizado_en=now()
+         WHERE cliente_id=$5 AND proveedor_id=$6`,
+        [JSON.stringify(mapeo), proveedor.trim(), perfilesRubroJson, perfilesMarcaJson, cliente_id, proveedor_id]
       );
     } else {
       await pool.query(
-        `INSERT INTO proveedores_mapeo_excel (cliente_id, proveedor_id, proveedor_nombre, mapeo, fila_encabezado)
-         VALUES ($1,$2,$3,$4,0)`,
-        [cliente_id, proveedor_id, proveedor.trim(), JSON.stringify(mapeo)]
+        `INSERT INTO proveedores_mapeo_excel
+           (cliente_id, proveedor_id, proveedor_nombre, mapeo, fila_encabezado, perfiles_por_rubro, perfiles_por_marca)
+         VALUES ($1,$2,$3,$4,0,COALESCE($5::jsonb,'{}'::jsonb),COALESCE($6::jsonb,'{}'::jsonb))`,
+        [cliente_id, proveedor_id, proveedor.trim(), JSON.stringify(mapeo), perfilesRubroJson, perfilesMarcaJson]
       );
     }
     res.json({ ok: true });
@@ -1403,6 +1555,12 @@ router.post('/analizar-diff', upload.single('archivo'), verificarClienteIdBody, 
     const cfg = typeof req.body.configuracion === 'string'
       ? JSON.parse(req.body.configuracion) : (req.body.configuracion || {});
     const { hojas_seleccionadas = [], mapeo = {}, marca_defecto, rubro_defecto } = cfg;
+    const alcance = normalizarAlcanceImportacion(cfg.alcance_importacion, proveedor);
+    if (!alcance) return res.status(400).json({ mensaje: 'Elegí un proveedor, rubro o marca para definir el alcance' });
+    const defaultsAlcance = {
+      rubro: alcance.tipo === 'rubro' ? alcance.clave : rubro_defecto,
+      marca: alcance.tipo === 'marca' ? alcance.clave : marca_defecto,
+    };
 
     // Guardar archivo temporal 30 min
     const tempId = genTempId();
@@ -1421,7 +1579,9 @@ router.post('/analizar-diff', upload.single('archivo'), verificarClienteIdBody, 
       const pe = await pool.query('SELECT id FROM proveedores WHERE cliente_id=$1 AND nombre=$2 LIMIT 1', [cliente_id, proveedor.trim()]);
       if (pe.rows[0]) proveedor_id = pe.rows[0].id;
     }
-    const prefix = calcPrefix(proveedor);
+    const prefix = calcPrefix(proveedor || '');
+    const perfilesMapeo = await cargarPerfilesMapeo(cliente_id, proveedor_id, cfg);
+    Object.assign(tempFiles.get(tempId), { proveedor: String(proveedor || '').trim(), configuracion: JSON.stringify(cfg), perfilesMapeo });
 
     // Cargar DB — productos del cliente
     const dbRes = await pool.query(
@@ -1431,7 +1591,7 @@ router.post('/analizar-diff', upload.single('archivo'), verificarClienteIdBody, 
               COALESCE(precio_venta_2,0)::numeric     AS precio_venta_2,
               COALESCE(precio_venta_final,0)::numeric AS precio_venta_final,
               COALESCE(precio_venta_3,0)::numeric     AS precio_venta_3,
-              marca, rubro, unidad_medida, ean,
+              marca, rubro, activo, unidad_medida, ean,
               COALESCE(dto_1,0)::numeric AS dto_1,
               COALESCE(dto_2,0)::numeric AS dto_2,
               COALESCE(dto_3,0)::numeric AS dto_3,
@@ -1441,14 +1601,14 @@ router.post('/analizar-diff', upload.single('archivo'), verificarClienteIdBody, 
        FROM productos_propios WHERE cliente_id=$1`,
       [cliente_id]
     );
-    const dbMap = new Map(dbRes.rows.map(r => [String(r.codigo || '').trim().toUpperCase(), r]));
+    const dbMap = mapearProductosPorCodigo(dbRes.rows);
 
     // Nombres de proveedores para mostrar en UI
     const provRes = await pool.query('SELECT id, nombre FROM proveedores WHERE cliente_id=$1', [cliente_id]);
     const provNombres = new Map(provRes.rows.map(r => [Number(r.id), r.nombre]));
 
     // Leer Excel
-    const wb = XLSX.read(req.file.buffer, { type: 'buffer', cellDates: true });
+    const wb = XLSX.read(req.file.buffer, { type: 'buffer', cellDates: true, cellNF: true });
 
     const CAMPOS_DIFF = [
       { campo: 'precio_costo',      label: 'Precio costo', tipo: 'num' },
@@ -1469,11 +1629,11 @@ router.post('/analizar-diff', upload.single('archivo'), verificarClienteIdBody, 
       { campo: 'stock_minimo',      label: 'Stock mínimo', tipo: 'num' },
     ];
 
-    const nuevos = [], actualizar = [], prefijados = [];
+    const nuevos = [], actualizar = [], prefijados = [], omitidosPrevistos = [], conflictosPerfiles = [];
     const erroresValidacion = [], interpretaciones = [];
-    const codigosEnExcel = new Set();
+    const idsPresentes = new Set(), identidadesExcel = new Set(), identidadesCandidatasExcel = new Set(), filasInvalidas = new Set();
     let preciosSuben = 0, preciosBajan = 0, preciosSinCambio = 0, sumVar = 0, cntVar = 0;
-
+    let filasConPerfilAplicado = 0;
     for (const hojaName of hojas_seleccionadas) {
       if (!wb.Sheets[hojaName]) continue;
       const filas = XLSX.utils.sheet_to_json(wb.Sheets[hojaName], { header: 1, defval: '' });
@@ -1486,17 +1646,43 @@ router.post('/analizar-diff', upload.single('archivo'), verificarClienteIdBody, 
         .filter(({ fila }) => fila.some(c => c !== '' && c != null));
 
       for (const { fila, filaExcel } of datos) {
+        const resolucionPerfil = resolverMapeoFila(mapeo, fila, enc, perfilesMapeo, defaultsAlcance);
+        const mapeoFila = resolucionPerfil.mapeo;
+        const rowId = hojaName + ':' + filaExcel;
+        if (resolucionPerfil.perfiles_aplicados.length) filasConPerfilAplicado++;
+        if (resolucionPerfil.conflictos.length) conflictosPerfiles.push({
+          row_id: rowId, codigo: val(fila, mapeo.codigo, enc),
+          rubro: resolucionPerfil.rubro, marca: resolucionPerfil.marca,
+          conflictos: resolucionPerfil.conflictos, prevalece: 'marca',
+        });
         const descCols = Array.isArray(mapeo.descripcion) ? mapeo.descripcion : (mapeo.descripcion ? [mapeo.descripcion] : []);
         const descripcion = descCols.map(c => val(fila, c, enc)).filter(Boolean).join(' ').trim();
         const codigo = val(fila, mapeo.codigo, enc) || null;
-        if (!descripcion && !codigo) continue;
-
-        const key = codigo ? codigo.trim().toUpperCase() : null;
-        if (key) codigosEnExcel.add(key);
-
-        const numericos = leerNumerosV2(fila, mapeo, enc, hojaName, filaExcel);
+        if (!descripcion && !codigo) {
+          omitidosPrevistos.push({ row_id: rowId, codigo, descripcion, motivo: 'Código y descripción vacíos' });
+          continue;
+        }
+        const rubro = resolucionPerfil.rubro || null;
+        const marca = resolucionPerfil.marca || null;
+        const filaAlcance = { proveedor_id, rubro, marca };
+        if (alcance.tipo !== 'proveedor' && !perteneceAlcanceImportacion(filaAlcance, alcance, proveedor_id)) {
+          omitidosPrevistos.push({ row_id: rowId, codigo, descripcion, rubro, marca,
+            motivo: 'Fila fuera del alcance elegido: ' + alcance.tipo + ' ' + alcance.clave });
+          continue;
+        }
+        const identidad = identidadExcelImportacion(codigo, descripcion);
+        if (identidadesExcel.has(identidad)) {
+          omitidosPrevistos.push({ row_id: rowId, codigo, descripcion, motivo: 'Producto duplicado en Excel dentro del mismo alcance' });
+          continue;
+        }
+        identidadesExcel.add(identidad);
+        for (const candidato of candidatosCodigoImportacion(codigo, prefix, rubro, marca)) {
+          identidadesCandidatasExcel.add(identidadExcelImportacion(candidato, descripcion));
+        }
+        const numericos = leerNumerosV2(fila, mapeoFila, enc, hojaName, filaExcel, wb.Sheets[hojaName]);
         interpretaciones.push(...numericos.celdas.filter(c => c.estado !== 'vacio'));
         if (numericos.errores.length) {
+          filasInvalidas.add(rowId);
           erroresValidacion.push(...numericos.errores.map(e => ({ ...e, row_id: `${hojaName}:${filaExcel}` })));
           continue;
         }
@@ -1507,10 +1693,10 @@ router.post('/analizar-diff', upload.single('archivo'), verificarClienteIdBody, 
           precio_venta_final: numericos.valores.precio_venta_1,
           precio_venta_3:     numericos.valores.precio_venta_3,
           descripcion:        descripcion || null,
-          marca:              val(fila, mapeo.marca, enc) || marca_defecto || null,
-          rubro:              val(fila, mapeo.rubro, enc) || rubro_defecto || null,
-          unidad_medida:      val(fila, mapeo.unidad_medida, enc) || null,
-          ean:                val(fila, mapeo.ean, enc) || null,
+          marca:              marca,
+          rubro:              rubro,
+          unidad_medida:      val(fila, mapeoFila.unidad_medida, enc) || null,
+          ean:                val(fila, mapeoFila.ean, enc) || null,
           dto_1:              numericos.valores.dto_1,
           dto_2:              numericos.valores.dto_2,
           dto_3:              numericos.valores.dto_3,
@@ -1519,17 +1705,27 @@ router.post('/analizar-diff', upload.single('archivo'), verificarClienteIdBody, 
           stock_minimo:       numericos.valores.stock_minimo,
         };
 
-        const existing = key ? dbMap.get(key) : null;
+        const destino = resolverDestinoImportacion(codigo, descripcion, rubro, marca, alcance, proveedor_id, prefix, dbMap);
+        if (destino.tipo === 'omitido') {
+          omitidosPrevistos.push({ row_id: rowId, codigo, descripcion, motivo: destino.motivo });
+          continue;
+        }
 
-        if (!existing) {
-          nuevos.push({ codigo, descripcion });
+        if (destino.tipo === 'nuevo') {
+          nuevos.push({ row_id: rowId, codigo, codigo_final: destino.codigo_final, descripcion, rubro, marca,
+            perfiles: resolucionPerfil.perfiles_aplicados });
+          if (destino.prefijado) {
+            const ocupante = (dbMap.get(String(codigo).trim().toUpperCase()) || [])[0];
+            prefijados.push({ codigo_original: codigo, codigo_nuevo: destino.codigo_final, descripcion,
+              proveedor_existente: provNombres.get(Number(ocupante?.proveedor_id)) || 'Otro alcance' });
+          }
+          const claveNueva = destino.codigo_final.toUpperCase();
+          if (!dbMap.has(claveNueva)) dbMap.set(claveNueva, []);
+          dbMap.get(claveNueva).push({ codigo: destino.codigo_final, descripcion, proveedor_id, rubro, marca, id: null });
         } else {
-          const mismoProv = proveedor_id === null ||
-            existing.proveedor_id === null ||
-            Number(existing.proveedor_id) === Number(proveedor_id);
-
-          if (mismoProv) {
-            // Mismo proveedor → calcular diffs
+          const existing = destino.existing;
+          if (existing.id != null) idsPresentes.add(Number(existing.id));
+          // Coincidencia de código y descripción dentro del alcance elegido
             const diffs = [];
             for (const { campo, label, tipo } of CAMPOS_DIFF) {
               const vEx = camposExcel[campo];
@@ -1558,28 +1754,20 @@ router.post('/analizar-diff', upload.single('archivo'), verificarClienteIdBody, 
               else                   preciosSinCambio++;
             }
 
-            actualizar.push({ codigo, descripcion, id: existing.id, diffs });
-          } else {
-            // Distinto proveedor → prefijo automático
-            const codigoPrefijado = prefix ? `${prefix}-${codigo}` : codigo;
-            const provNombre = provNombres.get(Number(existing.proveedor_id)) || `(sin nombre)`;
-            prefijados.push({ codigo_original: codigo, codigo_nuevo: codigoPrefijado, descripcion, proveedor_existente: provNombre });
-          }
+            actualizar.push({ row_id: rowId, codigo, descripcion, id: existing.id, rubro, marca,
+              diffs, perfiles: resolucionPerfil.perfiles_aplicados });
         }
       }
     }
 
-    // Productos del mismo proveedor en DB que NO están en el Excel
-    const ausentes = [];
-    for (const [key, row] of dbMap) {
-      const esMismoProv = proveedor_id === null ||
-        row.proveedor_id === null ||
-        Number(row.proveedor_id) === Number(proveedor_id);
-      if (esMismoProv && !codigosEnExcel.has(key) && row.codigo) {
-        ausentes.push({ codigo: row.codigo, descripcion: row.descripcion, precio_costo: parseFloat(row.precio_costo) || 0 });
-      }
-    }
-
+    // Ausencia informativa: jamás modifica el estado del producto.
+    const ausentes = dbRes.rows.filter(row =>
+      row.activo && row.codigo &&
+      perteneceAlcanceImportacion(row, alcance, proveedor_id) &&
+      !idsPresentes.has(Number(row.id)) &&
+      !identidadesCandidatasExcel.has(identidadExcelImportacion(row.codigo, row.descripcion))
+    ).map(row => ({ id: row.id, codigo: row.codigo, descripcion: row.descripcion,
+      rubro: row.rubro, marca: row.marca, precio_costo: parseFloat(row.precio_costo) || 0 }));
     res.json({
       temp_id: tempId,
       resumen: {
@@ -1587,17 +1775,21 @@ router.post('/analizar-diff', upload.single('archivo'), verificarClienteIdBody, 
         actualizar:         actualizar.length,
         prefijados:         prefijados.length,
         ausentes:           ausentes.length,
+        omitidos:           omitidosPrevistos.length + filasInvalidas.size,
         precios_suben:      preciosSuben,
         precios_bajan:      preciosBajan,
         precios_sin_cambio: preciosSinCambio,
         variacion_promedio: cntVar > 0 ? Math.round(sumVar / cntVar * 10) / 10 : 0,
         errores_validacion: erroresValidacion.length,
       },
+      nuevos,
       actualizar,
       prefijados,
-      ausentes,
+      ausentes, omitidos_previstos: omitidosPrevistos, conflictos_perfiles: conflictosPerfiles,
+      alcance_importacion: alcance,
       interpretaciones: interpretaciones.slice(0, 500),
       errores_validacion: erroresValidacion,
+      perfiles_por_fila: { proveedor: proveedor || '', excepciones_aplicadas: filasConPerfilAplicado },
     });
   } catch (err) {
     console.error('POST /analizar-diff error:', err.message);
@@ -1665,6 +1857,16 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
     const cfg = typeof req.body.configuracion === 'string'
       ? JSON.parse(req.body.configuracion) : (req.body.configuracion || {});
     const { hojas_seleccionadas = [], mapeo = {}, marca_defecto, rubro_defecto } = cfg;
+    const alcance = normalizarAlcanceImportacion(cfg.alcance_importacion, proveedor);
+    if (!alcance) return res.status(400).json({ mensaje: 'Elegí un proveedor, rubro o marca para definir el alcance' });
+    const defaultsAlcance = {
+      rubro: alcance.tipo === 'rubro' ? alcance.clave : rubro_defecto,
+      marca: alcance.tipo === 'marca' ? alcance.clave : marca_defecto,
+    };
+    if (tempEntrada && (tempEntrada.proveedor !== String(proveedor || '').trim() ||
+        tempEntrada.configuracion !== JSON.stringify(cfg))) {
+      return res.status(409).json({ mensaje: 'El proveedor o mapeo cambió desde la previsualización. Analizá de nuevo.' });
+    }
 
     let proveedor_id = null;
     if (proveedor && proveedor.trim()) {
@@ -1672,11 +1874,13 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
       if (pe.rows[0]) { proveedor_id = pe.rows[0].id; }
       else { const ins = await pool.query('INSERT INTO proveedores (cliente_id, nombre, activo) VALUES ($1,$2,true) RETURNING id', [cliente_id, proveedor.trim()]); proveedor_id = ins.rows[0].id; }
     }
-    const prefix = calcPrefix(proveedor);
+    const prefix = calcPrefix(proveedor || '');
+    const perfilesMapeo = tempEntrada?.perfilesMapeo || await cargarPerfilesMapeo(cliente_id, proveedor_id, cfg);
 
-    const wb = XLSX.read(fileBuffer, { type: 'buffer', cellDates: true });
-    const existRes = await pool.query('SELECT id, codigo, proveedor_id FROM productos_propios WHERE cliente_id=$1', [cliente_id]);
-    const existMap = new Map(existRes.rows.map(r => [String(r.codigo || '').trim().toUpperCase(), { id: r.id, proveedor_id: r.proveedor_id }]));
+
+    const wb = XLSX.read(fileBuffer, { type: 'buffer', cellDates: true, cellNF: true });
+    const existRes = await pool.query('SELECT id, codigo, descripcion, proveedor_id, rubro, marca, activo FROM productos_propios WHERE cliente_id=$1', [cliente_id]);
+    const existMap = mapearProductosPorCodigo(existRes.rows);
 
     let soloFilas = null;
     if (req.body.solo_filas) {
@@ -1695,6 +1899,9 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
     }
 
     let totalSolicitados = 0, totalNuevos = 0, totalActualizados = 0, totalOmitidos = 0, totalFallidos = 0;
+    let filasConPerfilAplicado = 0;
+    const idsPresentes = new Set(), identidadesExcel = new Set(), identidadesCandidatasExcel = new Set();
+    const procesados = [], conflictosPerfiles = [];
     const porHoja = [];
     const detalle = [];
     const filasExitosas = [];
@@ -1727,36 +1934,68 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
             continue;
           }
 
+          const resolucionPerfil = resolverMapeoFila(mapeo, fila, enc, perfilesMapeo, defaultsAlcance);
+          const mapeoFila = resolucionPerfil.mapeo;
+          if (resolucionPerfil.perfiles_aplicados.length) filasConPerfilAplicado++;
+          if (resolucionPerfil.conflictos.length) conflictosPerfiles.push({
+            row_id: rowId, codigo: val(fila, mapeo.codigo, enc),
+            rubro: resolucionPerfil.rubro, marca: resolucionPerfil.marca,
+            conflictos: resolucionPerfil.conflictos, prevalece: 'marca',
+          });
           const descCols = Array.isArray(mapeo.descripcion) ? mapeo.descripcion : (mapeo.descripcion ? [mapeo.descripcion] : []);
           const descripcion = descCols.map(c => val(fila, c, enc)).filter(Boolean).join(' ').trim();
           const codigo = val(fila, mapeo.codigo, enc) || null;
-          if (!descripcion) {
+          const rubro = resolucionPerfil.rubro || null;
+          const marca = resolucionPerfil.marca || null;
+          if (!descripcion || !codigo) {
             omitidos++; totalOmitidos++;
-            detalle.push({ row_id: rowId, hoja: hojaName, fila: filaExcel, columna: descCols.join(' + '), valor_original: '', etapa: 'validacion', estado: 'omitido', motivo: 'Descripción vacía' });
+            detalle.push({ row_id: rowId, hoja: hojaName, fila: filaExcel, codigo, etapa: 'validacion',
+              estado: 'omitido', motivo: 'Código y descripción son obligatorios para identificar el producto' });
             continue;
           }
-
-          const numericos = leerNumerosV2(fila, mapeo, enc, hojaName, filaExcel);
+          const filaAlcance = { proveedor_id, rubro, marca };
+          if (alcance.tipo !== 'proveedor' && !perteneceAlcanceImportacion(filaAlcance, alcance, proveedor_id)) {
+            omitidos++; totalOmitidos++;
+            detalle.push({ row_id: rowId, hoja: hojaName, fila: filaExcel, codigo, etapa: 'alcance',
+              estado: 'omitido', motivo: 'Fila fuera del alcance elegido: ' + alcance.tipo + ' ' + alcance.clave });
+            continue;
+          }
+          const identidad = identidadExcelImportacion(codigo, descripcion);
+          if (identidadesExcel.has(identidad)) {
+            omitidos++; totalOmitidos++;
+            detalle.push({ row_id: rowId, hoja: hojaName, fila: filaExcel, codigo, etapa: 'validacion',
+              estado: 'omitido', motivo: 'Producto duplicado en Excel dentro del mismo alcance' });
+            continue;
+          }
+          identidadesExcel.add(identidad);
+          for (const candidato of candidatosCodigoImportacion(codigo, prefix, rubro, marca)) {
+            identidadesCandidatasExcel.add(identidadExcelImportacion(candidato, descripcion));
+          }
+          const numericos = leerNumerosV2(fila, mapeoFila, enc, hojaName, filaExcel, wb.Sheets[hojaName]);
           if (numericos.errores.length) {
             omitidos++; totalOmitidos++;
             detalle.push(...numericos.errores.map(e => ({ ...e, row_id: rowId, estado: 'omitido' })));
             continue;
           }
 
+          const destino = resolverDestinoImportacion(codigo, descripcion, rubro, marca, alcance, proveedor_id, prefix, existMap);
+          if (destino.tipo === 'omitido') {
+            omitidos++; totalOmitidos++;
+            detalle.push({ row_id: rowId, hoja: hojaName, fila: filaExcel, codigo, etapa: 'coincidencia',
+              estado: 'omitido', motivo: destino.motivo });
+            continue;
+          }
           await client.query('SAVEPOINT fila_importacion');
           try {
-            const key = codigo ? codigo.trim().toUpperCase() : null;
-            const prefixedKey = (key && prefix) ? `${prefix}-${key}` : null;
-            const effectiveKey = (key && !existMap.has(key) && prefixedKey && existMap.has(prefixedKey)) ? prefixedKey : key;
             const campos = {
               precio_costo:   numericos.valores.precio_costo,
               precio_venta_1: numericos.valores.precio_venta_1,
               precio_venta_2: numericos.valores.precio_venta_2,
               precio_venta_3: numericos.valores.precio_venta_3,
-              marca:          val(fila, mapeo.marca, enc) || marca_defecto || null,
-              rubro:          val(fila, mapeo.rubro, enc) || rubro_defecto || null,
-              unidad_medida:  val(fila, mapeo.unidad_medida, enc) || null,
-              ean:            val(fila, mapeo.ean, enc) || null,
+              marca,
+              rubro,
+              unidad_medida:  val(fila, mapeoFila.unidad_medida, enc) || null,
+              ean:            val(fila, mapeoFila.ean, enc) || null,
               dto_1:          numericos.valores.dto_1,
               dto_2:          numericos.valores.dto_2,
               dto_3:          numericos.valores.dto_3,
@@ -1780,16 +2019,11 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
             if (u3 > 0 && pcf > 0) pv3 = pcf * (1 + u3 / 100);
             let pvFinal = pv1 || pcf || 0;
             if (iva > 0 && pvFinal > 0) pvFinal = pvFinal * (1 + iva / 100);
-            if (effectiveKey && existMap.has(effectiveKey)) {
-              const existing = existMap.get(effectiveKey);
-              const mismoProv = proveedor_id === null ||
-                existing.proveedor_id === null ||
-                Number(existing.proveedor_id) === Number(proveedor_id);
-
-              if (mismoProv) {
-                // CASO 1 — mismo proveedor: actualizar
-                await client.query(
-                  `UPDATE productos_propios SET descripcion=$1,proveedor_id=$2,
+            if (destino.tipo === 'actualizar') {
+              const existing = destino.existing;
+              // CASO 1 — coincidencia exacta en el alcance
+                const upd = await client.query(
+                  `UPDATE productos_propios SET descripcion=$1,
                    precio_costo=COALESCE($3,precio_costo),precio_venta_1=COALESCE($4,precio_venta_1),
                    precio_venta_2=COALESCE($5,precio_venta_2),precio_venta_3=COALESCE($6,precio_venta_3),
                    marca=COALESCE($7,marca),rubro=COALESCE($8,rubro),
@@ -1800,41 +2034,29 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
                    precio_costo_final=COALESCE($17,precio_costo_final),
                    precio_venta_final=COALESCE($18,precio_venta_final),
                    utilidad_1=COALESCE($21,utilidad_1),utilidad_2=COALESCE($22,utilidad_2),utilidad_3=COALESCE($23,utilidad_3),
-                   modificado_en=now() WHERE id=$19 AND cliente_id=$20`,
+                   activo=true,modificado_en=now() WHERE id=$19 AND cliente_id=$20
+                   AND descripcion=$27 AND codigo=$26
+                   AND (($24='proveedor' AND proveedor_id=$2)
+                     OR ($24='rubro' AND COALESCE(rubro,'')=$25)
+                     OR ($24='marca' AND COALESCE(marca,'')=$25))`,
                   [descripcion,proveedor_id,campos.precio_costo,pv1,pv2,
                    pv3,campos.marca,campos.rubro,campos.unidad_medida,campos.ean,
                    campos.dto_1,campos.dto_2,campos.dto_3,campos.alicuota_iva,
                    campos.stock_actual,campos.stock_minimo,
                    pcf||null, pvFinal||null,
                    existing.id,cliente_id,
-                   campos.utilidad_1||null,campos.utilidad_2||null,campos.utilidad_3||null]
+                   campos.utilidad_1||null,campos.utilidad_2||null,campos.utilidad_3||null,
+                   alcance.tipo, alcance.tipo === 'rubro' ? existing.rubro : existing.marca,
+                   existing.codigo, existing.descripcion]
                 );
+                if (upd.rowCount !== 1) throw new Error('El producto cambió de alcance durante la importación');
+                idsPresentes.add(Number(existing.id));
                 actualizados++;
-              } else {
-                // CASO 2 — distinto proveedor: insertar con prefijo
-                const codigoPrefijado = prefix ? `${prefix}-${codigo}` : codigo;
-                const ins = await client.query(
-                  `INSERT INTO productos_propios
-                   (cliente_id,proveedor_id,codigo,descripcion,precio_costo,precio_venta_1,precio_venta_2,
-                    precio_venta_3,marca,rubro,unidad_medida,ean,dto_1,dto_2,dto_3,alicuota_iva,
-                    stock_actual,stock_minimo,precio_costo_final,precio_venta_final,
-                    utilidad_1,utilidad_2,utilidad_3,activo)
-                   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,true) RETURNING id`,
-                  [cliente_id,proveedor_id,codigoPrefijado,descripcion,
-                   campos.precio_costo||0,pv1||0,pv2||0,pv3||0,
-                   campos.marca,campos.rubro,campos.unidad_medida,campos.ean,
-                   campos.dto_1||0,campos.dto_2||0,campos.dto_3||0,campos.alicuota_iva||0,
-                   campos.stock_actual||0,campos.stock_minimo||0,
-                   pcf||0, pvFinal||0,
-                   campos.utilidad_1||0,campos.utilidad_2||0,campos.utilidad_3||0]
-                );
-                const newKey = codigoPrefijado ? codigoPrefijado.trim().toUpperCase() : null;
-                if (newKey) existMap.set(newKey, { id: ins.rows[0].id, proveedor_id });
-                nuevos++;
-              }
+                procesados.push({ row_id: rowId, hoja: hojaName, fila: filaExcel, codigo: destino.codigo_final,
+                  descripcion, rubro, marca, estado: 'actualizado', perfiles: resolucionPerfil.perfiles_aplicados });
             } else {
-              // CASO 3 — código nuevo (no existe en DB): insertar SIN prefijo
-              const codigoFinal = codigo;
+              // CASO 2 — identidad nueva: insertar con el código libre elegido
+              const codigoFinal = destino.codigo_final;
               const ins = await client.query(
                 `INSERT INTO productos_propios
                  (cliente_id,proveedor_id,codigo,descripcion,precio_costo,precio_venta_1,precio_venta_2,
@@ -1850,12 +2072,18 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
                  pcf||0, pvFinal||0,
                  campos.utilidad_1||0,campos.utilidad_2||0,campos.utilidad_3||0]
               );
-              const finalKey = codigoFinal ? codigoFinal.trim().toUpperCase() : null;
-              if (finalKey) existMap.set(finalKey, { id: ins.rows[0].id, proveedor_id });
+              const finalKey = codigoFinal.trim().toUpperCase();
+              if (!existMap.has(finalKey)) existMap.set(finalKey, []);
+              existMap.get(finalKey).push({ id: ins.rows[0].id, codigo: codigoFinal, descripcion,
+                proveedor_id, rubro, marca, activo: true });
+              idsPresentes.add(Number(ins.rows[0].id));
               nuevos++;
+              procesados.push({ row_id: rowId, hoja: hojaName, fila: filaExcel, codigo: codigoFinal,
+                descripcion, rubro, marca, estado: 'nuevo', perfiles: resolucionPerfil.perfiles_aplicados });
             }
             await client.query('RELEASE SAVEPOINT fila_importacion');
             filasExitosas.push(rowId);
+
           } catch (errFila) {
             await client.query('ROLLBACK TO SAVEPOINT fila_importacion').catch(() => {});
             await client.query('RELEASE SAVEPOINT fila_importacion').catch(() => {});
@@ -1872,6 +2100,14 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
       totalNuevos += nuevos; totalActualizados += actualizados;
       porHoja.push({ hoja: hojaName, solicitados, nuevos, actualizados, omitidos, fallidos, errores: omitidos + fallidos });
     }
+    // La ausencia se informa en el resultado de esta importación; no modifica productos.
+    const ausentes = soloFilas ? [] : existRes.rows.filter(row =>
+      row.activo && row.codigo &&
+      perteneceAlcanceImportacion(row, alcance, proveedor_id) &&
+      !idsPresentes.has(Number(row.id)) &&
+      !identidadesCandidatasExcel.has(identidadExcelImportacion(row.codigo, row.descripcion))
+    ).map(row => ({ codigo: row.codigo, descripcion: row.descripcion,
+      rubro: row.rubro, marca: row.marca, estado: 'ausente' }));
     if (proveedor_id) {
       await client.query(
         `INSERT INTO importaciones_historial (cliente_id,proveedor_id,nuevos,aplicados,errores) VALUES($1,$2,$3,$4,$5)`,
@@ -1888,7 +2124,9 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
       actualizados: totalActualizados, errores: totalOmitidos + totalFallidos,
       solicitados: totalSolicitados, omitidos: totalOmitidos, fallidos: totalFallidos,
       total: totalSolicitados, por_hoja: porHoja, detalle,
-      filas_reintentables: filasFallidas });
+      filas_reintentables: filasFallidas, ausentes: ausentes.length, ausentes_detalle: ausentes,
+      procesados, conflictos_perfiles: conflictosPerfiles, alcance_importacion: alcance,
+      perfiles_por_fila: { proveedor: proveedor || '', excepciones_aplicadas: filasConPerfilAplicado } });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('POST /importar-v2 error:', err.message);
