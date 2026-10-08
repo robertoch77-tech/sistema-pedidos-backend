@@ -285,3 +285,5 @@ router.use((error, req, res, next) => {
   res.status(503).json({ mensaje: 'Herramienta de imágenes no disponible. Consultá al administrador.' });
 });
 module.exports = router;
+
+module.exports.herramientasImagenes = { validarMayorista, cloudinaryConfig, cloudinaryPost, descargarImagenPublica };

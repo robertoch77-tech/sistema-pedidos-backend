@@ -1,3 +1,4 @@
+const { aplicarImagenesPropias } = require('../services/ivanImagenesPropias');
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
@@ -71,6 +72,11 @@ async function aplicarImagenesMejoradas(productos, mayoristaId) {
     if (error.code !== '42P01') console.error('No se pudo aplicar imagen mejorada:', error.message);
     return productos;
   }
+}
+
+async function aplicarImagenesCatalogo(productos, mayoristaId) {
+  const actuales = await aplicarImagenesMejoradas(productos, mayoristaId);
+  return aplicarImagenesPropias(actuales, mayoristaId, productos);
 }
 
 async function getCondicionesPrecio(req, poolExterno, mayoristaId) {
@@ -242,7 +248,7 @@ router.get('/:mayorista_id/todos', async (req, res) => {
     );
 
     const condicionesPrecio = await getCondicionesPrecio(req, poolExterno, mayorista_id);
-    const productosConDto = await aplicarImagenesMejoradas(aplicarCondicionesPrecio(resultado.rows, condicionesPrecio), mayorista_id);
+    const productosConDto = await aplicarImagenesCatalogo(aplicarCondicionesPrecio(resultado.rows, condicionesPrecio), mayorista_id);
 
     res.json({ productos: productosConDto, total: productosConDto.length });
   } catch (error) {
@@ -274,7 +280,7 @@ router.get('/:mayorista_id/buscar-ean/:ean', async (req, res) => {
       const condicionesPrecio = await getCondicionesPrecio(req, poolExterno, mayorista_id);
       const prod = resultado.rows[0] || null;
       if (prod) Object.assign(prod, aplicarCondicionesPrecio([prod], condicionesPrecio)[0]);
-      res.json({ producto: prod ? (await aplicarImagenesMejoradas([prod], mayorista_id))[0] : prod });
+      res.json({ producto: prod ? (await aplicarImagenesCatalogo([prod], mayorista_id))[0] : prod });
     } catch (errCampo) {
       // La vista no tiene columna "ean" en este mayorista — modo EAN no disponible.
       res.json({ producto: null, ean_no_soportado: true });
@@ -334,7 +340,7 @@ router.get('/:mayorista_id/cross-selling', async (req, res) => {
       if (resultado.length >= 5) break;
     }
     const condicionesPrecio = await getCondicionesPrecio(req, poolExterno, mayorista_id);
-    res.json(await aplicarImagenesMejoradas(aplicarCondicionesPrecio(resultado, condicionesPrecio), mayorista_id));
+    res.json(await aplicarImagenesCatalogo(aplicarCondicionesPrecio(resultado, condicionesPrecio), mayorista_id));
   } catch (error) {
     console.error('Error cross-selling:', error.message);
     res.json([]);
@@ -378,7 +384,7 @@ router.get('/:mayorista_id/equivalentes', async (req, res) => {
     const condicionesPrecio = await getCondicionesPrecio(req, poolExterno, mayorista_id);
     const transformadas = aplicarCondicionesPrecio(alternativas.rows, condicionesPrecio);
     transformadas.sort((a, b) => (Number(a.precio_producto) || 0) - (Number(b.precio_producto) || 0));
-    res.json(await aplicarImagenesMejoradas(transformadas, mayorista_id));
+    res.json(await aplicarImagenesCatalogo(transformadas, mayorista_id));
   } catch (error) {
     console.error('Error equivalentes:', error.message);
     res.json([]);
@@ -519,7 +525,7 @@ router.get('/:mayorista_id', async (req, res) => {
     );
 
     const productosConDto = aplicarCondicionesPrecio(productosResultado.rows, condicionesPrecio);
-    const productosConImagen = await aplicarImagenesMejoradas(productosConDto, mayorista_id);
+    const productosConImagen = await aplicarImagenesCatalogo(productosConDto, mayorista_id);
 
     res.json({
       productos: productosConImagen,

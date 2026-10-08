@@ -772,6 +772,8 @@ router.delete('/mayoristas/:id/precios-custom/:cuit/:productoId', checkAdmin, as
   } catch (error) { res.status(500).json({ mensaje: 'Error del servidor' }); }
 });
 
+router.use('/imagenes-propias', checkAdmin, require('./admin-imagenes'));
+
 module.exports = router;
 
 /*
