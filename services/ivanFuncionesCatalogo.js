@@ -8,8 +8,10 @@ async function mayoristaValido(valor,soloActivo=false) {
 }
 async function leer(id,estricto=false) {
   try {
-    const r=await pool.query('SELECT catalogo_costo_habilitado FROM ivan_funciones_config WHERE mayorista_id=$1',[id]);
-    return r.rows[0] || {catalogo_costo_habilitado:false};
-  }catch(e){if(e.code==='42P01' && !estricto)return {catalogo_costo_habilitado:false};throw e;}
+    const r=await pool.query('SELECT catalogo_costo_habilitado,stock_consulta_habilitada,stock_mostrar_cantidad FROM ivan_funciones_config WHERE mayorista_id=$1',[id]);
+    return {...(r.rows[0] || {catalogo_costo_habilitado:false,stock_consulta_habilitada:false,stock_mostrar_cantidad:false}),stock_config_disponible:true};
+   }catch(e){
+    if(e.code==='42703'){const r=await pool.query('SELECT catalogo_costo_habilitado FROM ivan_funciones_config WHERE mayorista_id=$1',[id]);return {...(r.rows[0] || {catalogo_costo_habilitado:false}),stock_consulta_habilitada:false,stock_mostrar_cantidad:false,stock_config_disponible:false};}
+    if(e.code==='42P01' && !estricto)return {catalogo_costo_habilitado:false,stock_consulta_habilitada:false,stock_mostrar_cantidad:false};throw e;}
 }
 module.exports={mayoristaValido,leer};
