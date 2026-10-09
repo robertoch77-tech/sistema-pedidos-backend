@@ -773,6 +773,7 @@ router.delete('/mayoristas/:id/precios-custom/:cuit/:productoId', checkAdmin, as
 });
 
 router.use('/imagenes-propias', checkAdmin, require('./admin-imagenes'));
+router.use('/funciones-catalogo', checkAdmin, require('./admin-funciones-catalogo'));
 
 module.exports = router;
 
