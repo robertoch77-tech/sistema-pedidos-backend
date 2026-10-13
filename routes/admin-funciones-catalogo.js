@@ -3,6 +3,15 @@ const pool=require('../db');
 const {mayoristaValido,leer}=require('../services/ivanFuncionesCatalogo');
 const {errorCliente}=require('../services/ivanImagenesDatos');
 router.get('/:id',async(req,res,next)=>{try{const id=await mayoristaValido(req.params.id);res.set('Cache-Control','no-store');res.json(await leer(id,true));}catch(e){next(e);}});
+router.put('/observaciones/:id',async(req,res,next)=>{
+  try{
+    const id=await mayoristaValido(req.params.id);
+    const habilitado=req.body?.catalogo_observaciones_destacadas;
+    if(typeof habilitado!=='boolean')throw errorCliente('Elegí habilitar o deshabilitar los detalles del producto.');
+    await pool.query('INSERT INTO ivan_funciones_config(mayorista_id,catalogo_observaciones_destacadas) VALUES($1,$2) ON CONFLICT(mayorista_id) DO UPDATE SET catalogo_observaciones_destacadas=EXCLUDED.catalogo_observaciones_destacadas,actualizado_en=now()',[id,habilitado]);
+    res.json({ok:true,mensaje:'Detalles del producto guardados para este mayorista.'});
+  }catch(e){next(e);}
+});
 router.put('/stock/:id',async(req,res,next)=>{
   try{
     const id=await mayoristaValido(req.params.id);
