@@ -1,4 +1,5 @@
 const { aplicarImagenesPropias } = require('../services/ivanImagenesPropias');
+const { resolverCampo, seleccionGrupo, identificadorSql } = require('../services/ivanCampoEquivalencias');
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
@@ -216,6 +217,7 @@ router.get('/:mayorista_id/todos', async (req, res) => {
     const poolExterno = await getConexionMayorista(mayorista_id);
     if (!poolExterno) return res.status(404).json({ mensaje: 'Sin conexión configurada' });
     const conObsProducto = await tieneObsProducto(poolExterno, mayorista_id);
+    const campoEquivalencias = await resolverCampo(poolExterno, mayorista_id, conObsProducto);
     const campoIva = await campoIvaProducto(poolExterno, mayorista_id);
 
     const condiciones = [];
@@ -240,6 +242,7 @@ router.get('/:mayorista_id/todos', async (req, res) => {
               precio_producto, stock_temporal, des_producto_marca,
               des_producto_rubro, des_producto_tipo
               ${conObsProducto ? ', obs_producto' : ''}
+              ${seleccionGrupo(campoEquivalencias)}
               ${seleccionIva(campoIva)}
        FROM "viewProductos"
        ${where}
@@ -347,7 +350,7 @@ router.get('/:mayorista_id/cross-selling', async (req, res) => {
   }
 });
 
-// Alternativas equivalentes por el campo obs_producto de Ivan. Si la columna
+// Alternativas por el campo configurado; obs_producto continúa siendo el valor por defecto. Si la columna
 // todavía no fue conectada, responde [] y no afecta catálogo, precios ni stock.
 router.get('/:mayorista_id/equivalentes', async (req, res) => {
   try {
@@ -356,28 +359,34 @@ router.get('/:mayorista_id/equivalentes', async (req, res) => {
     if (codigos.length === 0) return res.json([]);
 
     const poolExterno = await getConexionMayorista(mayorista_id);
-    if (!poolExterno || !(await tieneObsProducto(poolExterno, mayorista_id))) return res.json([]);
+    if (!poolExterno) return res.json([]);
+    const conObsProducto = await tieneObsProducto(poolExterno, mayorista_id);
+    const campoEquivalencias = await resolverCampo(poolExterno, mayorista_id, conObsProducto);
+    if (!campoEquivalencias) return res.json([]);
+    const columnaGrupo = identificadorSql(campoEquivalencias);
     const campoIva = await campoIvaProducto(poolExterno, mayorista_id);
 
     const origen = await poolExterno.query(
-      `SELECT DISTINCT obs_producto
+      `SELECT DISTINCT ${columnaGrupo} AS grupo_equivalencia
        FROM "viewProductos"
        WHERE cod_producto = ANY($1::text[])
-         AND obs_producto IS NOT NULL AND trim(obs_producto) <> ''`,
+         AND ${columnaGrupo} IS NOT NULL AND trim(${columnaGrupo}) <> ''`,
       [codigos]
     );
-    const observaciones = origen.rows.map(r => r.obs_producto).filter(Boolean);
+    const observaciones = origen.rows.map(r => r.grupo_equivalencia).filter(Boolean);
     if (observaciones.length === 0) return res.json([]);
 
     const alternativas = await poolExterno.query(
       `SELECT id_producto, cod_producto, des_producto, imagen_producto,
               precio_producto, stock_temporal, des_producto_marca,
-              des_producto_rubro, des_producto_tipo, obs_producto
+              des_producto_rubro, des_producto_tipo
+              ${conObsProducto ? ", obs_producto" : ""}
+              ${seleccionGrupo(campoEquivalencias)}
               ${seleccionIva(campoIva)}
        FROM "viewProductos"
-       WHERE obs_producto = ANY($1::text[])
+       WHERE ${columnaGrupo} = ANY($1::text[])
          AND cod_producto <> ALL($2::text[])
-       ORDER BY obs_producto, des_producto_marca, precio_producto
+       ORDER BY ${columnaGrupo}, des_producto_marca, precio_producto
        LIMIT 30`,
       [observaciones, codigos]
     );
@@ -467,6 +476,7 @@ router.get('/:mayorista_id', async (req, res) => {
     const poolExterno = await getConexionMayorista(mayorista_id);
     if (!poolExterno) return res.status(404).json({ mensaje: 'Sin conexión configurada' });
     const conObsProducto = await tieneObsProducto(poolExterno, mayorista_id);
+    const campoEquivalencias = await resolverCampo(poolExterno, mayorista_id, conObsProducto);
     const campoIva = await campoIvaProducto(poolExterno, mayorista_id);
     const condicionesPrecio = await getCondicionesPrecio(req, poolExterno, mayorista_id);
 
@@ -517,6 +527,7 @@ router.get('/:mayorista_id', async (req, res) => {
               des_producto_rubro, des_producto_tipo
               ${seleccionIva(campoIva)}
               ${conObsProducto ? ', obs_producto' : ''}
+              ${seleccionGrupo(campoEquivalencias)}
        FROM "viewProductos"
        ${where}
        ORDER BY ${orderBy}

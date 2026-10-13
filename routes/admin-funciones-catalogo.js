@@ -2,7 +2,28 @@ const router=require('express').Router();
 const pool=require('../db');
 const {mayoristaValido,leer}=require('../services/ivanFuncionesCatalogo');
 const {errorCliente}=require('../services/ivanImagenesDatos');
+const conexion=require('../services/conexionMayorista');
+const {CAMPO_ACTUAL,camposDisponibles,validarCampo}=require('../services/ivanCampoEquivalencias');
 router.get('/:id',async(req,res,next)=>{try{const id=await mayoristaValido(req.params.id);res.set('Cache-Control','no-store');res.json(await leer(id,true));}catch(e){next(e);}});
+router.get('/equivalencias/:id/campos',async(req,res,next)=>{
+  try{
+    const id=await mayoristaValido(req.params.id);
+    const db=await conexion.getConexionMayorista(id);
+    if(!db)throw errorCliente('No se pudo consultar la vista del catálogo. La configuración actual se conserva.',503);
+    const campos=await camposDisponibles(db);
+    res.set('Cache-Control','no-store');res.json({campos});
+  }catch(e){next(e);}
+});
+router.put('/equivalencias/:id',async(req,res,next)=>{
+  try{
+    const id=await mayoristaValido(req.params.id);
+    const campo=req.body?.equivalencias_campo;
+    if(typeof campo!=='string')throw errorCliente('Elegí el campo de equivalencias.');
+    if(campo!==CAMPO_ACTUAL){const db=await conexion.getConexionMayorista(id);if(!db)throw errorCliente('No se pudo comprobar el campo de Ubicación. No se guardaron cambios.',503);await validarCampo(db,campo);}
+    await pool.query('INSERT INTO ivan_funciones_config(mayorista_id,equivalencias_campo) VALUES($1,$2) ON CONFLICT(mayorista_id) DO UPDATE SET equivalencias_campo=EXCLUDED.equivalencias_campo,actualizado_en=now()',[id,campo]);
+    res.json({ok:true,mensaje:'Campo de equivalencias guardado para este mayorista. Recargá el catálogo para usarlo.'});
+  }catch(e){next(e);}
+});
 router.put('/observaciones/:id',async(req,res,next)=>{
   try{
     const id=await mayoristaValido(req.params.id);
