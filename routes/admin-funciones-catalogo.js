@@ -5,6 +5,15 @@ const {errorCliente}=require('../services/ivanImagenesDatos');
 const conexion=require('../services/conexionMayorista');
 const {CAMPO_ACTUAL,camposDisponibles,validarCampo}=require('../services/ivanCampoEquivalencias');
 router.get('/:id',async(req,res,next)=>{try{const id=await mayoristaValido(req.params.id);res.set('Cache-Control','no-store');res.json(await leer(id,true));}catch(e){next(e);}});
+router.put('/envio-parcial/:id',async(req,res,next)=>{
+  try{
+    const id=await mayoristaValido(req.params.id);
+    const habilitado=req.body?.pedido_envio_parcial_habilitado;
+    if(typeof habilitado!=='boolean')throw errorCliente('Elegí habilitar o deshabilitar el envío de seleccionados.');
+    await pool.query('INSERT INTO ivan_funciones_config(mayorista_id,pedido_envio_parcial_habilitado) VALUES($1,$2) ON CONFLICT(mayorista_id) DO UPDATE SET pedido_envio_parcial_habilitado=EXCLUDED.pedido_envio_parcial_habilitado,actualizado_en=now()',[id,habilitado]);
+    res.json({ok:true,mensaje:'Envío de seleccionados guardado para este mayorista.'});
+  }catch(e){next(e);}
+});
 router.get('/equivalencias/:id/campos',async(req,res,next)=>{
   try{
     const id=await mayoristaValido(req.params.id);
