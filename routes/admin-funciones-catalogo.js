@@ -4,6 +4,9 @@ const {mayoristaValido,leer}=require('../services/ivanFuncionesCatalogo');
 const {errorCliente}=require('../services/ivanImagenesDatos');
 const conexion=require('../services/conexionMayorista');
 const {CAMPO_ACTUAL,camposDisponibles,validarCampo}=require('../services/ivanCampoEquivalencias');
+const descuentosComerciales=require('../services/ivanDescuentosComerciales');
+router.get('/descuentos/:id',async(req,res,next)=>{try{const id=await mayoristaValido(req.params.id);res.set('Cache-Control','no-store');const cfg=await descuentosComerciales.leer(id);res.json({habilitado:cfg.habilitado,activo:cfg.activo,disponible:cfg.disponible,version:Number(cfg.version)});}catch(e){next(e);}});
+router.put('/descuentos/:id',async(req,res,next)=>{try{const id=await mayoristaValido(req.params.id);const cfg=await descuentosComerciales.habilitar(id,req.body);res.json({habilitado:cfg.habilitado,activo:cfg.activo,disponible:true,version:Number(cfg.version)});}catch(e){next(e);}});
 router.get('/:id',async(req,res,next)=>{try{const id=await mayoristaValido(req.params.id);res.set('Cache-Control','no-store');res.json(await leer(id,true));}catch(e){next(e);}});
 router.put('/envio-parcial/:id',async(req,res,next)=>{
   try{

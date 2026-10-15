@@ -6,6 +6,8 @@ const pool = require('../db');
 const conexionCompartida = require('../services/conexionMayorista');
 const jwt = require('jsonwebtoken');
 const { obtenerDescuentoItems } = require('../services/descuentoClienteIvan');
+const descuentosComerciales = require('../services/ivanDescuentosComerciales');
+const reglasComerciales = require('../services/ivanDescuentosReglas');
 const {
   MODELO_COSTO_MARGEN_IVA,
   asegurarColumnasPrecioMayorista,
@@ -46,6 +48,7 @@ async function getConfiguracionPrecio(mayoristaId) {
 }
 
 function aplicarCondicionesPrecio(productos, condiciones) {
+  if (condiciones.comercial) return reglasComerciales.aplicar(productos, condiciones.comercial);
   return aplicarPreciosCatalogo(productos, {
     ...condiciones.configPrecio,
     dto_pago_termino: condiciones.dtoPct,
@@ -81,6 +84,8 @@ async function aplicarImagenesCatalogo(productos, mayoristaId) {
 }
 
 async function getCondicionesPrecio(req, poolExterno, mayoristaId) {
+  const comercial = await descuentosComerciales.condicion(req, mayoristaId);
+  if (comercial) { req.res?.set('Cache-Control','no-store'); return {comercial, dtoPct:0, descuentoItemsPct:0, configPrecio:{modelo_precio_catalogo:'precio_recibido'}}; }
   const [dtoPct, configPrecio] = await Promise.all([
     getDtoPagoTermino(mayoristaId),
     getConfiguracionPrecio(mayoristaId),
@@ -514,7 +519,9 @@ router.get('/:mayorista_id', async (req, res) => {
     const ivaParaOrden = campoIva && configPrecio.usar_iva_producto !== false
       ? `COALESCE("${campoIva}", ${ivaCatalogoDefault})`
       : `${ivaCatalogoDefault}`;
-    const expresionPrecioOrden = configPrecio.modelo_precio_catalogo === MODELO_COSTO_MARGEN_IVA
+    const expresionPrecioOrden = condicionesPrecio.comercial && ordenPrecio
+      ? reglasComerciales.ordenSql(condicionesPrecio.comercial, params)
+      : configPrecio.modelo_precio_catalogo === MODELO_COSTO_MARGEN_IVA
       ? `(precio_producto * ${1 + margenCatalogo / 100} * (1 + (${ivaParaOrden}) / 100.0))`
       : 'precio_producto';
     const orderBy = ordenPrecio
