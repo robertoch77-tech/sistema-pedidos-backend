@@ -15,6 +15,33 @@ router.use('/:id',(req,res,next)=>{Promise.resolve().then(async()=>{await mayori
 router.get('/:id',ruta(async(req,res)=>res.json(req.configDescuentos)));
 router.put('/:id',rateLimit({windowMs:60000,max:12,standardHeaders:true,legacyHeaders:false}),ruta(async(req,res)=>res.json(await servicio.guardar(req.mayoristaDescuentos,req.body))));
 router.get('/:id/opciones',ruta(async(req,res)=>{const db=await conexion.getConexionMayorista(req.mayoristaDescuentos);if(!db)throw reglas.error('Catálogo no disponible.',503);const r=await db.query('SELECT DISTINCT BTRIM(des_producto_rubro) AS rubro,BTRIM(des_producto_marca) AS marca FROM "viewProductos"');res.json({rubros:[...new Set(r.rows.map(p=>p.rubro).filter(Boolean))].sort(),marcas:[...new Set(r.rows.map(p=>p.marca).filter(Boolean))].sort()});}));
-router.get('/:id/clientes',ruta(async(req,res)=>{const busqueda=String(req.query.q||'').trim();if(busqueda.length<3)return res.json({clientes:[]});if(busqueda.length>100)throw reglas.error('Búsqueda demasiado larga.');const db=await conexion.getConexionMayorista(req.mayoristaDescuentos);if(!db)throw reglas.error('Clientes no disponibles.',503);const r=await db.query(`SELECT id_cliente,doc_cliente,nom_fan_cliente,raz_soc_cliente FROM "viewClientes" WHERE es_activo=true AND (doc_cliente ILIKE $1 OR nom_fan_cliente ILIKE $1 OR raz_soc_cliente ILIKE $1) ORDER BY nom_fan_cliente,raz_soc_cliente LIMIT 50`,['%'+busqueda+'%']);res.json({clientes:r.rows.map(c=>({cuit:reglas.cuit(c.doc_cliente),nombre:c.nom_fan_cliente||c.raz_soc_cliente}))});}));
+router.get('/:id/clientes',ruta(async(req,res)=>{
+  const busqueda=String(req.query.q||'').trim();
+  if(busqueda.length>100)throw reglas.error('Búsqueda demasiado larga.');
+  const pagina=Number(req.query.pagina||1),todos=req.query.todos==='1';
+  if(!Number.isSafeInteger(pagina)||pagina<1||pagina>1000000)throw reglas.error('Página inválida.');
+  const db=await conexion.getConexionMayorista(req.mayoristaDescuentos);
+  if(!db)throw reglas.error('Clientes no disponibles.',503);
+  // Mismo criterio de búsqueda tolerante de las pantallas anteriores; no cambia datos.
+  const patron='%'+busqueda.replace(/[ñÑáéíóúÁÉÍÓÚ\uFFFD]/g,'_')+'%';
+  const cte=`WITH clientes AS (
+    SELECT DISTINCT ON (regexp_replace(doc_cliente::text,'[^0-9]','','g'))
+      regexp_replace(doc_cliente::text,'[^0-9]','','g') AS cuit,
+      COALESCE(NULLIF(BTRIM(nom_fan_cliente),''),BTRIM(raz_soc_cliente),'') AS nombre,
+      COALESCE(raz_soc_cliente,'') AS razon_social
+    FROM "viewClientes" WHERE es_activo=true AND doc_cliente IS NOT NULL
+    ORDER BY regexp_replace(doc_cliente::text,'[^0-9]','','g'),id_cliente
+  ) `;
+  const filtro="char_length(cuit) BETWEEN 7 AND 20 AND (cuit ILIKE $1 OR nombre ILIKE $1 OR razon_social ILIKE $1)";
+  if(todos){
+    const r=await db.query(cte+'SELECT cuit,nombre FROM clientes WHERE '+filtro+' ORDER BY nombre,cuit LIMIT 5001',[patron]);
+    if(r.rows.length>5000)throw reglas.error('El filtro supera los 5.000 clientes. Acotá la búsqueda para seleccionar sus resultados.',400);
+    return res.json({clientes:r.rows,total:r.rows.length,pagina:1,totalPaginas:1});
+  }
+  const cuenta=await db.query(cte+'SELECT COUNT(*)::integer AS total FROM clientes WHERE '+filtro,[patron]);
+  const total=Number(cuenta.rows[0]?.total||0),totalPaginas=Math.ceil(total/50),actual=Math.min(pagina,Math.max(1,totalPaginas));
+  const r=await db.query(cte+'SELECT cuit,nombre FROM clientes WHERE '+filtro+' ORDER BY nombre,cuit LIMIT 50 OFFSET $2',[patron,(actual-1)*50]);
+  res.json({clientes:r.rows,total,pagina:actual,totalPaginas});
+}));
 router.use((e,req,res,next)=>res.status(e.status||503).json({mensaje:e.status?e.message:'No se pudo consultar o guardar los descuentos. No se modificó la configuración.'}));
 module.exports=router;
