@@ -8,6 +8,15 @@ const descuentosComerciales=require('../services/ivanDescuentosComerciales');
 router.get('/descuentos/:id',async(req,res,next)=>{try{const id=await mayoristaValido(req.params.id);res.set('Cache-Control','no-store');const cfg=await descuentosComerciales.leer(id);res.json({habilitado:cfg.habilitado,activo:cfg.activo,disponible:cfg.disponible,version:Number(cfg.version)});}catch(e){next(e);}});
 router.put('/descuentos/:id',async(req,res,next)=>{try{const id=await mayoristaValido(req.params.id);const cfg=await descuentosComerciales.habilitar(id,req.body);res.json({habilitado:cfg.habilitado,activo:cfg.activo,disponible:true,version:Number(cfg.version)});}catch(e){next(e);}});
 router.get('/:id',async(req,res,next)=>{try{const id=await mayoristaValido(req.params.id);res.set('Cache-Control','no-store');res.json(await leer(id,true));}catch(e){next(e);}});
+router.put('/codigos-destacados/:id',async(req,res,next)=>{
+  try{
+    const id=await mayoristaValido(req.params.id);
+    const habilitado=req.body?.catalogo_codigos_destacados;
+    if(typeof habilitado!=='boolean')throw errorCliente('Elegí habilitar o deshabilitar los códigos destacados.');
+    await pool.query('INSERT INTO ivan_funciones_config(mayorista_id,catalogo_codigos_destacados) VALUES($1,$2) ON CONFLICT(mayorista_id) DO UPDATE SET catalogo_codigos_destacados=EXCLUDED.catalogo_codigos_destacados,actualizado_en=now()',[id,habilitado]);
+    res.json({ok:true,mensaje:'Presentación de códigos guardada para este mayorista. Recargá el catálogo para usarla.'});
+  }catch(e){next(e);}
+});
 router.put('/cantidad-directa/:id',async(req,res,next)=>{
   try{
     const id=await mayoristaValido(req.params.id);
