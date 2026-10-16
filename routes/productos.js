@@ -135,13 +135,13 @@ async function tieneObsProducto(poolExterno, mayorista_id) {
     return cache.disponible;
   }
   try {
-    // Comprueba la columna real con los mismos permisos y resolución de vista
-    // del catálogo. LIMIT 0 no devuelve observaciones ni filas de productos.
-    const r = await poolExterno.query('SELECT obs_producto FROM "viewProductos" LIMIT 0');
-    soporteObsProducto[mayorista_id] = { disponible: r.fields.some(campo => campo.name === 'obs_producto'), verificado_en: Date.now() };
-  } catch (error) {
-    const codigo = typeof error.code === 'string' && /^[0-9A-Z]{5}$/.test(error.code) ? error.code : 'SIN_CODIGO_SQL';
-    console.warn('[IVAN_OBSERVACIONES] No se pudo comprobar obs_producto.', { mayoristaId: Number(mayorista_id), codigo });
+    const r = await poolExterno.query(
+      `SELECT 1 FROM information_schema.columns
+       WHERE table_name = 'viewProductos' AND column_name = 'obs_producto'
+       LIMIT 1`
+    );
+    soporteObsProducto[mayorista_id] = { disponible: r.rows.length > 0, verificado_en: Date.now() };
+  } catch {
     soporteObsProducto[mayorista_id] = { disponible: false, verificado_en: Date.now() };
   }
   return soporteObsProducto[mayorista_id].disponible;
