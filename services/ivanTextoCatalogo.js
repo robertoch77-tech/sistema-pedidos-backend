@@ -17,19 +17,32 @@ async function aplicarTextosCatalogo(productos, mayoristaId) {
     const db = await conexion.getConexionMayorista(mayoristaId);
     if (!db) return productos;
     const resultado = await db.query(
-      `SELECT id_producto,
-              encode(convert_to(des_producto::text, 'UTF8'), 'base64') AS descripcion_b64
-              ${conObservaciones ? ", encode(convert_to(obs_producto::text, 'UTF8'), 'base64') AS observaciones_b64" : ''}
+      `SELECT id_producto, current_setting('client_encoding') AS codificacion_texto,
+              encode(convert_to(des_producto::text, current_setting('client_encoding')::name), 'base64') AS descripcion_b64
+              ${conObservaciones ? ", encode(convert_to(obs_producto::text, current_setting('client_encoding')::name), 'base64') AS observaciones_b64" : ''}
        FROM "viewProductos" WHERE id_producto = ANY($1::bigint[])`,
       [ids]
     );
     const decoder = new TextDecoder('utf-8', { fatal: true });
-    const textos = new Map(resultado.rows.map(fila => [String(fila.id_producto), {
-      ...(typeof fila.descripcion_b64 === 'string'
-        ? { descripcion_catalogo: decoder.decode(Buffer.from(fila.descripcion_b64, 'base64')) } : {}),
-      ...(typeof fila.observaciones_b64 === 'string'
-        ? { observaciones_catalogo: decoder.decode(Buffer.from(fila.observaciones_b64, 'base64')) } : {}),
-    }]));
+    const originales = new Map(productos.map(p => [String(p.id_producto), p]));
+    const textos = new Map(resultado.rows.map(fila => {
+      const original = originales.get(String(fila.id_producto));
+      const codificacion = String(fila.codificacion_texto || '').toUpperCase();
+      const decodificar = (base64, anterior) => {
+        // Conservar el texto que ya llegó intacto; recuperar solo la pérdida.
+        if (typeof anterior === 'string' && !anterior.includes('\uFFFD')) return anterior;
+        const bytes = Buffer.from(base64, 'base64');
+        if (codificacion === 'LATIN1') return bytes.toString('latin1');
+        if (codificacion === 'UTF8') return decoder.decode(bytes);
+        throw new Error('Codificación de presentación no admitida');
+      };
+      return [String(fila.id_producto), {
+        ...(typeof fila.descripcion_b64 === 'string'
+          ? { descripcion_catalogo: decodificar(fila.descripcion_b64, original?.des_producto) } : {}),
+        ...(typeof fila.observaciones_b64 === 'string'
+          ? { observaciones_catalogo: decodificar(fila.observaciones_b64, original?.obs_producto) } : {}),
+      }];
+    }));
     return productos.map(producto => ({ ...producto, ...textos.get(String(producto.id_producto)) }));
   } catch (error) {
     // Una presentación opcional no debe impedir consultar productos ni revelar
