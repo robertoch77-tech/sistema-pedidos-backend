@@ -4,7 +4,9 @@ const CAMPO_ACTUAL='obs_producto';
 // OID de los tipos incorporados char, name, text, bpchar y varchar.
 const TIPOS_TEXTO=new Set([18,19,25,1042,1043]);
 function esUbicacion(nombre) {
-  return typeof nombre==='string' && nombre.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().includes('ubic');
+  if(typeof nombre!=='string')return false;
+  const normalizado=nombre.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+  return normalizado==='ubi_producto' || normalizado.includes('ubic');
 }
 function identificadorSql(nombre) {
   if(typeof nombre!=='string' || !nombre || Buffer.byteLength(nombre,'utf8')>63 || nombre.includes('\0'))throw errorCliente('Campo de equivalencias inválido.');
