@@ -1,5 +1,6 @@
 const { aplicarImagenesPropias } = require('../services/ivanImagenesPropias');
 const { aplicarTextosCatalogo } = require('../services/ivanTextoCatalogo');
+const { aplicarMarcaProducto } = require('../services/ivanMarcaProducto');
 const { resolverCampo, seleccionGrupo, identificadorSql } = require('../services/ivanCampoEquivalencias');
 const express = require('express');
 const router = express.Router();
@@ -82,7 +83,8 @@ async function aplicarImagenesMejoradas(productos, mayoristaId) {
 async function aplicarImagenesCatalogo(productos, mayoristaId) {
   const actuales = await aplicarImagenesMejoradas(productos, mayoristaId);
   const conImagenes = await aplicarImagenesPropias(actuales, mayoristaId, productos);
-  return aplicarTextosCatalogo(conImagenes, mayoristaId);
+  const conTextos = await aplicarTextosCatalogo(conImagenes, mayoristaId);
+  return aplicarMarcaProducto(conTextos, mayoristaId);
 }
 
 async function getCondicionesPrecio(req, poolExterno, mayoristaId) {

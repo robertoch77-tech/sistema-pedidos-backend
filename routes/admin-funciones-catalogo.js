@@ -5,6 +5,25 @@ const {errorCliente}=require('../services/ivanImagenesDatos');
 const conexion=require('../services/conexionMayorista');
 const {CAMPO_ACTUAL,camposDisponibles,validarCampo}=require('../services/ivanCampoEquivalencias');
 const descuentosComerciales=require('../services/ivanDescuentosComerciales');
+const marcaProducto=require('../services/ivanMarcaProducto');
+router.get('/marca-producto/:id',async(req,res,next)=>{
+  try{const id=await mayoristaValido(req.params.id);res.set('Cache-Control','no-store');res.json(await marcaProducto.leer(id));}catch(e){next(e);}
+});
+router.get('/marca-producto/:id/campos',async(req,res,next)=>{
+  try{
+    const id=await mayoristaValido(req.params.id);
+    const db=await conexion.getConexionMayorista(id);
+    if(!db)throw errorCliente('No se pudo consultar la vista del catálogo. La configuración se conserva.',503);
+    res.set('Cache-Control','no-store');res.json({campos:await marcaProducto.camposDisponibles(db,true)});
+  }catch(e){next(e);}
+});
+router.put('/marca-producto/:id',async(req,res,next)=>{
+  try{
+    const id=await mayoristaValido(req.params.id);
+    const config=await marcaProducto.guardar(id,req.body);
+    res.json({config,mensaje:config.habilitado?'Marca del producto habilitada para este mayorista. Recargá su catálogo.':'Configuración guardada. La marca del producto continúa deshabilitada.'});
+  }catch(e){next(e);}
+});
 router.get('/descuentos/:id',async(req,res,next)=>{try{const id=await mayoristaValido(req.params.id);res.set('Cache-Control','no-store');const cfg=await descuentosComerciales.leer(id);res.json({habilitado:cfg.habilitado,activo:cfg.activo,disponible:cfg.disponible,version:Number(cfg.version)});}catch(e){next(e);}});
 router.put('/descuentos/:id',async(req,res,next)=>{try{const id=await mayoristaValido(req.params.id);const cfg=await descuentosComerciales.habilitar(id,req.body);res.json({habilitado:cfg.habilitado,activo:cfg.activo,disponible:true,version:Number(cfg.version)});}catch(e){next(e);}});
 router.get('/:id',async(req,res,next)=>{try{const id=await mayoristaValido(req.params.id);res.set('Cache-Control','no-store');res.json(await leer(id,true));}catch(e){next(e);}});
