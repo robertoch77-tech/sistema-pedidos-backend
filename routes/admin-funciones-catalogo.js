@@ -6,6 +6,16 @@ const conexion=require('../services/conexionMayorista');
 const {CAMPO_ACTUAL,camposDisponibles,validarCampo}=require('../services/ivanCampoEquivalencias');
 const descuentosComerciales=require('../services/ivanDescuentosComerciales');
 const marcaProducto=require('../services/ivanMarcaProducto');
+const bultos=require('../services/ivanBultos');
+router.get('/bultos/:id',async(req,res,next)=>{
+  try{const id=await mayoristaValido(req.params.id);res.set('Cache-Control','no-store');res.json(await bultos.leer(id));}catch(e){next(e);}
+});
+router.get('/bultos/:id/campos',async(req,res,next)=>{
+  try{const id=await mayoristaValido(req.params.id);const db=await conexion.getConexionMayorista(id);if(!db)throw errorCliente('No se pudo consultar la vista del catálogo.',503);res.set('Cache-Control','no-store');res.json({campos:await bultos.camposDisponibles(db,true)});}catch(e){next(e);}
+});
+router.put('/bultos/:id',async(req,res,next)=>{
+  try{const id=await mayoristaValido(req.params.id);const config=await bultos.guardar(id,req.body);res.json({config,mensaje:config.habilitado?'Unidades por bulto habilitadas para este mayorista. Recargá su catálogo.':'Configuración guardada. Unidades por bulto deshabilitadas.'});}catch(e){next(e);}
+});
 router.get('/marca-producto/:id',async(req,res,next)=>{
   try{const id=await mayoristaValido(req.params.id);res.set('Cache-Control','no-store');res.json(await marcaProducto.leer(id));}catch(e){next(e);}
 });

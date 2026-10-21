@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 const conexionCompartida = require('../services/conexionMayorista');
+const bultos = require('../services/ivanBultos');
 const { registrarNotificacionIvan } = require('../services/notificacionesIvan');
 const { registrarPedido: registrarPedidoIvan } = require('../services/auditoriaIvan');
 const {
@@ -156,6 +157,9 @@ router.post('/', async (req, res) => {
     if (!mayorista_id || !Array.isArray(items)) {
       return res.status(400).json({ mensaje: 'Datos incompletos para guardar el pedido' });
     }
+
+    const falloBultos = await bultos.validarPedido(mayorista_id, items);
+    if (falloBultos) return res.status(falloBultos.status).json(falloBultos);
 
     clienteCentral = await pool.connect();
     await clienteCentral.query('BEGIN');
@@ -385,6 +389,8 @@ router.put('/:id', async (req, res) => {
       [id, mayorista_id]
     );
     if (!check.rows[0]) return res.status(404).json({ mensaje: 'Pedido no encontrado' });
+    const falloBultos = await bultos.validarPedido(mayorista_id, items);
+    if (falloBultos) return res.status(falloBultos.status).json(falloBultos);
     await pool.query(
       `UPDATE pedidos_web SET descuento=$1,total_estimado=$2,observaciones=$3,estado=$4 WHERE id=$5 AND mayorista_id=$6`,
       [descuento, total_estimado, observaciones, estado, id, mayorista_id]

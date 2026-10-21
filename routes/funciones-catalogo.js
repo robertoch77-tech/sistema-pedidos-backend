@@ -5,9 +5,19 @@ const rateLimit=require('express-rate-limit');
 const {idSeguro,errorCliente}=require('../services/ivanImagenesDatos');
 const {estadoStock}=require('../services/ivanStockConsulta');
 const {mayoristaValido,leer}=require('../services/ivanFuncionesCatalogo');
+const bultos=require('../services/ivanBultos');
 router.get('/:id',async(req,res)=>{
-  try{const id=await mayoristaValido(req.params.id,true);res.set('Cache-Control','no-store');res.json(await leer(id));}
+  try{const id=await mayoristaValido(req.params.id,true);const cfg=await leer(id);res.set('Cache-Control','no-store');res.json({...cfg,...await bultos.publica(id)});}
   catch(e){res.status(e.status || 503).json({mensaje:e.status?e.message:'No se pudo consultar la presentación del catálogo.'});}
+});
+const limiteBultos=rateLimit({windowMs:60000,limit:120,standardHeaders:true,legacyHeaders:false,message:{mensaje:'Esperá un momento antes de consultar los bultos.'}});
+router.get('/:id/bultos',limiteBultos,async(req,res)=>{
+  try{const id=await mayoristaValido(req.params.id,true);const ids=String(req.query.ids || '').split(',').filter(Boolean);if(ids.length>200)throw errorCliente('Consultá hasta 200 productos por vez.');res.set('Cache-Control','no-store');res.json(await bultos.reglas(id,ids));}
+  catch(e){res.status(e.status || 503).json({mensaje:e.status?e.message:'No se pudieron consultar las unidades por bulto.'});}
+});
+router.post('/:id/bultos/validar',limiteBultos,async(req,res)=>{
+  try{const id=await mayoristaValido(req.params.id,true);const fallo=await bultos.validarPedido(id,req.body?.items);res.set('Cache-Control','no-store');if(fallo)return res.status(fallo.status).json(fallo);res.json({ok:true});}
+  catch(e){res.status(e.status || 503).json({mensaje:e.status?e.message:'No se pudieron comprobar las cantidades.'});}
 });
 const limiteStock=rateLimit({windowMs:60000,limit:120,standardHeaders:true,legacyHeaders:false,message:{mensaje:'Esperá un momento antes de volver a consultar el stock.'}});
 router.get('/:id/stock/:productoId',limiteStock,async(req,res)=>{
