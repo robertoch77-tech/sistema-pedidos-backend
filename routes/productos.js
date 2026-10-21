@@ -2,6 +2,7 @@ const { aplicarImagenesPropias } = require('../services/ivanImagenesPropias');
 const { aplicarTextosCatalogo } = require('../services/ivanTextoCatalogo');
 const { aplicarMarcaProducto } = require('../services/ivanMarcaProducto');
 const { resolverCampo, seleccionGrupo, identificadorSql } = require('../services/ivanCampoEquivalencias');
+const equivalenciasCodigos = require('../services/ivanEquivalenciasCodigos');
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
@@ -374,6 +375,36 @@ router.get('/:mayorista_id/equivalentes', async (req, res) => {
     if (!campoEquivalencias) return res.json([]);
     const columnaGrupo = identificadorSql(campoEquivalencias);
     const campoIva = await campoIvaProducto(poolExterno, mayorista_id);
+
+    if ((await equivalenciasCodigos.configuracion(mayorista_id)).equivalencias_modo === 'codigos') {
+      if (codigos.length > 200) return res.status(400).json({ mensaje: 'Consultá hasta 200 productos para sus equivalencias.' });
+      const origenes = await poolExterno.query(
+        `SELECT cod_producto, ${columnaGrupo} AS equivalencia_grupo FROM "viewProductos"
+         WHERE UPPER(BTRIM(cod_producto))=ANY($1::text[])`,
+        [codigos.map(equivalenciasCodigos.normalizarCodigo)]
+      );
+      const referencias = equivalenciasCodigos.referencias(origenes.rows);
+      if (!referencias.codigos.length) return res.json([]);
+      const alternativas = await poolExterno.query(
+        `SELECT id_producto, cod_producto, des_producto, imagen_producto,
+                precio_producto, stock_temporal, des_producto_marca,
+                des_producto_rubro, des_producto_tipo
+                ${conObsProducto ? ', obs_producto' : ''}
+                ${seleccionGrupo(campoEquivalencias)}
+                ${seleccionIva(campoIva)}
+         FROM "viewProductos"
+         WHERE UPPER(BTRIM(cod_producto))=ANY($1::text[])
+           AND UPPER(BTRIM(cod_producto))<>ALL($2::text[])
+         ORDER BY des_producto_marca, precio_producto
+         LIMIT 1000`,
+        [referencias.codigos, codigos.map(equivalenciasCodigos.normalizarCodigo)]
+      );
+      const vinculadas = alternativas.rows.map(p => ({ ...p, equivalencia_origenes: referencias.origenesDe(p.cod_producto) }));
+      const condicionesPrecio = await getCondicionesPrecio(req, poolExterno, mayorista_id);
+      const transformadas = aplicarCondicionesPrecio(vinculadas, condicionesPrecio);
+      transformadas.sort((a, b) => (Number(a.precio_producto) || 0) - (Number(b.precio_producto) || 0));
+      return res.json(await aplicarImagenesCatalogo(transformadas, mayorista_id));
+    }
 
     const origen = await poolExterno.query(
       `SELECT DISTINCT ${columnaGrupo} AS grupo_equivalencia

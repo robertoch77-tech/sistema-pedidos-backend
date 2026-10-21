@@ -7,6 +7,7 @@ const {CAMPO_ACTUAL,camposDisponibles,validarCampo}=require('../services/ivanCam
 const descuentosComerciales=require('../services/ivanDescuentosComerciales');
 const marcaProducto=require('../services/ivanMarcaProducto');
 const bultos=require('../services/ivanBultos');
+const equivalenciasCodigos=require('../services/ivanEquivalenciasCodigos');
 router.get('/bultos/:id',async(req,res,next)=>{
   try{const id=await mayoristaValido(req.params.id);res.set('Cache-Control','no-store');res.json(await bultos.leer(id));}catch(e){next(e);}
 });
@@ -36,7 +37,7 @@ router.put('/marca-producto/:id',async(req,res,next)=>{
 });
 router.get('/descuentos/:id',async(req,res,next)=>{try{const id=await mayoristaValido(req.params.id);res.set('Cache-Control','no-store');const cfg=await descuentosComerciales.leer(id);res.json({habilitado:cfg.habilitado,activo:cfg.activo,disponible:cfg.disponible,version:Number(cfg.version)});}catch(e){next(e);}});
 router.put('/descuentos/:id',async(req,res,next)=>{try{const id=await mayoristaValido(req.params.id);const cfg=await descuentosComerciales.habilitar(id,req.body);res.json({habilitado:cfg.habilitado,activo:cfg.activo,disponible:true,version:Number(cfg.version)});}catch(e){next(e);}});
-router.get('/:id',async(req,res,next)=>{try{const id=await mayoristaValido(req.params.id);res.set('Cache-Control','no-store');res.json(await leer(id,true));}catch(e){next(e);}});
+router.get('/:id',async(req,res,next)=>{try{const id=await mayoristaValido(req.params.id);res.set('Cache-Control','no-store');res.json({...await leer(id,true),...await equivalenciasCodigos.configuracion(id)});}catch(e){next(e);}});
 router.put('/codigos-destacados/:id',async(req,res,next)=>{
   try{
     const id=await mayoristaValido(req.params.id);
@@ -78,8 +79,17 @@ router.put('/equivalencias/:id',async(req,res,next)=>{
     const id=await mayoristaValido(req.params.id);
     const campo=req.body?.equivalencias_campo;
     if(typeof campo!=='string')throw errorCliente('Elegí el campo de equivalencias.');
+    const modo=req.body?.equivalencias_modo;
+    if(modo!==undefined){
+      if(!['grupo','codigos'].includes(modo))throw errorCliente('Elegí cómo interpretar el campo de equivalencias.');
+      if(!(await equivalenciasCodigos.configuracion(id)).equivalencias_modo_disponible)throw errorCliente('Falta aplicar el SQL del modo de equivalencias. No se guardaron cambios.',503);
+    }
     if(campo!==CAMPO_ACTUAL){const db=await conexion.getConexionMayorista(id);if(!db)throw errorCliente('No se pudo comprobar el campo de Ubicación. No se guardaron cambios.',503);await validarCampo(db,campo);}
-    await pool.query('INSERT INTO ivan_funciones_config(mayorista_id,equivalencias_campo) VALUES($1,$2) ON CONFLICT(mayorista_id) DO UPDATE SET equivalencias_campo=EXCLUDED.equivalencias_campo,actualizado_en=now()',[id,campo]);
+    if(modo===undefined){
+      await pool.query('INSERT INTO ivan_funciones_config(mayorista_id,equivalencias_campo) VALUES($1,$2) ON CONFLICT(mayorista_id) DO UPDATE SET equivalencias_campo=EXCLUDED.equivalencias_campo,actualizado_en=now()',[id,campo]);
+    }else{
+      await pool.query('INSERT INTO ivan_funciones_config(mayorista_id,equivalencias_campo,equivalencias_modo) VALUES($1,$2,$3) ON CONFLICT(mayorista_id) DO UPDATE SET equivalencias_campo=EXCLUDED.equivalencias_campo,equivalencias_modo=EXCLUDED.equivalencias_modo,actualizado_en=now()',[id,campo,modo]);
+    }
     res.json({ok:true,mensaje:'Campo de equivalencias guardado para este mayorista. Recargá el catálogo para usarlo.'});
   }catch(e){next(e);}
 });

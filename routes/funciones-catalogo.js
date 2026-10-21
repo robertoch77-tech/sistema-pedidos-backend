@@ -6,8 +6,9 @@ const {idSeguro,errorCliente}=require('../services/ivanImagenesDatos');
 const {estadoStock}=require('../services/ivanStockConsulta');
 const {mayoristaValido,leer}=require('../services/ivanFuncionesCatalogo');
 const bultos=require('../services/ivanBultos');
+const equivalenciasCodigos=require('../services/ivanEquivalenciasCodigos');
 router.get('/:id',async(req,res)=>{
-  try{const id=await mayoristaValido(req.params.id,true);const cfg=await leer(id);res.set('Cache-Control','no-store');res.json({...cfg,...await bultos.publica(id)});}
+  try{const id=await mayoristaValido(req.params.id,true);const cfg=await leer(id);res.set('Cache-Control','no-store');res.json({...cfg,...await bultos.publica(id),...await equivalenciasCodigos.configuracion(id)});}
   catch(e){res.status(e.status || 503).json({mensaje:e.status?e.message:'No se pudo consultar la presentación del catálogo.'});}
 });
 const limiteBultos=rateLimit({windowMs:60000,limit:120,standardHeaders:true,legacyHeaders:false,message:{mensaje:'Esperá un momento antes de consultar los bultos.'}});
