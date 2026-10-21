@@ -8,6 +8,16 @@ const descuentosComerciales=require('../services/ivanDescuentosComerciales');
 const marcaProducto=require('../services/ivanMarcaProducto');
 const bultos=require('../services/ivanBultos');
 const equivalenciasCodigos=require('../services/ivanEquivalenciasCodigos');
+const precioOrigen=require('../services/ivanPrecioOrigen');
+router.get('/precio-origen/:id',async(req,res,next)=>{
+  try{const id=await mayoristaValido(req.params.id);res.set('Cache-Control','no-store');res.json(await precioOrigen.leer(id));}catch(e){next(e);}
+});
+router.get('/precio-origen/:id/campos',async(req,res,next)=>{
+  try{const id=await mayoristaValido(req.params.id);const db=await conexion.getConexionMayorista(id);if(!db)throw errorCliente('No se pudo consultar la vista del catálogo.',503);res.set('Cache-Control','no-store');res.json({campos:await precioOrigen.campos(db,true)});}catch(e){next(e);}
+});
+router.put('/precio-origen/:id',async(req,res,next)=>{
+  try{const id=await mayoristaValido(req.params.id);res.json({config:await precioOrigen.guardarAdmin(id,req.body),mensaje:'Datos de origen guardados. Solo preparan la vista previa; no se modificaron precios activos.'});}catch(e){next(e);}
+});
 router.get('/bultos/:id',async(req,res,next)=>{
   try{const id=await mayoristaValido(req.params.id);res.set('Cache-Control','no-store');res.json(await bultos.leer(id));}catch(e){next(e);}
 });
