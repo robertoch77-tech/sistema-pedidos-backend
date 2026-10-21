@@ -16,6 +16,24 @@ async function buscarProductos(id, valor) {
   return { productos: r.rows };
 }
 
+async function seleccionarProductos(id, consulta) {
+  const q=String(consulta.q||'').trim(),pagina=Number(consulta.pagina||1),todos=consulta.todos==='1';
+  if(q.length>80||!Number.isSafeInteger(pagina)||pagina<1||pagina>1000000)throw reglas.error('Filtro o página de productos inválidos.');
+  const db=await conexion.getConexionMayorista(id);
+  if(!db)throw reglas.error('El catálogo de este mayorista no está disponible.',503);
+  const patron='%'+q.replace(/[ñÑáéíóúÁÉÍÓÚ\uFFFD]/g,'_')+'%';
+  const filtro='cod_producto ILIKE $1 OR des_producto ILIKE $1';
+  if(todos){
+    const r=await db.query(`SELECT id_producto,cod_producto,des_producto FROM "viewProductos" WHERE ${filtro} ORDER BY cod_producto,id_producto LIMIT 301`,[patron]);
+    if(r.rows.length>300)throw reglas.error('El filtro supera 300 productos. Acotá la búsqueda para seleccionar todos sus resultados.');
+    return {productos:r.rows,total:r.rows.length,pagina:1,totalPaginas:1};
+  }
+  const cuenta=await db.query(`SELECT COUNT(*)::integer AS total FROM "viewProductos" WHERE ${filtro}`,[patron]);
+  const total=Number(cuenta.rows[0]?.total||0),totalPaginas=Math.ceil(total/50),actual=Math.min(pagina,Math.max(1,totalPaginas));
+  const r=await db.query(`SELECT id_producto,cod_producto,des_producto FROM "viewProductos" WHERE ${filtro} ORDER BY cod_producto,id_producto LIMIT 50 OFFSET $2`,[patron,(actual-1)*50]);
+  return {productos:r.rows,total,pagina:actual,totalPaginas};
+}
+
 async function consultar(id, datos) {
   const cfg = await servicio.leer(id);
   if (!cfg.disponible || !cfg.habilitado) throw reglas.error('El permiso de descuentos no está habilitado.', 403);
@@ -56,4 +74,4 @@ async function consultar(id, datos) {
         : 'Condición guardada sin aplicar. Este sería su precio al activarla; el catálogo mantiene su circuito actual.'
   };
 }
-module.exports = { buscarProductos, consultar };
+module.exports = { buscarProductos, seleccionarProductos, consultar };

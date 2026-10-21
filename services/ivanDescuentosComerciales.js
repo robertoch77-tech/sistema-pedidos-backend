@@ -24,8 +24,16 @@ async function habilitar(id,body){
 async function guardar(id,body){
   const normal=reglas.validar(body);await mayoristaValido(id);
   const actual=await leer(id);if(!actual.disponible)throw reglas.error('Falta crear las tablas de descuentos.',503);if(!actual.habilitado)throw reglas.error('El administrador no habilitó esta función.',403);
+  if(body.productos_version!==1&&[...(actual.datos?.perfiles||[]),...normal.datos.perfiles].some(p=>p.reglas.some(r=>r.producto_id)))throw reglas.error('Hay descuentos por producto. Recargá la aplicación para editar sin perder esas reglas.',409);
   if(normal.activo){const modelo=await pool.query('SELECT modelo_precio_catalogo FROM mayoristas WHERE id=$1',[id]);if(modelo.rows[0]?.modelo_precio_catalogo!=='precio_recibido')throw reglas.error('Este módulo requiere el modelo de precio recibido. No cambia el modelo actual.',409);}
   const dbExterno=await conexion.getConexionMayorista(id);if(!dbExterno)throw reglas.error('No se pudo comprobar clientes y rubros. No se guardó la configuración.',503);
+  const idsProductos=[...new Set(normal.datos.perfiles.flatMap(p=>p.reglas.filter(r=>r.producto_id).map(r=>r.producto_id)))];
+  if(idsProductos.length){
+    const productos=await dbExterno.query('SELECT id_producto,cod_producto,des_producto FROM "viewProductos" WHERE id_producto=ANY($1::integer[])',[idsProductos]);
+    const propios=new Map(productos.rows.map(p=>[String(p.id_producto),p]));
+    if(idsProductos.some(productoId=>!propios.has(productoId)))throw reglas.error('Un producto seleccionado ya no está en el catálogo de este mayorista. Revisá sus reglas antes de guardar.',409);
+    normal.datos.perfiles.forEach(p=>p.reglas.forEach(r=>{if(r.producto_id){const producto=propios.get(r.producto_id);r.producto_codigo=String(producto.cod_producto??'').trim().slice(0,200);r.producto_descripcion=String(producto.des_producto??'').trim().slice(0,300);}}));
+  }
   const catalogo=await dbExterno.query('SELECT DISTINCT BTRIM(des_producto_rubro) AS rubro,BTRIM(des_producto_marca) AS marca FROM "viewProductos"');
   const rubros=new Set(catalogo.rows.map(r=>r.rubro)),marcas=new Set(catalogo.rows.map(r=>r.marca));
   if(normal.datos.perfiles.some(p=>p.reglas.some(r=>(r.rubro&&!rubros.has(r.rubro))||(r.marca&&!marcas.has(r.marca)))))throw reglas.error('Un rubro o marca ya no coincide con el catálogo. Actualizá las opciones.',409);
