@@ -7,6 +7,7 @@ const {mayoristaValido}=require('../services/ivanFuncionesCatalogo');
 const servicio=require('../services/ivanDescuentosComerciales');
 const reglas=require('../services/ivanDescuentosReglas');
 const precioOrigen=require('../services/ivanPrecioOrigen');
+const consultaCondicion=require('../services/ivanConsultaCondicion');
 const ruta=f=>(req,res,next)=>Promise.resolve(f(req,res)).catch(next);
 router.use((req,res,next)=>{res.set('Cache-Control','no-store');next();});
 router.get('/habilitacion-precios/:id',ruta(async(req,res)=>{const id=await mayoristaValido(req.params.id,true);const cfg=await precioOrigen.leer(id);res.json({habilitado:cfg.disponible&&cfg.habilitado,disponible:cfg.disponible});}));
@@ -19,6 +20,8 @@ router.get('/:id/origen-precio/productos',ruta(async(req,res)=>res.json(await pr
 router.post('/:id/origen-precio/vista-previa',rateLimit({windowMs:60000,max:60,standardHeaders:true,legacyHeaders:false}),ruta(async(req,res)=>res.json(await precioOrigen.previa(req.mayoristaDescuentos,req.body))));
 router.use('/:id',(req,res,next)=>{Promise.resolve().then(async()=>{await mayoristaValido(req.params.id,true);const cfg=await servicio.leer(req.params.id);if(!cfg.habilitado)throw reglas.error(cfg.disponible?'El administrador debe habilitar los descuentos comerciales.':'Falta crear las tablas de descuentos.',cfg.disponible?403:503);req.configDescuentos=cfg;next();}).catch(next);});
 router.get('/:id',ruta(async(req,res)=>res.json(req.configDescuentos)));
+router.get('/:id/consulta-productos',rateLimit({windowMs:60000,max:60,standardHeaders:true,legacyHeaders:false}),ruta(async(req,res)=>res.json(await consultaCondicion.buscarProductos(req.mayoristaDescuentos,req.query.q))));
+router.post('/:id/consulta-precio',rateLimit({windowMs:60000,max:60,standardHeaders:true,legacyHeaders:false}),ruta(async(req,res)=>res.json(await consultaCondicion.consultar(req.mayoristaDescuentos,req.body))));
 router.put('/:id',rateLimit({windowMs:60000,max:12,standardHeaders:true,legacyHeaders:false}),ruta(async(req,res)=>res.json(await servicio.guardar(req.mayoristaDescuentos,req.body))));
 router.get('/:id/opciones',ruta(async(req,res)=>{const db=await conexion.getConexionMayorista(req.mayoristaDescuentos);if(!db)throw reglas.error('Catálogo no disponible.',503);const r=await db.query('SELECT DISTINCT BTRIM(des_producto_rubro) AS rubro,BTRIM(des_producto_marca) AS marca FROM "viewProductos"');res.json({rubros:[...new Set(r.rows.map(p=>p.rubro).filter(Boolean))].sort(),marcas:[...new Set(r.rows.map(p=>p.marca).filter(Boolean))].sort()});}));
 router.get('/:id/clientes',ruta(async(req,res)=>{
