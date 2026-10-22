@@ -3,9 +3,10 @@ const pool = require('../db');
 const conexion = require('./conexionMayorista');
 const { mayoristaValido } = require('./ivanFuncionesCatalogo');
 const { errorCliente, idSeguro } = require('./ivanImagenesDatos');
+const ivaCalculo=require('./ivanIvaCalculo');
 const estructuras = new WeakMap();
 const base = () => ({ campo_precio: null, iva_origen: 'sin_confirmar', iva_fuente: 'general', campo_iva: null,
-  alicuota_general: null, unidad_precio: 'sin_confirmar', dto_general: 'sin_confirmar', dto_pago: 'sin_confirmar', dto_cliente: 'sin_confirmar' });
+  alicuota_general: null, unidad_precio: 'sin_confirmar', dto_general: 'sin_confirmar', dto_pago: 'sin_confirmar', dto_cliente: 'sin_confirmar',catalogo_iva:ivaCalculo.normalizar() });
 const vacia = () => ({ disponible: false, habilitado: false, origen: base(), presentacion: 'conservar', version: 0 });
 const campoSql = campo => {
   if (typeof campo !== 'string' || !campo || Buffer.byteLength(campo, 'utf8') > 63 || campo.includes('\0')) throw errorCliente('Nombre de campo inválido.');
@@ -27,7 +28,7 @@ function normalizarOrigen(datos) {
     campo_precio: campoOpcional(o.campo_precio),
     iva_origen: enumVal(o.iva_origen, ['sin_confirmar', 'incluido', 'no_incluido'], 'Indicá cómo llega el IVA.'),
     iva_fuente: enumVal(o.iva_fuente, ['general', 'producto'], 'Indicá de dónde tomar la alícuota.'),
-    campo_iva: campoOpcional(o.campo_iva), alicuota_general: tasa,
+    campo_iva: campoOpcional(o.campo_iva), alicuota_general: tasa,catalogo_iva:ivaCalculo.normalizar(o.catalogo_iva),
     unidad_precio: enumVal(o.unidad_precio, ['sin_confirmar', 'unidad', 'envase'], 'Indicá la unidad del precio.'),
     ...Object.fromEntries(['dto_general', 'dto_pago', 'dto_cliente'].map(k => [k,
       enumVal(o[k], ['sin_confirmar', 'incluido', 'no_incluido'], 'Revisá qué descuentos incluye el precio.')]))
@@ -89,9 +90,31 @@ async function guardarAdmin(id, datos) {
   await mayoristaValido(id);
   if (typeof datos?.habilitado !== 'boolean') throw errorCliente('Elegí habilitar o deshabilitar la vista previa.');
   const origen = normalizarOrigen(datos.origen);
+  if(!datos.habilitado||!origen.catalogo_iva.permitido)origen.catalogo_iva.modo='conservar';
+  await validarActivacion(id,origen,origen.catalogo_iva.modo);
   if (origen.campo_precio || (origen.iva_fuente === 'producto' && origen.campo_iva)) await dbOrigen(id, origen, true);
-  return transaccion(id, datos.version, 'admin', actual => ({ ...actual, habilitado: datos.habilitado, origen,
-    presentacion: JSON.stringify(actual.origen) === JSON.stringify(origen) ? actual.presentacion : 'conservar' }));
+  return transaccion(id, datos.version, 'admin', actual => {
+    if(actual.origen.catalogo_iva.modo!=='conservar'&&datos.iva_version!==1)throw errorCliente('Recargá la aplicación antes de editar una configuración con IVA activo.',409);
+    if((actual.origen.catalogo_iva.modo!=='conservar'||origen.catalogo_iva.modo!=='conservar')&&JSON.stringify(actual.origen)!==JSON.stringify(origen)&&datos.confirmar_aplicacion!==true)throw errorCliente('Confirmá el cambio del IVA aplicado al catálogo.');
+    return {...actual,habilitado:datos.habilitado,origen,presentacion:JSON.stringify(actual.origen)===JSON.stringify(origen)?actual.presentacion:'conservar'};
+  });
+}
+async function validarActivacion(id,origen,modo){
+  ivaCalculo.validar(origen,modo);if(modo==='conservar')return;
+  await dbOrigen(id,origen,true);
+  const r=await pool.query("SELECT modelo_precio_catalogo,to_regclass('public.ivan_pedido_iva_snapshot') AS snapshot FROM mayoristas WHERE id=$1",[id]);
+  if(r.rows[0]?.modelo_precio_catalogo!=='precio_recibido')throw errorCliente('Este cálculo opcional requiere precio recibido. No cambia el modelo actual.',409);
+  if(!r.rows[0]?.snapshot)throw errorCliente('Falta aplicar el SQL de IVA opcional. Conservá el precio recibido.',503);
+}
+async function guardarIva(id,datos){
+  const cfg=await habilitada(id);
+  if(datos?.confirmar_aplicacion!==true)throw errorCliente('Confirmá expresamente el modo de IVA.');
+  await validarActivacion(id,cfg.origen,datos.modo);
+  return transaccion(id,datos.version,'mayorista',actual=>{
+    if(!actual.habilitado)throw errorCliente('El permiso fue deshabilitado.',403);
+    ivaCalculo.validar(actual.origen,datos.modo);
+    return {...actual,origen:{...actual.origen,catalogo_iva:{...actual.origen.catalogo_iva,modo:datos.modo}}};
+  });
 }
 async function habilitada(id) {
   await mayoristaValido(id, true);
@@ -136,15 +159,12 @@ async function previa(id, datos) {
   const tasaRaw = cfg.origen.iva_fuente === 'producto' ? p.tasa : cfg.origen.alicuota_general;
   const tasa = tasaRaw === null || tasaRaw === undefined || String(tasaRaw).trim() === '' ? null : Number(tasaRaw);
   if (modo !== 'conservar' && (tasa === null || !Number.isFinite(tasa) || tasa < 0 || tasa > 100)) throw errorCliente('Falta una alícuota válida para este producto. No se usó una tasa automática.', 409);
-  // Solo SELECT numérico: no cambia precios, impuestos, pedidos ni tablas de Iván.
-  const calculo = await pool.query(`WITH v AS (SELECT $1::numeric AS recibido,$2::numeric AS tasa),
-    c AS (SELECT recibido,CASE WHEN $3='agregar' THEN ROUND(recibido*(1+tasa/100),2) ELSE ROUND(recibido,2) END AS total,
-      CASE WHEN $3='desglosar' THEN ROUND(recibido/(1+tasa/100),2) WHEN $3='agregar' THEN ROUND(recibido,2) ELSE NULL END AS neto FROM v)
-    SELECT recibido::text,neto::text,CASE WHEN neto IS NULL THEN NULL ELSE (total-neto)::text END AS iva,total::text FROM c`,
-    [p.recibido, modo === 'conservar' ? null : tasaRaw, modo]);
-  return { producto: { id: p.id_producto, codigo: p.cod_producto, descripcion: p.des_producto }, ...calculo.rows[0],
+  // Conservar no calcula IVA; los ejemplos elegidos usan el mismo cálculo NUMERIC.
+  let calculo={recibido:p.recibido,neto:null,iva:null,total:p.recibido};
+  if(modo!=='conservar'){const [v]=await ivaCalculo.calcular([{id:String(p.id_producto),base:p.recibido,tasa:tasaRaw}],modo);calculo={recibido:p.recibido,neto:v.neto,iva:v.impuesto,total:v.total};}
+  return { producto: { id: p.id_producto, codigo: p.cod_producto, descripcion: p.des_producto }, ...calculo,
     tasa: tasa !== null && Number.isFinite(tasa) && tasa >= 0 && tasa <= 100 ? tasa : null,
     presentacion: modo, unidad: cfg.origen.unidad_precio, version: cfg.version, aplicada: false,
     mensaje: 'Solo vista previa del precio recibido e IVA. No aplica descuentos ni cambia el catálogo o los pedidos.' };
 }
-module.exports = { leer, campos, guardarAdmin, habilitada, guardarPresentacion, productos, previa };
+module.exports = { leer, campos, guardarAdmin, habilitada, guardarPresentacion, guardarIva, productos, previa,dbOrigen,campoSql };

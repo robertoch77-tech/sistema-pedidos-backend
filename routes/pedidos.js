@@ -3,6 +3,7 @@ const router = express.Router();
 const pool = require('../db');
 const conexionCompartida = require('../services/conexionMayorista');
 const bultos = require('../services/ivanBultos');
+const ivaOpcional=require('../services/ivanIvaCatalogo');
 const { registrarNotificacionIvan } = require('../services/notificacionesIvan');
 const { registrarPedido: registrarPedidoIvan } = require('../services/auditoriaIvan');
 const {
@@ -27,7 +28,7 @@ router.get('/cliente/:cuit', async (req, res) => {
     const resultado = await pool.query(
       `SELECT p.*,
          COALESCE(json_agg(json_build_object(
-           'codigo', pi.codigo,'nombre', pi.nombre,'rubro', pi.rubro,
+           'id_item',pi.id::text,'codigo', pi.codigo,'nombre', pi.nombre,'rubro', pi.rubro,
            'cantidad', pi.cantidad,'precio_unitario', pi.precio_unitario,
            'es_oferta', pi.es_oferta,'oferta_titulo', pi.oferta_titulo
          )) FILTER (WHERE pi.id IS NOT NULL),'[]'::json) as items
@@ -36,7 +37,7 @@ router.get('/cliente/:cuit', async (req, res) => {
        WHERE ${condiciones.join(' AND ')}
        GROUP BY p.id ORDER BY p.fecha_pedido DESC`, params
     );
-    res.json(resultado.rows);
+    res.json(await ivaOpcional.anexar(resultado.rows));
   } catch (error) {
     console.error('Error mis pedidos:', error.message);
     res.json([]);
@@ -82,7 +83,7 @@ router.get('/:mayorista_id', async (req, res) => {
     const resultado = await pool.query(
       `SELECT p.*,
          COALESCE(json_agg(json_build_object(
-           'codigo', pi.codigo,'nombre', pi.nombre,'rubro', pi.rubro,
+           'id_item',pi.id::text,'codigo', pi.codigo,'nombre', pi.nombre,'rubro', pi.rubro,
            'cantidad', pi.cantidad,'precio_unitario', pi.precio_unitario,
            'es_oferta', pi.es_oferta,'oferta_titulo', pi.oferta_titulo
          )) FILTER (WHERE pi.id IS NOT NULL),'[]'::json) as items
@@ -92,7 +93,7 @@ router.get('/:mayorista_id', async (req, res) => {
        GROUP BY p.id ORDER BY p.fecha_pedido DESC LIMIT 200`,
       params
     );
-    res.json(resultado.rows);
+    res.json(await ivaOpcional.anexar(resultado.rows));
   } catch (error) {
     console.error('Error pedidos:', error.message);
     res.json([]);
@@ -128,7 +129,7 @@ router.get('/detalle/:id', async (req, res) => {
     const resultado = await pool.query(
       `SELECT p.*,
          COALESCE(json_agg(json_build_object(
-           'producto_id', pi.producto_id,'codigo', pi.codigo,'nombre', pi.nombre,'rubro', pi.rubro,
+           'producto_id', pi.producto_id,'id_item',pi.id::text,'codigo', pi.codigo,'nombre', pi.nombre,'rubro', pi.rubro,
            'cantidad', pi.cantidad,'precio_unitario', pi.precio_unitario,
            'es_oferta', pi.es_oferta,'oferta_titulo', pi.oferta_titulo
          )) FILTER (WHERE pi.id IS NOT NULL),'[]'::json) as items
@@ -139,7 +140,7 @@ router.get('/detalle/:id', async (req, res) => {
       params
     );
     if (!resultado.rows[0]) return res.status(404).json({ mensaje: 'No encontrado' });
-    res.json(resultado.rows[0]);
+    res.json((await ivaOpcional.anexar(resultado.rows))[0]);
   } catch (error) {
     console.error(error);
     res.status(500).json({ mensaje: 'Error del servidor' });
@@ -160,6 +161,8 @@ router.post('/', async (req, res) => {
 
     const falloBultos = await bultos.validarPedido(mayorista_id, items);
     if (falloBultos) return res.status(falloBultos.status).json(falloBultos);
+
+    const enviosIva=await ivaOpcional.validarPedido(mayorista_id,cliente_cuit,items);
 
     clienteCentral = await pool.connect();
     await clienteCentral.query('BEGIN');
@@ -200,11 +203,12 @@ router.post('/', async (req, res) => {
     const pedido_id = pedido.rows[0].id;
 
     for (const item of items) {
-      await clienteCentral.query(
+      const itemGuardado=await clienteCentral.query(
         `INSERT INTO pedidos_web_items (pedido_id,producto_id,codigo,nombre,rubro,cantidad,precio_unitario,es_oferta,oferta_titulo)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
         [pedido_id, item.producto_id||null, item.codigo||'', item.nombre||'', item.rubro||'', item.cantidad, item.precio_unitario||0, item.es_oferta||false, item.oferta_titulo||null]
       );
+      await ivaOpcional.guardarSnapshot(clienteCentral,pedido_id,itemGuardado.rows[0].id,item);
     }
 
     if (estado === 'enviado') {
@@ -293,13 +297,14 @@ router.post('/', async (req, res) => {
             const fk_id_pedido = pedidoIvanRes.rows[0].id_pedido;
             const enviarPrecioSinIva = debeEnviarPrecioSinIva(cfg);
 
-            for (const item of items) {
-              const ivaItem = enviarPrecioSinIva
+            for (const [pos,item] of items.entries()) {
+              const envioIva=enviosIva[pos];
+              const ivaItem = envioIva?envioIva.tasa:enviarPrecioSinIva
                 ? (Number.isFinite(Number(item.iva_producto_aplicada))
                     ? Number(item.iva_producto_aplicada)
                     : Number(cfg.ivan_porc_iva) || 0)
                 : cfg.ivan_porc_iva;
-              const importeNetoIvan = enviarPrecioSinIva
+              const importeNetoIvan = envioIva?envioIva.importe:enviarPrecioSinIva
                 ? redondearMoneda(
                     precioUnitarioParaIvan(item.precio_unitario, ivaItem, true) * Number(item.cantidad)
                   )
@@ -354,7 +359,7 @@ router.post('/', async (req, res) => {
       await clienteCentral.query('ROLLBACK').catch(() => {});
     }
     console.error('Error guardando pedido:', error);
-    res.status(500).json({ mensaje: 'Error al guardar el pedido' });
+    res.status(error.status||500).json({ mensaje: error.status?error.message:'Error al guardar el pedido',codigo:error.status?'IVA_CATALOGO_REVISAR':undefined });
   } finally {
     if (clienteCentral) clienteCentral.release();
   }
@@ -380,35 +385,42 @@ router.put('/:id/fecha-entrega', async (req, res) => {
 
 // Actualizar pedido (editar borrador)
 router.put('/:id', async (req, res) => {
+  let clienteIva=null,transaccionIva=false;
   try {
     const { id } = req.params;
     const { descuento, total_estimado, observaciones, estado, mayorista_id, items } = req.body;
     if (!mayorista_id) return res.status(400).json({ mensaje: 'Falta mayorista_id' });
     const check = await pool.query(
-      `SELECT id FROM pedidos_web WHERE id=$1 AND mayorista_id=$2`,
+      `SELECT id,cliente_cuit FROM pedidos_web WHERE id=$1 AND mayorista_id=$2`,
       [id, mayorista_id]
     );
     if (!check.rows[0]) return res.status(404).json({ mensaje: 'Pedido no encontrado' });
     const falloBultos = await bultos.validarPedido(mayorista_id, items);
     if (falloBultos) return res.status(falloBultos.status).json(falloBultos);
-    await pool.query(
+    const enviosIva=await ivaOpcional.validarPedido(mayorista_id,check.rows[0].cliente_cuit,items,id);
+    let dbEdicion=pool;
+    if(enviosIva.some(Boolean)){clienteIva=await pool.connect();await clienteIva.query('BEGIN');transaccionIva=true;dbEdicion=clienteIva;}
+    await dbEdicion.query(
       `UPDATE pedidos_web SET descuento=$1,total_estimado=$2,observaciones=$3,estado=$4 WHERE id=$5 AND mayorista_id=$6`,
       [descuento, total_estimado, observaciones, estado, id, mayorista_id]
     );
-    await pool.query(`DELETE FROM pedidos_web_items WHERE pedido_id=$1`, [id]);
+    await dbEdicion.query(`DELETE FROM pedidos_web_items WHERE pedido_id=$1`, [id]);
     for (const item of items) {
-      await pool.query(
+      const itemGuardado=await dbEdicion.query(
         `INSERT INTO pedidos_web_items (pedido_id,producto_id,codigo,nombre,rubro,cantidad,precio_unitario,es_oferta,oferta_titulo)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
         [id, item.producto_id||null, item.codigo||'', item.nombre||'', item.rubro||'', item.cantidad, item.precio_unitario||0, item.es_oferta||false, item.oferta_titulo||null]
       );
+      await ivaOpcional.guardarSnapshot(dbEdicion,id,itemGuardado.rows[0].id,item);
     }
-    const resultado = await pool.query(`SELECT * FROM pedidos_web WHERE id=$1 AND mayorista_id=$2`, [id, mayorista_id]);
+    const resultado = await dbEdicion.query(`SELECT * FROM pedidos_web WHERE id=$1 AND mayorista_id=$2`, [id, mayorista_id]);
+    if(transaccionIva){await clienteIva.query('COMMIT');transaccionIva=false;}
     res.json(resultado.rows[0]);
   } catch (error) {
+    if(transaccionIva)await clienteIva.query('ROLLBACK').catch(()=>{});
     console.error(error);
-    res.status(500).json({ mensaje: 'Error del servidor' });
-  }
+    res.status(error.status||500).json({ mensaje:error.status?error.message:'Error del servidor',codigo:error.status?'IVA_CATALOGO_REVISAR':undefined });
+  }finally{if(clienteIva)clienteIva.release();}
 });
 
 module.exports = router;

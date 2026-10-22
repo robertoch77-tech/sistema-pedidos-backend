@@ -4,6 +4,9 @@ const conexion = require('./conexionMayorista');
 const servicio = require('./ivanDescuentosComerciales');
 const reglas = require('./ivanDescuentosReglas');
 const { idSeguro } = require('./ivanImagenesDatos');
+const ivaCatalogo=require('./ivanIvaCatalogo');
+const {aplicarPreciosCatalogo}=require('./precioCatalogoMayorista');
+const {obtenerDescuentoItems}=require('./descuentoClienteIvan');
 
 async function buscarProductos(id, valor) {
   const q = String(valor || '').trim();
@@ -64,12 +67,18 @@ async function consultar(id, datos) {
       throw reglas.error('Este producto no tiene un precio recibido válido. No se sustituyó por cero.', 409);
   }
   const desglose = condicion ? reglas.calcular(producto.precio_producto, condicion, producto) : null;
+  let detalleIva=null;
+  const ctx=await ivaCatalogo.contexto(id,db,documento);
+  if(ctx){
+    const actuales=desglose?[{...producto,precio_producto:desglose.importe}]:aplicarPreciosCatalogo([producto],{modelo_precio_catalogo:'precio_recibido',dto_pago_termino:ctx.dtoPago,descuento_items_pct:await obtenerDescuentoItems(db,id,documento)});
+    const [conIva]=await ivaCatalogo.aplicar(actuales,ctx,[producto]);const {firma,...detalle}=conIva.iva_catalogo;detalleIva=detalle;
+  }
   return {
-    version: Number(cfg.version), activo: cfg.activo, aplicada: !!desglose && cfg.activo,
+    version: Number(cfg.version), activo: cfg.activo, aplicada: (!!desglose && cfg.activo)||(!desglose&&!!detalleIva),
     cliente: { cuit: documento, nombre: clientes.rows[0].nombre },
     producto: { id: producto.id_producto, codigo: producto.cod_producto, descripcion: producto.des_producto },
-    desglose,
-    mensaje: !condicion ? 'Este cliente conserva su circuito actual: no tiene una condición comercial asignada. No se muestra un precio calculado con este módulo.'
+    desglose,iva_catalogo:detalleIva,
+    mensaje: !condicion ? detalleIva?'Este cliente no tiene un perfil nuevo asignado. Se muestra el precio de su circuito vigente con el IVA elegido expresamente.':'Este cliente conserva su circuito actual: no tiene una condición comercial asignada. No se muestra un precio calculado con este módulo.'
       : cfg.activo ? 'Esta condición se aplica al precio normal en nuevas consultas del catálogo de este cliente.'
         : 'Condición guardada sin aplicar. Este sería su precio al activarla; el catálogo mantiene su circuito actual.'
   };

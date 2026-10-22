@@ -11,6 +11,7 @@ const jwt = require('jsonwebtoken');
 const { obtenerDescuentoItems } = require('../services/descuentoClienteIvan');
 const descuentosComerciales = require('../services/ivanDescuentosComerciales');
 const reglasComerciales = require('../services/ivanDescuentosReglas');
+const ivaCatalogo = require('../services/ivanIvaCatalogo');
 const {
   MODELO_COSTO_MARGEN_IVA,
   asegurarColumnasPrecioMayorista,
@@ -50,13 +51,13 @@ async function getConfiguracionPrecio(mayoristaId) {
   }
 }
 
-function aplicarCondicionesPrecio(productos, condiciones) {
-  if (condiciones.comercial) return reglasComerciales.aplicar(productos, condiciones.comercial);
-  return aplicarPreciosCatalogo(productos, {
+async function aplicarCondicionesPrecio(productos, condiciones) {
+  const actuales=condiciones.comercial?reglasComerciales.aplicar(productos,condiciones.comercial):aplicarPreciosCatalogo(productos, {
     ...condiciones.configPrecio,
     dto_pago_termino: condiciones.dtoPct,
     descuento_items_pct: condiciones.descuentoItemsPct,
   });
+  return ivaCatalogo.aplicar(actuales,condiciones.ivaCatalogo,productos);
 }
 
 async function aplicarImagenesMejoradas(productos, mayoristaId) {
@@ -89,26 +90,29 @@ async function aplicarImagenesCatalogo(productos, mayoristaId) {
 }
 
 async function getCondicionesPrecio(req, poolExterno, mayoristaId) {
+  const sesionIva=descuentosComerciales.sesionCliente(req,mayoristaId);
+  const iva=await ivaCatalogo.contexto(mayoristaId,poolExterno,sesionIva?.cuit||'');
+  if(iva)req.res?.set('Cache-Control','no-store');
   const comercial = await descuentosComerciales.condicion(req, mayoristaId);
-  if (comercial) { req.res?.set('Cache-Control','no-store'); return {comercial, dtoPct:0, descuentoItemsPct:0, configPrecio:{modelo_precio_catalogo:'precio_recibido'}}; }
+  if (comercial) { req.res?.set('Cache-Control','no-store'); return {comercial,ivaCatalogo:iva, dtoPct:0, descuentoItemsPct:0, configPrecio:{modelo_precio_catalogo:'precio_recibido'}}; }
   const [dtoPct, configPrecio] = await Promise.all([
     getDtoPagoTermino(mayoristaId),
     getConfiguracionPrecio(mayoristaId),
   ]);
   const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-  if (!token) return { dtoPct, descuentoItemsPct: 0, configPrecio };
+  if (!token) return { ivaCatalogo:iva, dtoPct, descuentoItemsPct: 0, configPrecio };
   try {
     const sesion = jwt.verify(token, process.env.JWT_SECRET);
     if (sesion.tipo !== 'cliente' || Number(sesion.mayorista_id) !== Number(mayoristaId)) {
-      return { dtoPct, descuentoItemsPct: 0, configPrecio };
+      return { ivaCatalogo:iva, dtoPct, descuentoItemsPct: 0, configPrecio };
     }
     if (configPrecio.modelo_precio_catalogo === MODELO_COSTO_MARGEN_IVA) {
-      return { dtoPct: 0, descuentoItemsPct: 0, configPrecio };
+      return { ivaCatalogo:iva, dtoPct: 0, descuentoItemsPct: 0, configPrecio };
     }
     const descuentoItemsPct = await obtenerDescuentoItems(poolExterno, mayoristaId, sesion.cuit);
-    return { dtoPct, descuentoItemsPct, configPrecio };
+    return { ivaCatalogo:iva, dtoPct, descuentoItemsPct, configPrecio };
   } catch (_) {
-    return { dtoPct, descuentoItemsPct: 0, configPrecio };
+    return { ivaCatalogo:iva, dtoPct, descuentoItemsPct: 0, configPrecio };
   }
 }
 
@@ -261,7 +265,7 @@ router.get('/:mayorista_id/todos', async (req, res) => {
     );
 
     const condicionesPrecio = await getCondicionesPrecio(req, poolExterno, mayorista_id);
-    const productosConDto = await aplicarImagenesCatalogo(aplicarCondicionesPrecio(resultado.rows, condicionesPrecio), mayorista_id);
+    const productosConDto = await aplicarImagenesCatalogo(await aplicarCondicionesPrecio(resultado.rows, condicionesPrecio), mayorista_id);
 
     res.json({ productos: productosConDto, total: productosConDto.length });
   } catch (error) {
@@ -292,7 +296,7 @@ router.get('/:mayorista_id/buscar-ean/:ean', async (req, res) => {
       );
       const condicionesPrecio = await getCondicionesPrecio(req, poolExterno, mayorista_id);
       const prod = resultado.rows[0] || null;
-      if (prod) Object.assign(prod, aplicarCondicionesPrecio([prod], condicionesPrecio)[0]);
+      if (prod) Object.assign(prod, (await aplicarCondicionesPrecio([prod], condicionesPrecio))[0]);
       res.json({ producto: prod ? (await aplicarImagenesCatalogo([prod], mayorista_id))[0] : prod });
     } catch (errCampo) {
       // La vista no tiene columna "ean" en este mayorista — modo EAN no disponible.
@@ -353,7 +357,7 @@ router.get('/:mayorista_id/cross-selling', async (req, res) => {
       if (resultado.length >= 5) break;
     }
     const condicionesPrecio = await getCondicionesPrecio(req, poolExterno, mayorista_id);
-    res.json(await aplicarImagenesCatalogo(aplicarCondicionesPrecio(resultado, condicionesPrecio), mayorista_id));
+    res.json(await aplicarImagenesCatalogo(await aplicarCondicionesPrecio(resultado, condicionesPrecio), mayorista_id));
   } catch (error) {
     console.error('Error cross-selling:', error.message);
     res.json([]);
@@ -401,7 +405,7 @@ router.get('/:mayorista_id/equivalentes', async (req, res) => {
       );
       const vinculadas = alternativas.rows.map(p => ({ ...p, equivalencia_origenes: referencias.origenesDe(p.cod_producto) }));
       const condicionesPrecio = await getCondicionesPrecio(req, poolExterno, mayorista_id);
-      const transformadas = aplicarCondicionesPrecio(vinculadas, condicionesPrecio);
+      const transformadas = await aplicarCondicionesPrecio(vinculadas, condicionesPrecio);
       transformadas.sort((a, b) => (Number(a.precio_producto) || 0) - (Number(b.precio_producto) || 0));
       return res.json(await aplicarImagenesCatalogo(transformadas, mayorista_id));
     }
@@ -431,7 +435,7 @@ router.get('/:mayorista_id/equivalentes', async (req, res) => {
       [observaciones, codigos]
     );
     const condicionesPrecio = await getCondicionesPrecio(req, poolExterno, mayorista_id);
-    const transformadas = aplicarCondicionesPrecio(alternativas.rows, condicionesPrecio);
+    const transformadas = await aplicarCondicionesPrecio(alternativas.rows, condicionesPrecio);
     transformadas.sort((a, b) => (Number(a.precio_producto) || 0) - (Number(b.precio_producto) || 0));
     res.json(await aplicarImagenesCatalogo(transformadas, mayorista_id));
   } catch (error) {
@@ -554,11 +558,15 @@ router.get('/:mayorista_id', async (req, res) => {
     const ivaParaOrden = campoIva && configPrecio.usar_iva_producto !== false
       ? `COALESCE("${campoIva}", ${ivaCatalogoDefault})`
       : `${ivaCatalogoDefault}`;
-    const expresionPrecioOrden = condicionesPrecio.comercial && ordenPrecio
+    let expresionPrecioOrden = condicionesPrecio.comercial && ordenPrecio
       ? reglasComerciales.ordenSql(condicionesPrecio.comercial, params)
       : configPrecio.modelo_precio_catalogo === MODELO_COSTO_MARGEN_IVA
       ? `(precio_producto * ${1 + margenCatalogo / 100} * (1 + (${ivaParaOrden}) / 100.0))`
       : 'precio_producto';
+    if(ordenPrecio&&condicionesPrecio.ivaCatalogo){
+      if(!condicionesPrecio.comercial){const pct=v=>Math.min(100,Math.max(0,Number(v)||0));const factor=(1-pct(condicionesPrecio.dtoPct)/100)*(1-pct(condicionesPrecio.descuentoItemsPct)/100);if(factor!==1){params.push(factor);expresionPrecioOrden=`ROUND(precio_producto::numeric*$${params.length}::numeric,2)`;}}
+      expresionPrecioOrden=ivaCatalogo.ordenarSql(expresionPrecioOrden,condicionesPrecio.ivaCatalogo,params);
+    }
     const orderBy = ordenPrecio
       ? `${expresionPrecioOrden} ${ordenPrecio === 'asc' ? 'ASC NULLS LAST' : 'DESC NULLS LAST'}, des_producto ASC`
       : 'des_producto ASC';
@@ -577,7 +585,7 @@ router.get('/:mayorista_id', async (req, res) => {
       params
     );
 
-    const productosConDto = aplicarCondicionesPrecio(productosResultado.rows, condicionesPrecio);
+    const productosConDto = await aplicarCondicionesPrecio(productosResultado.rows, condicionesPrecio);
     const productosConImagen = await aplicarImagenesCatalogo(productosConDto, mayorista_id);
 
     res.json({
