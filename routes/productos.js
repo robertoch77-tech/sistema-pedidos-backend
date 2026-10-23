@@ -13,6 +13,7 @@ const descuentosComerciales = require('../services/ivanDescuentosComerciales');
 const reglasComerciales = require('../services/ivanDescuentosReglas');
 const ivaCatalogo = require('../services/ivanIvaCatalogo');
 const condicionesOrigen = require('../services/ivanCondicionesOrigen');
+const circuitoCliente = require('../services/ivanCircuitoCliente');
 const {
   MODELO_COSTO_MARGEN_IVA,
   asegurarColumnasPrecioMayorista,
@@ -99,9 +100,17 @@ async function aplicarImagenesCatalogo(productos, mayoristaId) {
 
 async function getCondicionesPrecio(req, poolExterno, mayoristaId) {
   const sesionIva=descuentosComerciales.sesionCliente(req,mayoristaId);
-  const iva=await ivaCatalogo.contexto(mayoristaId,poolExterno,sesionIva?.cuit||'');
-  if(iva)req.res?.set('Cache-Control','no-store');
   const configComercial = await descuentosComerciales.leer(mayoristaId);
+  const iva=await ivaCatalogo.contexto(mayoristaId,poolExterno,sesionIva?.cuit||'',configComercial);
+  if(iva)req.res?.set('Cache-Control','no-store');
+  if(circuitoCliente.activo(configComercial)){
+    try{
+      if(!sesionIva?.cuit)throw Object.assign(new Error('Ingresá con el CUIT del cliente para consultar su precio.'),{status:401});
+      const origenIvan=await circuitoCliente.contexto(mayoristaId,poolExterno,sesionIva.cuit,configComercial);
+      req.res?.set('Cache-Control','no-store');
+      return {origenIvan,ivaCatalogo:iva,dtoPct:0,descuentoItemsPct:0,configPrecio:{modelo_precio_catalogo:'precio_recibido'}};
+    }catch(e){e.condiciones_ivan=true;throw e;}
+  }
   const fuente = condicionesOrigen.desdeConfig(configComercial);
   if(fuente.permiso&&fuente.origen.habilitado&&fuente.origen.aplicar_catalogo){
     try{

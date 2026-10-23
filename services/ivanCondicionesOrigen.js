@@ -95,6 +95,7 @@ async function guardar(id, body) {
   const origen = normalizar(body.origen);
   if (origen.habilitado && origen.campos.general && origen.campos.general !== SIN_DESCUENTO && origen.campos.general === origen.campos.extra) throw errorCliente('General y extra no pueden leer el mismo campo dos veces. Confirmá sus fuentes o elegí «No aplica».');
   const actual = await configuracion.leer(id);
+  if (actual.datos?.ivan?.integracion === 'cuit_reglas_v1') throw errorCliente('Actualizá la pantalla y usá Precios y descuentos de los clientes para esta integración.', 409);
   if (!actual.disponible) throw errorCliente('Faltan las tablas existentes de descuentos.', 503);
   if (origen.habilitado && !actual.habilitado) throw errorCliente('Primero habilitá el permiso de Descuentos comerciales para este mayorista.', 409);
   if (origen.habilitado && actual.activo) throw errorCliente('Pausá primero las condiciones manuales de este mayorista. No se combinaron dos motores de descuentos.', 409);
@@ -293,4 +294,4 @@ async function buscarProductos(id, consulta) {
   return { productos: r.rows, total, pagina: actual, totalPaginas, opciones };
 }
 module.exports = { CAMPOS, VISTAS, SIN_DESCUENTO, normalizar, pendientes, desdeConfig, leer, guardar, estructura,
-  contexto, aplicar, ordenarSql, consultarCliente, consultarProducto, buscarProductos };
+  contexto, aplicar, ordenarSql, consultarCliente, consultarProducto, buscarProductos, cargarReglas, nombresReglas };

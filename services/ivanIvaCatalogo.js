@@ -7,7 +7,10 @@ const {errorCliente,idSeguro}=require('./ivanImagenesDatos');
 const documento=v=>String(v||'').replace(/\D/g,'');
 const contenido=d=>JSON.stringify([String(d.mayorista_id),documento(d.cuit),String(d.producto_id),d.version,d.modo,d.envio,d.tasa,d.neto,d.impuesto,d.total,d.base,d.recibido]);
 const firma=d=>crypto.createHmac('sha256',process.env.JWT_SECRET).update(contenido(d)).digest('hex');
-async function contexto(id,db,cuit=''){
+async function contexto(id,db,cuit='',configDescuentos=null){
+  const circuito=require('./ivanCircuitoCliente');
+  const descuentos=configDescuentos||await require('./ivanDescuentosComerciales').leer(id);
+  if(circuito.esCircuito(descuentos))return circuito.contextoIva(id,db,cuit,descuentos,descuentos.version);
   const cfg=await origen.leer(id),o=cfg.origen;
   if(!cfg.disponible||!cfg.habilitado||!o.catalogo_iva.permitido||o.catalogo_iva.modo==='conservar')return null;
   calculo.validar(o,o.catalogo_iva.modo);
@@ -43,7 +46,11 @@ function ordenarSql(expresion,ctx,parametros){
 }
 async function validarPedido(id,cuit,items,pedidoId){
   const cfg=await origen.leer(id);
-  const activo=cfg.disponible&&cfg.habilitado&&cfg.origen.catalogo_iva.permitido&&cfg.origen.catalogo_iva.modo!=='conservar';
+  const circuito=require('./ivanCircuitoCliente');
+  const descuentos=await require('./ivanDescuentosComerciales').leer(id);
+  const activo=circuito.esCircuito(descuentos)
+    ? circuito.activo(descuentos)&&descuentos.datos.ivan.permitir_iva&&descuentos.datos.ivan.con_iva
+    : cfg.disponible&&cfg.habilitado&&cfg.origen.catalogo_iva.permitido&&cfg.origen.catalogo_iva.modo!=='conservar';
   let tenia=false;
   if(pedidoId){try{const r=await pool.query('SELECT 1 FROM public.ivan_pedido_iva_snapshot WHERE pedido_id=$1 LIMIT 1',[pedidoId]);tenia=!!r.rows.length;}catch(e){if(e.code!=='42P01')throw e;}}
   const requiere=activo||tenia||items.some(p=>p.iva_catalogo);

@@ -10,6 +10,13 @@ const bultos=require('../services/ivanBultos');
 const equivalenciasCodigos=require('../services/ivanEquivalenciasCodigos');
 const precioOrigen=require('../services/ivanPrecioOrigen');
 const condicionesOrigen=require('../services/ivanCondicionesOrigen');
+const circuitoCliente=require('../services/ivanCircuitoCliente');
+router.get('/precios-cliente/:id',async(req,res,next)=>{
+  try{const id=await mayoristaValido(req.params.id);res.set('Cache-Control','no-store');res.json(await circuitoCliente.leerAdmin(id));}catch(e){next(e);}
+});
+router.put('/precios-cliente/:id',async(req,res,next)=>{
+  try{const id=await mayoristaValido(req.params.id);res.json(await circuitoCliente.guardarAdmin(id,req.body));}catch(e){next(e);}
+});
 router.get('/condiciones-ivan/:id',async(req,res,next)=>{
   try{const id=await mayoristaValido(req.params.id);res.set('Cache-Control','no-store');res.json(await condicionesOrigen.leer(id));}catch(e){next(e);}
 });
