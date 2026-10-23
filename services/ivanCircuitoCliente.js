@@ -166,12 +166,19 @@ async function revisarLectura(id, datos, cfg) {
     // No depende de funciones JSON/JSONB del servidor del proveedor.
     const citar = nombre => '"' + nombre.replace(/"/g, '""') + '"';
     const camposId = vistas.clientes.campos.filter(c => ['id', 'id_cliente'].includes(c.nombre.toLowerCase()));
-    const seleccionId = camposId.map((c, i) => `${citar(c.nombre)}::text AS identificador_${i}`).join(',');
+    const camposDescuento = ['porcentaje_descuento', 'porcentaje_descuento_items', 'fk_id_lista_precio'];
+    const disponibles = camposDescuento.filter(nombre => vistas.clientes.campos.some(c => c.nombre === nombre));
+    const seleccionId = [...camposId.map((c, i) => `${citar(c.nombre)}::text AS identificador_${i}`),
+      ...disponibles.map(nombre => `${citar(nombre)}::text AS ${citar(nombre)}`)].join(',');
     const persona = await client.query(`SELECT id_cliente::text AS id,
       ${seleccionId} FROM "viewClientes"
       WHERE es_activo=true AND regexp_replace(doc_cliente::text,'[^0-9]','','g')=$1 LIMIT 2`, [doc]);
     if (persona.rows.length !== 1) throw errorCliente('El CUIT no identifica un único cliente activo en esta conexión.', 409);
     const idUsado = idOrigen(persona.rows[0].id);
+    const clienteOrigen = Object.fromEntries(camposDescuento.map(nombre => [nombre,
+      { disponible: disponibles.includes(nombre), valor: persona.rows[0][nombre] ?? null }]));
+    etapa = 'descuento configurado del mayorista';
+    const configurado = await pool.query('SELECT dto_pago_termino::text AS valor FROM mayoristas WHERE id=$1', [id]);
     etapa = 'existencia de condiciones';
     const existencia = await client.query(`SELECT
       EXISTS(SELECT 1 FROM "view_clientes_descuentos_x_rubros") AS tiene_filas,
@@ -225,6 +232,7 @@ async function revisarLectura(id, datos, cfg) {
       version_servidor: servidor.rows[0]?.server_version || null,
       vista: FUENTE_DESCUENTOS, esquema: esquema.rows[0]?.esquema || null,
       vista_tiene_filas: existencia.rows[0].tiene_filas, hay_fk_vacio_o_cero: existencia.rows[0].tiene_fk_vacio_o_cero,
+      cliente_origen: clienteOrigen, dto_pago_termino_configurado: configurado.rows[0]?.valor ?? null,
       muestra_vista: muestraVista.rows, campos_cliente_disponibles: vistas.clientes.campos.map(c => c.nombre),
       coincidencias, campos_producto: { rubro: vinculos.producto_rubro, marca: vinculos.producto_marca, tipo: vinculos.producto_tipo }, producto };
   } catch (e) {
