@@ -152,16 +152,24 @@ async function revisarLectura(id, datos, cfg) {
     client = await db.connect();
     await client.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY');
     await client.query("SET LOCAL statement_timeout = '5000ms'");
+    etapa = 'versión del servidor';
+    const servidor = await client.query('SHOW server_version');
     etapa = 'estructura de las vistas';
     const vistas = await origen.estructura(client, true);
     const vinculos = await campos(client, soloVista(cfg));
+    etapa = 'esquema de la vista de condiciones';
     const esquema = await client.query(`SELECT n.nspname AS esquema FROM pg_class c
-      JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.oid=to_regclass('"view_clientes_descuentos_x_rubros"')`);
+      JOIN pg_namespace n ON n.oid=c.relnamespace
+      WHERE c.relname=$1 AND pg_table_is_visible(c.oid)`, [FUENTE_DESCUENTOS]);
     etapa = 'cliente por CUIT';
+    // Solo columnas ID conocidas y devueltas por los metadatos de esta vista.
+    // No depende de funciones JSON/JSONB del servidor del proveedor.
+    const citar = nombre => '"' + nombre.replace(/"/g, '""') + '"';
+    const camposId = vistas.clientes.campos.filter(c => ['id', 'id_cliente'].includes(c.nombre.toLowerCase()));
+    const seleccionId = camposId.map((c, i) => `${citar(c.nombre)}::text AS identificador_${i}`).join(',');
     const persona = await client.query(`SELECT id_cliente::text AS id,
-      (SELECT jsonb_object_agg(e.key,e.value) FROM jsonb_each_text(to_jsonb(c)) e
-       WHERE lower(e.key) IN ('id','id_cliente')) AS identificadores
-      FROM "viewClientes" c WHERE es_activo=true AND regexp_replace(doc_cliente::text,'[^0-9]','','g')=$1 LIMIT 2`, [doc]);
+      ${seleccionId} FROM "viewClientes"
+      WHERE es_activo=true AND regexp_replace(doc_cliente::text,'[^0-9]','','g')=$1 LIMIT 2`, [doc]);
     if (persona.rows.length !== 1) throw errorCliente('El CUIT no identifica un único cliente activo en esta conexión.', 409);
     const idUsado = idOrigen(persona.rows[0].id);
     etapa = 'existencia de condiciones';
@@ -169,7 +177,8 @@ async function revisarLectura(id, datos, cfg) {
       EXISTS(SELECT 1 FROM "view_clientes_descuentos_x_rubros") AS tiene_filas,
       EXISTS(SELECT 1 FROM "view_clientes_descuentos_x_rubros" WHERE fk_id_cliente IS NULL OR BTRIM(fk_id_cliente::text)='0') AS tiene_fk_vacio_o_cero`);
     const grupos = new Map();
-    for (const [campo, valor] of Object.entries(persona.rows[0].identificadores || {})) {
+    for (const [i, { nombre: campo }] of camposId.entries()) {
+      const valor = persona.rows[0]['identificador_' + i];
       if (valor === null || !/^\d+$/.test(String(valor).trim()) || BigInt(String(valor).trim()) === 0n) continue;
       const clave = idOrigen(valor);
       if (!grupos.has(clave)) grupos.set(clave, []);
@@ -189,7 +198,6 @@ async function revisarLectura(id, datos, cfg) {
     let producto = null;
     if (productoId !== null) {
       etapa = 'identificadores del producto';
-      const citar = nombre => '"' + nombre.replace(/"/g, '""') + '"';
       const r = await client.query(`SELECT id_producto::text AS id,cod_producto AS codigo,
         ${citar(vinculos.producto_rubro)}::text AS rubro,${citar(vinculos.producto_marca)}::text AS marca,
         ${citar(vinculos.producto_tipo)}::text AS tipo FROM "viewProductos" WHERE id_producto=$1 LIMIT 2`, [productoId]);
@@ -197,6 +205,7 @@ async function revisarLectura(id, datos, cfg) {
       producto = r.rows[0];
     }
     return { solo_lectura: true, cuit: doc, integracion: cfg.datos.ivan.integracion, id_cliente_usado: idUsado,
+      version_servidor: servidor.rows[0]?.server_version || null,
       vista: FUENTE_DESCUENTOS, esquema: esquema.rows[0]?.esquema || null,
       vista_tiene_filas: existencia.rows[0].tiene_filas, hay_fk_vacio_o_cero: existencia.rows[0].tiene_fk_vacio_o_cero,
       coincidencias, campos_producto: { rubro: vinculos.producto_rubro, marca: vinculos.producto_marca, tipo: vinculos.producto_tipo }, producto };
