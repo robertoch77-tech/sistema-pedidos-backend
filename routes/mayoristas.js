@@ -74,6 +74,14 @@ router.get('/:id/configuracion', async (req, res) => {
     configuracion.precio_catalogo_incluye_iva = configuracion.modelo_precio_catalogo === 'costo_margen_iva'
       ? true
       : !!configuracion.precio_incluye_iva;
+    // Solo la integración nueva comunica el IVA efectivo del catálogo. No
+    // cambia lo guardado ni la respuesta de mayoristas que siguen otro circuito.
+    const descuentosIvan = await require('../services/ivanDescuentosComerciales').leer(id);
+    if (require('../services/ivanCircuitoCliente').activo(descuentosIvan)) {
+      const conIva = descuentosIvan.datos.ivan.permitir_iva === true && descuentosIvan.datos.ivan.con_iva === true;
+      configuracion.precio_incluye_iva = conIva;
+      configuracion.precio_catalogo_incluye_iva = conIva;
+    }
     res.json(configuracion);
   } catch (error) { res.status(500).json({ mensaje: 'Error del servidor' }); }
 });
