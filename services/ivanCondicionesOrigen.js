@@ -15,6 +15,7 @@ const CAMPOS = {
   regla_rubro: ['reglas', 'Rubro de la condición'], regla_marca: ['reglas', 'Marca de la condición'], regla_tipo: ['reglas', 'Tipo de la condición']
 };
 const SIN_DESCUENTO = '__no_aplica__';
+const CAMPOS_CONSULTA = ['cliente_id', 'regla_cliente', 'regla_porcentaje', 'regla_rubro', 'regla_marca', 'regla_tipo'];
 const estructuras = new WeakMap();
 const documento = v => String(v || '').replace(/\D/g, '');
 const campoSql = v => {
@@ -43,7 +44,8 @@ function normalizar(valor) {
 function pendientes(cfg) { return Object.keys(CAMPOS).filter(k => !cfg.campos[k]).map(k => CAMPOS[k][1]); }
 function desdeConfig(cfg) {
   const origen = normalizar(cfg.datos?.ivan);
-  return { disponible: cfg.disponible, permiso: cfg.habilitado, version: Number(cfg.version), origen, pendientes: pendientes(origen) };
+  return { disponible: cfg.disponible, permiso: cfg.habilitado, version: Number(cfg.version), origen, pendientes: pendientes(origen),
+    pendientes_consulta: CAMPOS_CONSULTA.filter(k => !origen.campos[k]).map(k => CAMPOS[k][1]) };
 }
 async function leer(id) { return desdeConfig(await configuracion.leer(id)); }
 async function estructura(db, refrescar = false) {
@@ -205,7 +207,7 @@ async function nombresReglas(ctx) {
   const nombres = {};
   for (const k of ['rubro', 'marca', 'tipo']) {
     const ids = [...new Set(ctx.reglas.map(r => r[k]).filter(v => v !== null))];
-    if (!ids.length) { nombres[k] = new Map(); continue; }
+    if (!ids.length || !ctx.cfg.campos['producto_' + k]) { nombres[k] = new Map(); continue; }
     const campo = idSql(ctx.cfg.campos['producto_' + k]);
     const r = await ctx.db.query(`SELECT ${campo} AS id,MIN(NULLIF(BTRIM(${campoSql('des_producto_' + k)}),'')) AS nombre
       FROM "viewProductos" WHERE ${campo}=ANY($1::text[]) GROUP BY ${campo}`, [ids]);
@@ -215,12 +217,26 @@ async function nombresReglas(ctx) {
     [k, r[k] === null ? 'Todos' : nombres[k].get(r[k]) || k + ' #' + r[k]])) }));
 }
 async function consultarCliente(id, cuit) {
+  const cfg = await leer(id);
+  if (!cfg.permiso || !cfg.origen.habilitado) throw errorCliente('La consulta de condiciones de Iván no está habilitada.', 403);
+  if (cfg.pendientes_consulta.length) throw errorCliente('Falta vincular la consulta en admin: ' + cfg.pendientes_consulta.join(', '), 409);
   const db = await conexion.getConexionMayorista(id);
   if (!db) throw errorCliente('La conexión de este mayorista no está disponible.', 503);
-  const ctx = await contexto(id, db, cuit, true);
-  if (!ctx) throw errorCliente('La consulta de condiciones de Iván no está habilitada.', 403);
+  // Leer condiciones no requiere una fuente de general/extra ni activar precios.
+  // Solo se reconocen nombres exactos y no ambiguos de IDs; no se guardan cambios.
+  const vistas = await estructura(db), origen = normalizar(cfg.origen);
+  for (const dimension of ['rubro', 'marca', 'tipo']) {
+    const clave = 'producto_' + dimension;
+    if (origen.campos[clave]) continue;
+    const candidatos = ['fk_id_producto_' + dimension, 'id_producto_' + dimension]
+      .filter(nombre => vistas.productos.campos.some(c => c.nombre === nombre));
+    if (candidatos.length === 1) origen.campos[clave] = candidatos[0];
+  }
+  await comprobar(db, origen);
+  const persona = await cliente(db, origen, cuit), reglas = await cargarReglas(db, origen, persona.id);
+  const ctx = { version: cfg.version, db, cfg: origen, cliente: persona, reglas };
   return { version: ctx.version, cliente: ctx.cliente, reglas: await nombresReglas(ctx),
-    aplicada_catalogo: ctx.cfg.aplicar_catalogo, solo_lectura: true };
+    aplicada_catalogo: ctx.cfg.aplicar_catalogo, solo_lectura: true, calculo_disponible: cfg.pendientes.length === 0 };
 }
 async function consultarProducto(id, datos) {
   const db = await conexion.getConexionMayorista(id);
