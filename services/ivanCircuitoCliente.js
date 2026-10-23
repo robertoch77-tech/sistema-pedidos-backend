@@ -195,6 +195,23 @@ async function revisarLectura(id, datos, cfg) {
       coincidencias.push({ campos: camposId, valor, usado_en_calculo: valor === idUsado,
         filas: Math.min(r.rows.length, 20), mas_de_20: r.rows.length > 20, muestra: r.rows.slice(0, 20) });
     }
+    etapa = 'muestra de condiciones existentes';
+    const muestraVista = await client.query(`SELECT porcentaje::text,fk_id_cliente::text,
+      fk_id_producto_rubro::text,fk_id_producto_marca::text,fk_id_producto_tipo::text
+      FROM "view_clientes_descuentos_x_rubros" LIMIT 3`);
+    const enlaces = new Map();
+    for (const fila of muestraVista.rows) {
+      const valor = String(fila.fk_id_cliente ?? '').trim();
+      if (!enlaces.has(valor)) {
+        etapa = 'enlace de la muestra con clientes';
+        const enlace = await client.query(`SELECT
+          EXISTS(SELECT 1 FROM "viewClientes" WHERE BTRIM(id_cliente::text)=$1) AS existe_como_id_cliente,
+          EXISTS(SELECT 1 FROM "viewClientes" WHERE BTRIM(id_cliente::text)=$1 AND es_activo=true) AS id_cliente_activo,
+          EXISTS(SELECT 1 FROM "viewClientes" WHERE regexp_replace(doc_cliente::text,'[^0-9]','','g')=$1) AS existe_como_cuit`, [valor]);
+        enlaces.set(valor, enlace.rows[0]);
+      }
+      fila.enlace_cliente = enlaces.get(valor);
+    }
     let producto = null;
     if (productoId !== null) {
       etapa = 'identificadores del producto';
@@ -208,6 +225,7 @@ async function revisarLectura(id, datos, cfg) {
       version_servidor: servidor.rows[0]?.server_version || null,
       vista: FUENTE_DESCUENTOS, esquema: esquema.rows[0]?.esquema || null,
       vista_tiene_filas: existencia.rows[0].tiene_filas, hay_fk_vacio_o_cero: existencia.rows[0].tiene_fk_vacio_o_cero,
+      muestra_vista: muestraVista.rows, campos_cliente_disponibles: vistas.clientes.campos.map(c => c.nombre),
       coincidencias, campos_producto: { rubro: vinculos.producto_rubro, marca: vinculos.producto_marca, tipo: vinculos.producto_tipo }, producto };
   } catch (e) {
     if (e.status) throw e;
