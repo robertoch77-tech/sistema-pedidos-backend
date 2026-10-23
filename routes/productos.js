@@ -98,9 +98,39 @@ async function aplicarImagenesCatalogo(productos, mayoristaId) {
   return aplicarMarcaProducto(conTextos, mayoristaId);
 }
 
-async function getCondicionesPrecio(req, poolExterno, mayoristaId) {
+async function getCondicionesGestionMayorista(req, mayoristaId) {
+  const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  let sesion;
+  try {
+    sesion = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
+  } catch (_) {
+    throw Object.assign(new Error('Volvé a iniciar sesión como mayorista para consultar productos.'), { status: 401 });
+  }
+  if (sesion.tipo !== undefined || sesion.mayorista_id !== undefined || !sesion.email ||
+      !Number.isSafeInteger(Number(sesion.id)) || Number(sesion.id) <= 0 || Number(sesion.id) !== Number(mayoristaId)) {
+    throw Object.assign(new Error('No tenés acceso a los productos de este mayorista.'), { status: 403 });
+  }
+  const cuenta = await pool.query(
+    "SELECT id FROM mayoristas WHERE id=$1 AND email=$2 AND activo=true AND COALESCE(tipo_fuente,'ivan')<>'roberto'",
+    [Number(sesion.id), sesion.email]
+  );
+  if (!cuenta.rowCount) throw Object.assign(new Error('La cuenta mayorista no está activa.'), { status: 403 });
+  // Gestión no representa un CUIT: conserva el listado general anterior, sin
+  // condiciones particulares ni el IVA opcional del catálogo de un cliente.
+  const [dtoPct, configPrecio] = await Promise.all([
+    getDtoPagoTermino(mayoristaId), getConfiguracionPrecio(mayoristaId),
+  ]);
+  return { ivaCatalogo: null, dtoPct, descuentoItemsPct: 0, configPrecio };
+}
+
+async function getCondicionesPrecio(req, poolExterno, mayoristaId, gestionMayorista = false) {
   const sesionIva=descuentosComerciales.sesionCliente(req,mayoristaId);
   const configComercial = await descuentosComerciales.leer(mayoristaId);
+  if (gestionMayorista && circuitoCliente.activo(configComercial)) {
+    req.res?.set('Cache-Control', 'no-store');
+    try { return await getCondicionesGestionMayorista(req, mayoristaId); }
+    catch (e) { e.condiciones_ivan = true; throw e; }
+  }
   const iva=await ivaCatalogo.contexto(mayoristaId,poolExterno,sesionIva?.cuit||'',configComercial);
   if(iva)req.res?.set('Cache-Control','no-store');
   if(circuitoCliente.activo(configComercial)){
@@ -556,7 +586,7 @@ router.get('/:mayorista_id', async (req, res) => {
     const conObsProducto = await tieneObsProducto(poolExterno, mayorista_id);
     const campoEquivalencias = await resolverCampo(poolExterno, mayorista_id, conObsProducto);
     const campoIva = await campoIvaProducto(poolExterno, mayorista_id);
-    const condicionesPrecio = await getCondicionesPrecio(req, poolExterno, mayorista_id);
+    const condicionesPrecio = await getCondicionesPrecio(req, poolExterno, mayorista_id, req.query.vista === 'gestion');
 
     const condiciones = [];
     const params = [];
