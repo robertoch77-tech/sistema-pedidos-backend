@@ -9,6 +9,16 @@ const marcaProducto=require('../services/ivanMarcaProducto');
 const bultos=require('../services/ivanBultos');
 const equivalenciasCodigos=require('../services/ivanEquivalenciasCodigos');
 const precioOrigen=require('../services/ivanPrecioOrigen');
+const condicionesOrigen=require('../services/ivanCondicionesOrigen');
+router.get('/condiciones-ivan/:id',async(req,res,next)=>{
+  try{const id=await mayoristaValido(req.params.id);res.set('Cache-Control','no-store');res.json(await condicionesOrigen.leer(id));}catch(e){next(e);}
+});
+router.get('/condiciones-ivan/:id/campos',async(req,res,next)=>{
+  try{const id=await mayoristaValido(req.params.id);const db=await conexion.getConexionMayorista(id);if(!db)throw errorCliente('No se pudo consultar la estructura de Iván.',503);res.set('Cache-Control','no-store');res.json({vistas:await condicionesOrigen.estructura(db,true)});}catch(e){next(e);}
+});
+router.put('/condiciones-ivan/:id',async(req,res,next)=>{
+  try{const id=await mayoristaValido(req.params.id);res.json(await condicionesOrigen.guardar(id,req.body));}catch(e){next(e);}
+});
 router.get('/precio-origen/:id',async(req,res,next)=>{
   try{const id=await mayoristaValido(req.params.id);res.set('Cache-Control','no-store');res.json(await precioOrigen.leer(id));}catch(e){next(e);}
 });

@@ -19,11 +19,13 @@ async function transaccion(id,actor,version,editar){
 }
 async function habilitar(id,body){
   if(typeof body.habilitado!=='boolean'||!Number.isSafeInteger(body.version)||body.version<0)throw reglas.error('Configuración inválida.');
-  await mayoristaValido(id);return transaccion(id,'admin',body.version,c=>({...c,habilitado:body.habilitado,activo:body.habilitado?c.activo:false}));
+  await mayoristaValido(id);return transaccion(id,'admin',body.version,c=>({...c,habilitado:body.habilitado,activo:body.habilitado?c.activo:false,
+    ...(!body.habilitado&&c.datos?.ivan?{datos:{...c.datos,ivan:{...c.datos.ivan,aplicar_catalogo:false}}}:{})}));
 }
 async function guardar(id,body){
   const normal=reglas.validar(body);await mayoristaValido(id);
   const actual=await leer(id);if(!actual.disponible)throw reglas.error('Falta crear las tablas de descuentos.',503);if(!actual.habilitado)throw reglas.error('El administrador no habilitó esta función.',403);
+  if(actual.datos?.ivan?.habilitado)throw reglas.error('Este mayorista consulta condiciones de Iván. Los descuentos se modifican allí.',409);
   if(body.productos_version!==1&&[...(actual.datos?.perfiles||[]),...normal.datos.perfiles].some(p=>p.reglas.some(r=>r.producto_id)))throw reglas.error('Hay descuentos por producto. Recargá la aplicación para editar sin perder esas reglas.',409);
   if(normal.activo){const modelo=await pool.query('SELECT modelo_precio_catalogo FROM mayoristas WHERE id=$1',[id]);if(modelo.rows[0]?.modelo_precio_catalogo!=='precio_recibido')throw reglas.error('Este módulo requiere el modelo de precio recibido. No cambia el modelo actual.',409);}
   const dbExterno=await conexion.getConexionMayorista(id);if(!dbExterno)throw reglas.error('No se pudo comprobar clientes y rubros. No se guardó la configuración.',503);
@@ -38,8 +40,8 @@ async function guardar(id,body){
   const rubros=new Set(catalogo.rows.map(r=>r.rubro)),marcas=new Set(catalogo.rows.map(r=>r.marca));
   if(normal.datos.perfiles.some(p=>p.reglas.some(r=>(r.rubro&&!rubros.has(r.rubro))||(r.marca&&!marcas.has(r.marca)))))throw reglas.error('Un rubro o marca ya no coincide con el catálogo. Actualizá las opciones.',409);
   if(normal.datos.asignaciones.length){const documentos=normal.datos.asignaciones.map(a=>a.cuit);const clientes=await dbExterno.query(`SELECT regexp_replace(doc_cliente::text,'[^0-9]','','g') AS cuit FROM "viewClientes" WHERE es_activo=true AND regexp_replace(doc_cliente::text,'[^0-9]','','g')=ANY($1::text[])`,[documentos]);const validos=new Set(clientes.rows.map(r=>r.cuit));if(documentos.some(d=>!validos.has(d)))throw reglas.error('Un cliente asignado no está activo en este mayorista.',409);}
-  return transaccion(id,'mayorista',body.version,c=>{if(!c.habilitado)throw reglas.error('La función fue deshabilitada. No se guardaron cambios.',403);return {...c,...normal};});
+  return transaccion(id,'mayorista',body.version,c=>{if(!c.habilitado)throw reglas.error('La función fue deshabilitada. No se guardaron cambios.',403);if(c.datos?.ivan?.habilitado)throw reglas.error('La modalidad cambió a consulta de Iván. Recargá la pantalla.',409);return {...c,...normal,datos:{...c.datos,...normal.datos}};});
 }
 function sesionCliente(req,id){try{const token=String(req.headers.authorization||'').replace(/^Bearer\s+/i,'');if(!token)return null;const s=jwt.verify(token,process.env.JWT_SECRET);return s.tipo==='cliente'&&Number(s.mayorista_id)===Number(id)&&reglas.cuit(s.cuit)?s:null;}catch{return null;}}
-async function condicion(req,id){const sesion=sesionCliente(req,id);if(!sesion)return null;const cfg=await leer(id);const cond=reglas.resolver(cfg,sesion.cuit);if(cond){const r=await pool.query("SELECT modelo_precio_catalogo FROM mayoristas WHERE id=$1 AND activo=true AND COALESCE(tipo_fuente,'ivan')<>'roberto'",[id]);if(r.rows[0]?.modelo_precio_catalogo!=='precio_recibido')throw reglas.error('La configuración de descuentos necesita revisión del mayorista.',503);}return cond;}
-module.exports={leer,guardar,habilitar,condicion,sesionCliente};
+async function condicion(req,id,configLeida=null){const sesion=sesionCliente(req,id);if(!sesion)return null;const cfg=configLeida||await leer(id);const cond=reglas.resolver(cfg,sesion.cuit);if(cond){const r=await pool.query("SELECT modelo_precio_catalogo FROM mayoristas WHERE id=$1 AND activo=true AND COALESCE(tipo_fuente,'ivan')<>'roberto'",[id]);if(r.rows[0]?.modelo_precio_catalogo!=='precio_recibido')throw reglas.error('La configuración de descuentos necesita revisión del mayorista.',503);}return cond;}
+module.exports={leer,guardar,habilitar,condicion,sesionCliente,transaccion};

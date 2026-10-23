@@ -12,6 +12,7 @@ const { obtenerDescuentoItems } = require('../services/descuentoClienteIvan');
 const descuentosComerciales = require('../services/ivanDescuentosComerciales');
 const reglasComerciales = require('../services/ivanDescuentosReglas');
 const ivaCatalogo = require('../services/ivanIvaCatalogo');
+const condicionesOrigen = require('../services/ivanCondicionesOrigen');
 const {
   MODELO_COSTO_MARGEN_IVA,
   asegurarColumnasPrecioMayorista,
@@ -52,12 +53,19 @@ async function getConfiguracionPrecio(mayoristaId) {
 }
 
 async function aplicarCondicionesPrecio(productos, condiciones) {
-  const actuales=condiciones.comercial?reglasComerciales.aplicar(productos,condiciones.comercial):aplicarPreciosCatalogo(productos, {
-    ...condiciones.configPrecio,
-    dto_pago_termino: condiciones.dtoPct,
-    descuento_items_pct: condiciones.descuentoItemsPct,
-  });
-  return ivaCatalogo.aplicar(actuales,condiciones.ivaCatalogo,productos);
+  try{
+    const actuales=condiciones.origenIvan?await condicionesOrigen.aplicar(productos,condiciones.origenIvan):condiciones.comercial?reglasComerciales.aplicar(productos,condiciones.comercial):aplicarPreciosCatalogo(productos, {
+      ...condiciones.configPrecio,
+      dto_pago_termino: condiciones.dtoPct,
+      descuento_items_pct: condiciones.descuentoItemsPct,
+    });
+    return await ivaCatalogo.aplicar(actuales,condiciones.ivaCatalogo,productos);
+  }catch(e){if(condiciones.origenIvan)e.condiciones_ivan=true;throw e;}
+}
+function responderFalloOrigen(res,error){
+  if(!error.condiciones_ivan)return false;
+  res.status(error.status||503).json({mensaje:error.status?error.message:'No se pudieron consultar las condiciones de Iván. No se estimó un precio.',codigo:'CONDICIONES_IVAN_REVISAR'});
+  return true;
 }
 
 async function aplicarImagenesMejoradas(productos, mayoristaId) {
@@ -93,7 +101,20 @@ async function getCondicionesPrecio(req, poolExterno, mayoristaId) {
   const sesionIva=descuentosComerciales.sesionCliente(req,mayoristaId);
   const iva=await ivaCatalogo.contexto(mayoristaId,poolExterno,sesionIva?.cuit||'');
   if(iva)req.res?.set('Cache-Control','no-store');
-  const comercial = await descuentosComerciales.condicion(req, mayoristaId);
+  const configComercial = await descuentosComerciales.leer(mayoristaId);
+  const fuente = condicionesOrigen.desdeConfig(configComercial);
+  if(fuente.permiso&&fuente.origen.habilitado&&fuente.origen.aplicar_catalogo){
+    try{
+    if(!sesionIva?.cuit)throw Object.assign(new Error('Ingresá con el CUIT del cliente para consultar su precio de Iván.'),{status:401});
+    const configPrecio=await getConfiguracionPrecio(mayoristaId);
+    if(configPrecio.modelo_precio_catalogo!=='precio_recibido')throw Object.assign(new Error('El modelo del precio cambió. Revisá la cascada de Iván en admin.'),{status:409});
+    if(iva&&iva.modo!=='agregar')throw Object.assign(new Error('La cascada de origen parte de precio sin IVA. Revisá el modo de IVA configurado.'),{status:409});
+    const origenIvan=await condicionesOrigen.contexto(mayoristaId,poolExterno,sesionIva.cuit,false,fuente);
+    req.res?.set('Cache-Control','no-store');
+    return {origenIvan,ivaCatalogo:iva,dtoPct:0,descuentoItemsPct:0,configPrecio};
+    }catch(e){e.condiciones_ivan=true;throw e;}
+  }
+  const comercial = await descuentosComerciales.condicion(req, mayoristaId,configComercial);
   if (comercial) { req.res?.set('Cache-Control','no-store'); return {comercial,ivaCatalogo:iva, dtoPct:0, descuentoItemsPct:0, configPrecio:{modelo_precio_catalogo:'precio_recibido'}}; }
   const [dtoPct, configPrecio] = await Promise.all([
     getDtoPagoTermino(mayoristaId),
@@ -270,6 +291,7 @@ router.get('/:mayorista_id/todos', async (req, res) => {
     res.json({ productos: productosConDto, total: productosConDto.length });
   } catch (error) {
     console.error('Error productos todos:', error.message);
+    if(responderFalloOrigen(res,error))return;
     res.status(500).json({ mensaje: 'Error del servidor' });
   }
 });
@@ -299,6 +321,7 @@ router.get('/:mayorista_id/buscar-ean/:ean', async (req, res) => {
       if (prod) Object.assign(prod, (await aplicarCondicionesPrecio([prod], condicionesPrecio))[0]);
       res.json({ producto: prod ? (await aplicarImagenesCatalogo([prod], mayorista_id))[0] : prod });
     } catch (errCampo) {
+      if(responderFalloOrigen(res,errCampo))return;
       // La vista no tiene columna "ean" en este mayorista — modo EAN no disponible.
       res.json({ producto: null, ean_no_soportado: true });
     }
@@ -360,6 +383,7 @@ router.get('/:mayorista_id/cross-selling', async (req, res) => {
     res.json(await aplicarImagenesCatalogo(await aplicarCondicionesPrecio(resultado, condicionesPrecio), mayorista_id));
   } catch (error) {
     console.error('Error cross-selling:', error.message);
+    if(responderFalloOrigen(res,error))return;
     res.json([]);
   }
 });
@@ -440,6 +464,7 @@ router.get('/:mayorista_id/equivalentes', async (req, res) => {
     res.json(await aplicarImagenesCatalogo(transformadas, mayorista_id));
   } catch (error) {
     console.error('Error equivalentes:', error.message);
+    if(responderFalloOrigen(res,error))return;
     res.json([]);
   }
 });
@@ -558,13 +583,15 @@ router.get('/:mayorista_id', async (req, res) => {
     const ivaParaOrden = campoIva && configPrecio.usar_iva_producto !== false
       ? `COALESCE("${campoIva}", ${ivaCatalogoDefault})`
       : `${ivaCatalogoDefault}`;
-    let expresionPrecioOrden = condicionesPrecio.comercial && ordenPrecio
+    let expresionPrecioOrden = condicionesPrecio.origenIvan && ordenPrecio
+      ? condicionesOrigen.ordenarSql(condicionesPrecio.origenIvan,params)
+      : condicionesPrecio.comercial && ordenPrecio
       ? reglasComerciales.ordenSql(condicionesPrecio.comercial, params)
       : configPrecio.modelo_precio_catalogo === MODELO_COSTO_MARGEN_IVA
       ? `(precio_producto * ${1 + margenCatalogo / 100} * (1 + (${ivaParaOrden}) / 100.0))`
       : 'precio_producto';
     if(ordenPrecio&&condicionesPrecio.ivaCatalogo){
-      if(!condicionesPrecio.comercial){const pct=v=>Math.min(100,Math.max(0,Number(v)||0));const factor=(1-pct(condicionesPrecio.dtoPct)/100)*(1-pct(condicionesPrecio.descuentoItemsPct)/100);if(factor!==1){params.push(factor);expresionPrecioOrden=`ROUND(precio_producto::numeric*$${params.length}::numeric,2)`;}}
+      if(!condicionesPrecio.comercial&&!condicionesPrecio.origenIvan){const pct=v=>Math.min(100,Math.max(0,Number(v)||0));const factor=(1-pct(condicionesPrecio.dtoPct)/100)*(1-pct(condicionesPrecio.descuentoItemsPct)/100);if(factor!==1){params.push(factor);expresionPrecioOrden=`ROUND(precio_producto::numeric*$${params.length}::numeric,2)`;}}
       expresionPrecioOrden=ivaCatalogo.ordenarSql(expresionPrecioOrden,condicionesPrecio.ivaCatalogo,params);
     }
     const orderBy = ordenPrecio
@@ -596,6 +623,7 @@ router.get('/:mayorista_id', async (req, res) => {
     });
   } catch (error) {
     console.error('Error productos:', error.message);
+    if(responderFalloOrigen(res,error))return;
     res.status(500).json({ mensaje: 'Error del servidor' });
   }
 });
