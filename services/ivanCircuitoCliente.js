@@ -140,6 +140,79 @@ async function consultarCliente(id, cuit) {
     aplicada_catalogo: true, calculo_disponible: true, modo_circuito: true, solo_lectura: true };
 }
 
+async function revisarLectura(id, datos, cfg) {
+  if (!esCircuito(cfg) || !cfg.habilitado || !cfg.datos.ivan.habilitado) throw errorCliente('Esta revisión requiere la integración de condiciones habilitada.', 403);
+  const doc = documento(datos?.cuit);
+  if (!/^\d{7,20}$/.test(doc)) throw errorCliente('Elegí un cliente para revisar la lectura.');
+  const productoId = datos.producto_id === undefined ? null : idSeguro(datos.producto_id);
+  let client, etapa = 'conexión';
+  try {
+    const db = await conexion.getConexionMayorista(id);
+    if (!db) throw errorCliente('La conexión del mayorista no está disponible.', 503);
+    client = await db.connect();
+    await client.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY');
+    await client.query("SET LOCAL statement_timeout = '5000ms'");
+    etapa = 'estructura de las vistas';
+    const vistas = await origen.estructura(client, true);
+    const vinculos = await campos(client, soloVista(cfg));
+    const esquema = await client.query(`SELECT n.nspname AS esquema FROM pg_class c
+      JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.oid=to_regclass('"view_clientes_descuentos_x_rubros"')`);
+    etapa = 'cliente por CUIT';
+    const persona = await client.query(`SELECT id_cliente::text AS id,
+      (SELECT jsonb_object_agg(e.key,e.value) FROM jsonb_each_text(to_jsonb(c)) e
+       WHERE lower(e.key) IN ('id','id_cliente')) AS identificadores
+      FROM "viewClientes" c WHERE es_activo=true AND regexp_replace(doc_cliente::text,'[^0-9]','','g')=$1 LIMIT 2`, [doc]);
+    if (persona.rows.length !== 1) throw errorCliente('El CUIT no identifica un único cliente activo en esta conexión.', 409);
+    const idUsado = idOrigen(persona.rows[0].id);
+    etapa = 'existencia de condiciones';
+    const existencia = await client.query(`SELECT
+      EXISTS(SELECT 1 FROM "view_clientes_descuentos_x_rubros") AS tiene_filas,
+      EXISTS(SELECT 1 FROM "view_clientes_descuentos_x_rubros" WHERE fk_id_cliente IS NULL OR BTRIM(fk_id_cliente::text)='0') AS tiene_fk_vacio_o_cero`);
+    const grupos = new Map();
+    for (const [campo, valor] of Object.entries(persona.rows[0].identificadores || {})) {
+      if (valor === null || !/^\d+$/.test(String(valor).trim()) || BigInt(String(valor).trim()) === 0n) continue;
+      const clave = idOrigen(valor);
+      if (!grupos.has(clave)) grupos.set(clave, []);
+      grupos.get(clave).push(campo);
+    }
+    const numerico = vistas.reglas.campos.find(c => c.nombre === 'fk_id_cliente')?.numerico;
+    const fk = numerico ? '"fk_id_cliente"' : `(CASE WHEN BTRIM(fk_id_cliente::text) ~ '^[0-9]+$' THEN BTRIM(fk_id_cliente::text)::numeric::text ELSE NULL END)`;
+    const coincidencias = [];
+    for (const [valor, camposId] of grupos) {
+      etapa = 'condiciones vinculadas al identificador';
+      const r = await client.query(`SELECT porcentaje::text,fk_id_cliente::text,fk_id_producto_rubro::text,
+        fk_id_producto_marca::text,fk_id_producto_tipo::text
+        FROM "view_clientes_descuentos_x_rubros" WHERE ${fk}=$1 LIMIT 21`, [valor]);
+      coincidencias.push({ campos: camposId, valor, usado_en_calculo: valor === idUsado,
+        filas: Math.min(r.rows.length, 20), mas_de_20: r.rows.length > 20, muestra: r.rows.slice(0, 20) });
+    }
+    let producto = null;
+    if (productoId !== null) {
+      etapa = 'identificadores del producto';
+      const citar = nombre => '"' + nombre.replace(/"/g, '""') + '"';
+      const r = await client.query(`SELECT id_producto::text AS id,cod_producto AS codigo,
+        ${citar(vinculos.producto_rubro)}::text AS rubro,${citar(vinculos.producto_marca)}::text AS marca,
+        ${citar(vinculos.producto_tipo)}::text AS tipo FROM "viewProductos" WHERE id_producto=$1 LIMIT 2`, [productoId]);
+      if (r.rows.length !== 1) throw errorCliente('El producto no identifica una única fila en esta conexión.', 409);
+      producto = r.rows[0];
+    }
+    return { solo_lectura: true, cuit: doc, integracion: cfg.datos.ivan.integracion, id_cliente_usado: idUsado,
+      vista: FUENTE_DESCUENTOS, esquema: esquema.rows[0]?.esquema || null,
+      vista_tiene_filas: existencia.rows[0].tiene_filas, hay_fk_vacio_o_cero: existencia.rows[0].tiene_fk_vacio_o_cero,
+      coincidencias, campos_producto: { rubro: vinculos.producto_rubro, marca: vinculos.producto_marca, tipo: vinculos.producto_tipo }, producto };
+  } catch (e) {
+    if (e.status) throw e;
+    const codigo = /^[A-Z0-9]{5}$/.test(String(e.code || '')) ? e.code : 'LECTURA';
+    throw errorCliente(`No se pudo revisar ${etapa} (código ${codigo}). No se modificaron datos.`, 503);
+  } finally {
+    if (client) {
+      let descartar = false;
+      try { await client.query('ROLLBACK'); } catch (_) { descartar = true; }
+      client.release(descartar);
+    }
+  }
+}
+
 async function consultarProducto(id, datos) {
   const db = await conexion.getConexionMayorista(id);
   if (!db) throw errorCliente('El catálogo no está disponible.', 503);
@@ -168,4 +241,4 @@ async function contextoIva(id, db, cuit, cfg, version) {
       alicuota_general: c.tasa, catalogo_iva: { permitido: true, modo: 'agregar', envio: 'neto' } } };
 }
 
-module.exports = { esCircuito, activo, leerAdmin, guardarAdmin, resumen, guardarIva, contexto, consultarCliente, consultarProducto, contextoIva };
+module.exports = { esCircuito, activo, leerAdmin, guardarAdmin, resumen, guardarIva, contexto, consultarCliente, consultarProducto, contextoIva, revisarLectura };
