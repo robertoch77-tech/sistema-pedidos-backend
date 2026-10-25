@@ -9,9 +9,13 @@ const { mayoristaValido } = require('./ivanFuncionesCatalogo');
 const { errorCliente, idSeguro } = require('./ivanImagenesDatos');
 
 const INTEGRACION = 'cuit_reglas_v2';
+const INTEGRACION_COMPLETA = 'cuit_reglas_v3';
 const FUENTE_DESCUENTOS = 'view_clientes_descuentos_x_rubros';
 const soloVista = cfg => cfg?.datos?.ivan?.integracion === INTEGRACION;
-const esCircuito = cfg => ['cuit_reglas_v1', INTEGRACION].includes(cfg?.datos?.ivan?.integracion);
+const clienteCompleto = cfg => cfg?.datos?.ivan?.integracion === INTEGRACION_COMPLETA;
+const descuentoAnterior = cfg => !soloVista(cfg) && !clienteCompleto(cfg);
+const fuenteDescuentos = cfg => clienteCompleto(cfg) ? 'cliente_y_condiciones_ivan' : soloVista(cfg) ? FUENTE_DESCUENTOS : 'circuito_anterior';
+const esCircuito = cfg => ['cuit_reglas_v1', INTEGRACION, INTEGRACION_COMPLETA].includes(cfg?.datos?.ivan?.integracion);
 const activo = cfg => esCircuito(cfg) && cfg.habilitado === true && cfg.datos.ivan.habilitado === true && cfg.datos.ivan.aplicar_catalogo === true;
 const documento = v => String(v || '').replace(/\D/g, '');
 const idOrigen = v => {
@@ -28,24 +32,26 @@ async function configuracionMayorista(id, incluirDescuentoAnterior = false) {
 }
 
 async function leerAdmin(id, cfgLeida = null) {
-  const cfg = cfgLeida || await descuentos.leer(id), c = await configuracionMayorista(id, !soloVista(cfg));
+  const cfg = cfgLeida || await descuentos.leer(id), c = await configuracionMayorista(id, descuentoAnterior(cfg));
   const anterior = esCircuito(cfg) ? null : await require('./ivanPrecioOrigen').leer(id);
   return { disponible: cfg.disponible, version: Number(cfg.version), habilitado: activo(cfg),
     preferir_simple: esCircuito(cfg) || cfg.datos?.ivan?.habilitado === true,
     permitir_iva: esCircuito(cfg) ? cfg.datos.ivan.permitir_iva === true : anterior.habilitado && anterior.origen.catalogo_iva.permitido,
     con_iva: activo(cfg) && cfg.datos.ivan.permitir_iva === true && cfg.datos.ivan.con_iva === true,
-    tasa: c.tasa, fuente_descuentos: soloVista(cfg) ? FUENTE_DESCUENTOS : 'circuito_anterior',
-    ...(!soloVista(cfg) ? { dto_pago_termino: c.dto_pago_termino ?? 0 } : {}) };
+    tasa: c.tasa, fuente_descuentos: fuenteDescuentos(cfg),
+    lectura_cliente_completa_disponible: true, lectura_cliente_completa: clienteCompleto(cfg),
+    ...(descuentoAnterior(cfg) ? { dto_pago_termino: c.dto_pago_termino ?? 0 } : {}) };
 }
 
 // Contrato conocido, no un formulario de columnas intercambiables.
-async function campos(db, exclusiva) {
+async function campos(db, exclusiva, completa = false) {
   const vistas = await origen.estructura(db);
   const exigir = (vista, nombre) => {
     if (!vistas[vista].campos.some(c => c.nombre === nombre)) throw errorCliente(`La vista ${vistas[vista].nombre} no expone ${nombre}. No se calculó un precio.`, 409);
     return nombre;
   };
   if (!exclusiva) exigir('clientes', 'porcentaje_descuento_items');
+  if (completa) exigir('clientes', 'porcentaje_descuento');
   const c = { cliente_id: exigir('clientes', 'id_cliente'), regla_cliente: exigir('reglas', 'fk_id_cliente'),
     regla_porcentaje: exigir('reglas', 'porcentaje'), regla_rubro: exigir('reglas', 'fk_id_producto_rubro'),
     regla_marca: exigir('reglas', 'fk_id_producto_marca'), regla_tipo: exigir('reglas', 'fk_id_producto_tipo') };
@@ -61,18 +67,21 @@ async function campos(db, exclusiva) {
 async function guardarAdmin(id, datos) {
   await mayoristaValido(id);
   if (!Number.isSafeInteger(datos?.version) || typeof datos.habilitado !== 'boolean' || typeof datos.permitir_iva !== 'boolean') throw errorCliente('Configuración inválida.');
+  if (datos.lectura_cliente_completa !== undefined && typeof datos.lectura_cliente_completa !== 'boolean') throw errorCliente('Modalidad de lectura inválida.');
+  const completa = datos.lectura_cliente_completa === true;
   if (datos.habilitado) {
     const c = await configuracionMayorista(id);
     if (c.modelo_precio_catalogo !== 'precio_recibido') throw errorCliente('Este mayorista usa un modelo de precio diferente. No se modificó su configuración.', 409);
     const db = await conexion.getConexionMayorista(id);
     if (!db) throw errorCliente('La conexión del mayorista no está disponible.', 503);
-    await campos(db, true);
+    await campos(db, !completa, completa);
     if (datos.permitir_iva && c.tasa === null) throw errorCliente('Completá el IVA del mayorista en su configuración existente.', 409);
   }
   await descuentos.transaccion(id, 'admin', datos.version, c => {
+    if (clienteCompleto(c) && !completa) throw errorCliente('Actualizá admin antes de guardar la lectura completa del cliente.', 409);
     const anterior = c.datos?.ivan || {};
     return { ...c, habilitado: datos.habilitado ? true : c.habilitado, activo: datos.habilitado ? false : c.activo,
-      datos: { ...c.datos, ivan: { ...anterior, integracion: INTEGRACION, habilitado: datos.habilitado,
+      datos: { ...c.datos, ivan: { ...anterior, integracion: completa ? INTEGRACION_COMPLETA : INTEGRACION, habilitado: datos.habilitado,
         aplicar_catalogo: datos.habilitado, permitir_iva: datos.permitir_iva,
         con_iva: esCircuito(c) && datos.habilitado && datos.permitir_iva && anterior.con_iva === true } } };
   });
@@ -83,7 +92,7 @@ async function resumen(id, cfgLeida = null) {
   const cfg = cfgLeida || await descuentos.leer(id), estado = await leerAdmin(id, cfg);
   return { disponible: cfg.disponible, permiso: cfg.habilitado, version: Number(cfg.version), modo_circuito: true,
     origen: { habilitado: cfg.habilitado === true && cfg.datos?.ivan?.habilitado === true, aplicar_catalogo: activo(cfg) },
-    pendientes: [], pendientes_consulta: [], fuente_descuentos: soloVista(cfg) ? FUENTE_DESCUENTOS : 'circuito_anterior', iva: estado };
+    pendientes: [], pendientes_consulta: [], fuente_descuentos: fuenteDescuentos(cfg), iva: estado };
 }
 
 async function guardarIva(id, datos) {
@@ -108,27 +117,27 @@ async function contexto(id, db, cuit, cfgLeida = null) {
   if (!activo(cfg)) return null;
   const doc = documento(cuit);
   if (!/^\d{7,20}$/.test(doc)) throw errorCliente('Ingresá con el CUIT del cliente.', 401);
-  const exclusiva = soloVista(cfg);
-  const c = await configuracionMayorista(id, !exclusiva);
+  const exclusiva = soloVista(cfg), completa = clienteCompleto(cfg);
+  const c = await configuracionMayorista(id, descuentoAnterior(cfg));
   if (c.modelo_precio_catalogo !== 'precio_recibido') throw errorCliente('El modelo de precio del mayorista cambió.', 409);
-  const vinculos = await campos(db, exclusiva);
+  const vinculos = await campos(db, exclusiva, completa);
   const r = await db.query(`SELECT id_cliente::text AS id,
     COALESCE(NULLIF(BTRIM(nom_fan_cliente),''),BTRIM(raz_soc_cliente),'') AS nombre
-    ${exclusiva ? '' : ',porcentaje_descuento_items::text AS descuento'} FROM "viewClientes"
+    ${completa ? ',porcentaje_descuento::text AS general,porcentaje_descuento_items::text AS descuento' : exclusiva ? '' : ',porcentaje_descuento_items::text AS descuento'} FROM "viewClientes"
     WHERE es_activo=true AND regexp_replace(doc_cliente::text,'[^0-9]','','g')=$1 LIMIT 2`, [doc]);
   if (r.rows.length !== 1) throw errorCliente(r.rows.length ? 'El CUIT identifica más de un cliente en Iván.' : 'El cliente no está activo en este mayorista.', 409);
-  // v2 usa solamente porcentajes de la vista nueva. v1 se conserva hasta que
-  // admin elija guardar la nueva lectura para este mayorista expresamente.
+  // v3 incorpora los dos porcentajes reales del cliente. v1/v2 conservan su
+  // lectura hasta que admin elija la modalidad completa para este mayorista.
   const cliente = { id: idOrigen(r.rows[0].id), cuit: doc, nombre: r.rows[0].nombre,
-    general: exclusiva ? null : cascada.porcentaje(c.dto_pago_termino ?? 0),
+    general: completa ? cascada.porcentaje(r.rows[0].general) : exclusiva ? null : cascada.porcentaje(c.dto_pago_termino ?? 0),
     extra: exclusiva ? null : cascada.porcentaje(r.rows[0].descuento ?? 0) };
   const configuracion = { campos: vinculos, dimension_vacia: cfg.datos.ivan.dimension_vacia === 'nulo_o_cero' ? 'nulo_o_cero' : 'nulo', aplicar_catalogo: true };
   const reglas = (await origen.cargarReglas(db, configuracion, cliente.id)).map(r => ({ ...r,
     etiqueta: exclusiva && ['rubro', 'marca', 'tipo'].every(k => r[k] === null) ? 'General para todos sus productos' : r.etiqueta }));
-  return { id, db, version: Number(cfg.version), configDescuentos: cfg, cfg: configuracion, cliente, reglas,
+  return { id, db, version: Number(cfg.version), configDescuentos: cfg, cfg: configuracion, cliente, reglas, cascada_cliente: completa,
     todas: exclusiva ? reglas : [
-      { etiqueta: 'Descuento general / por pago', porcentaje: cliente.general, rubro: null, marca: null, tipo: null },
-      { etiqueta: 'Descuento del cliente', porcentaje: cliente.extra, rubro: null, marca: null, tipo: null }, ...reglas] };
+      { etiqueta: completa ? 'Descuento general del cliente' : 'Descuento general / por pago', porcentaje: cliente.general, rubro: null, marca: null, tipo: null },
+      { etiqueta: completa ? 'Descuento adicional del cliente' : 'Descuento del cliente', porcentaje: cliente.extra, rubro: null, marca: null, tipo: null }, ...reglas] };
 }
 
 async function consultarCliente(id, cuit) {
@@ -156,7 +165,7 @@ async function revisarLectura(id, datos, cfg) {
     const servidor = await client.query('SHOW server_version');
     etapa = 'estructura de las vistas';
     const vistas = await origen.estructura(client, true);
-    const vinculos = await campos(client, soloVista(cfg));
+    const vinculos = await campos(client, soloVista(cfg), clienteCompleto(cfg));
     etapa = 'esquema de la vista de condiciones';
     const esquema = await client.query(`SELECT n.nspname AS esquema FROM pg_class c
       JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -268,10 +277,10 @@ async function consultarProducto(id, datos) {
 
 async function contextoIva(id, db, cuit, cfg, version) {
   if (!activo(cfg) || !cfg.datos.ivan.permitir_iva || !cfg.datos.ivan.con_iva) return null;
-  const c = await configuracionMayorista(id, !soloVista(cfg));
+  const c = await configuracionMayorista(id, descuentoAnterior(cfg));
   if (c.tasa === null) throw errorCliente('El mayorista no tiene una tasa de IVA válida.', 409);
   // Igual que el circuito de pedidos existente: importe neto + alícuota.
-  return { id, db, cuit: documento(cuit), version: Number(version), modo: 'agregar', envio: 'neto', dtoPago: soloVista(cfg) ? 0 : c.dto_pago_termino ?? 0,
+  return { id, db, cuit: documento(cuit), version: Number(version), modo: 'agregar', envio: 'neto', dtoPago: descuentoAnterior(cfg) ? c.dto_pago_termino ?? 0 : 0,
     origen: { campo_precio: 'precio_producto', unidad_precio: 'unidad', iva_origen: 'no_incluido', iva_fuente: 'general',
       alicuota_general: c.tasa, catalogo_iva: { permitido: true, modo: 'agregar', envio: 'neto' } } };
 }

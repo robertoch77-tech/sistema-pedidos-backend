@@ -95,7 +95,7 @@ async function guardar(id, body) {
   const origen = normalizar(body.origen);
   if (origen.habilitado && origen.campos.general && origen.campos.general !== SIN_DESCUENTO && origen.campos.general === origen.campos.extra) throw errorCliente('General y extra no pueden leer el mismo campo dos veces. Confirmá sus fuentes o elegí «No aplica».');
   const actual = await configuracion.leer(id);
-  if (['cuit_reglas_v1', 'cuit_reglas_v2'].includes(actual.datos?.ivan?.integracion)) throw errorCliente('Actualizá la pantalla y usá Precios y descuentos de los clientes para esta integración.', 409);
+  if (['cuit_reglas_v1', 'cuit_reglas_v2', 'cuit_reglas_v3'].includes(actual.datos?.ivan?.integracion)) throw errorCliente('Actualizá la pantalla y usá Precios y descuentos de los clientes para esta integración.', 409);
   if (!actual.disponible) throw errorCliente('Faltan las tablas existentes de descuentos.', 503);
   if (origen.habilitado && !actual.habilitado) throw errorCliente('Primero habilitá el permiso de Descuentos comerciales para este mayorista.', 409);
   if (origen.habilitado && actual.activo) throw errorCliente('Pausá primero las condiciones manuales de este mayorista. No se combinaron dos motores de descuentos.', 409);
@@ -201,6 +201,20 @@ async function aplicar(productos, ctx, detallar = false) {
       version: ctx.version, perfil: 'Condiciones de Iván', pasos: v.pasos, total_pasos: cantidades.get(String(p.id_producto)) } }; });
 }
 function ordenarSql(ctx, parametros) {
+  if (ctx.cascada_cliente === true) {
+    // Se ejecuta en PostgreSQL del proveedor (9.3); no usar JSONB aquí.
+    const dimensiones = Object.fromEntries(['rubro', 'marca', 'tipo'].map(k => [k, idSql(ctx.cfg.campos['producto_' + k])]));
+    const factores = ctx.todas.map(regla => {
+      parametros.push(cascada.porcentaje(regla.porcentaje));
+      const factor = `(1-$${parametros.length}::numeric/100)`;
+      const condiciones = ['rubro', 'marca', 'tipo'].filter(k => regla[k] !== null).map(k => {
+        parametros.push(regla[k]);
+        return `${dimensiones[k]}=$${parametros.length}::text`;
+      });
+      return condiciones.length ? `(CASE WHEN ${condiciones.join(' AND ')} THEN ${factor} ELSE 1::numeric END)` : factor;
+    });
+    return `ROUND(precio_producto::numeric${factores.map(f => '*' + f).join('')},2)`;
+  }
   return cascada.expresionOrden('precio_producto', ctx.todas,
     Object.fromEntries(['rubro', 'marca', 'tipo'].map(k => [k, idSql(ctx.cfg.campos['producto_' + k])])), parametros);
 }
