@@ -28,7 +28,7 @@ router.get('/cliente/:mayorista_id', async (req, res) => {
     res.json(resultado.rows);
   } catch (error) {
     console.error('Error ofertas cliente:', error.message);
-    res.json([]);
+    res.status(503).json({ mensaje: 'No se pudieron consultar las ofertas. Reintentá la carga.' });
   }
 });
 

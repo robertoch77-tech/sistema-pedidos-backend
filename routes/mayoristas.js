@@ -82,6 +82,12 @@ router.get('/:id/configuracion', async (req, res) => {
       configuracion.precio_incluye_iva = conIva;
       configuracion.precio_catalogo_incluye_iva = conIva;
     }
+    const portal = await pool.query(`SELECT
+      COALESCE(to_jsonb(m)->>'inicio_cliente', 'panel') AS inicio_cliente,
+      COALESCE((to_jsonb(m)->>'bienvenida_cliente')::boolean, true) AS bienvenida_cliente,
+      COALESCE((to_jsonb(m)->>'habilitar_mis_promociones')::boolean, false) AS habilitar_mis_promociones
+      FROM mayoristas m WHERE m.id=$1`, [id]);
+    Object.assign(configuracion, portal.rows[0]);
     res.json(configuracion);
   } catch (error) { res.status(500).json({ mensaje: 'Error del servidor' }); }
 });

@@ -103,6 +103,47 @@ router.use((req, res, next) => {
 });
 
 // GET — listar todos
+router.get('/mayoristas/:id/portal-cliente', checkAdmin, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ mensaje: 'Mayorista inválido.' });
+  try {
+    const config = await require('../services/portalClienteIvan').leer(pool, id);
+    if (!config) return res.status(404).json({ mensaje: 'Mayorista no encontrado.' });
+    return res.json(config);
+  } catch { return res.status(503).json({ mensaje: 'No se pudo consultar el ingreso del cliente.' }); }
+});
+
+router.put('/mayoristas/:id/portal-cliente', checkAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  const { inicio_cliente, bienvenida_cliente, revision } = req.body || {};
+  if (!Number.isSafeInteger(id) || id <= 0 || !['panel', 'catalogo'].includes(inicio_cliente)
+      || typeof bienvenida_cliente !== 'boolean' || !/^\d{1,18}$/.test(String(revision))) {
+    return res.status(400).json({ mensaje: 'Revisá la configuración del ingreso.' });
+  }
+  let db;
+  try {
+    db = await pool.connect();
+    await db.query('BEGIN');
+    const actual = await require('../services/portalClienteIvan').leer(db, id, true);
+    if (!actual || !actual.disponible || actual.revision !== String(revision)) {
+      await db.query('ROLLBACK');
+      return res.status(!actual ? 404 : !actual.disponible ? 503 : 409).json({ mensaje: !actual
+        ? 'Mayorista no encontrado.' : !actual.disponible
+          ? 'Falta aplicar el SQL del portal. El ingreso actual se conserva.'
+          : 'La configuración cambió en otra pestaña. Recargá este bloque.' });
+    }
+    await db.query(`UPDATE mayoristas SET inicio_cliente=$2, bienvenida_cliente=$3,
+      portal_cliente_revision=portal_cliente_revision+1 WHERE id=$1`, [id, inicio_cliente, bienvenida_cliente]);
+    const config = await require('../services/portalClienteIvan').leer(db, id);
+    await db.query('COMMIT');
+    return res.json({ config, mensaje: 'Ingreso guardado solo para este mayorista.' });
+  } catch {
+    if (db) await db.query('ROLLBACK').catch(() => {});
+    return res.status(503).json({ mensaje: 'No se pudo guardar el ingreso. Recargá para comprobar el estado.' });
+  } finally { db?.release(); }
+});
+
 router.get('/mayoristas', checkAdmin, async (req, res) => {
   try {
     const resultado = await pool.query(

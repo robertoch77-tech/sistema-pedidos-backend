@@ -11,6 +11,30 @@ async function getConexionPorCodigo(codigo) {
   return conexionCompartida.getConexionPorCodigo(codigo);
 }
 
+// Comprobacion de firma/vencimiento para los avisos del portal. No renueva tokens.
+router.get('/estado-sesion', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const token = /^Bearer (\S+)$/.exec(String(req.headers.authorization || ''))?.[1];
+  if (!token) return res.status(401).json({ mensaje: 'Iniciá sesión para continuar.' });
+  try {
+    const datos = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
+    if (!Number.isFinite(datos.exp)) return res.status(401).json({ mensaje: 'Iniciá sesión para continuar.' });
+    const rol = req.query.rol;
+    const id = Number(req.query.mayorista_id);
+    if (!Number.isSafeInteger(id) || id <= 0 || !['cliente', 'mayorista'].includes(rol)) {
+      return res.status(400).json({ mensaje: 'Solicitud inválida.' });
+    }
+    const clienteValido = rol === 'cliente' && datos.tipo === 'cliente'
+      && Number(datos.mayorista_id) === id
+      && /^\d+$/.test(String(req.query.cuit || '').replace(/\D/g, ''))
+      && String(datos.cuit).replace(/\D/g, '') === String(req.query.cuit || '').replace(/\D/g, '');
+    const mayoristaValido = rol === 'mayorista' && datos.tipo === undefined
+      && typeof datos.email === 'string' && Number(datos.id) === id;
+    if (!clienteValido && !mayoristaValido) return res.status(403).json({ mensaje: 'La sesión corresponde a otra cuenta.' });
+    return res.json({ vigente: true });
+  } catch { return res.status(401).json({ mensaje: 'Tu sesión venció. Iniciá sesión para continuar.' }); }
+});
+
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
   try {
