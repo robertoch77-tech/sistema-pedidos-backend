@@ -1,23 +1,26 @@
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const { registrarDescuento, sinInterrumpir } = require('./auditoriaIvan');
+const { crearErrorCosto, registrarFalloCosto } = require('./ivanSesionCosto');
 const cache = new Map();
 const consultasEnCurso = new Map();
 
 const clave = (mayoristaId, cuit) => `${mayoristaId}:${String(cuit || '').replace(/\D/g, '')}`;
 const porcentajeSeguro = valor => {
+  if (valor === null || valor === undefined || String(valor).trim() === '') return null;
   const numero = Number(valor);
-  return Number.isFinite(numero) ? Math.min(100, Math.max(0, numero)) : 0;
+  return Number.isFinite(numero) && numero >= 0 && numero <= 100 ? numero : null;
 };
 
 function guardarDescuentoItems(mayoristaId, cuit, porcentaje) {
   const tieneDato = porcentaje !== null && porcentaje !== undefined && porcentaje !== '';
   const porcentajeNormalizado = porcentajeSeguro(porcentaje);
-  cache.set(clave(mayoristaId, cuit), { porcentaje: porcentajeNormalizado, verificadoEn: Date.now() });
+  if (porcentajeNormalizado !== null) cache.set(clave(mayoristaId, cuit), { porcentaje: porcentajeNormalizado, verificadoEn: Date.now() });
+  else cache.delete(clave(mayoristaId, cuit));
   sinInterrumpir(registrarDescuento({
     mayoristaId, cuit,
-    porcentaje: tieneDato ? porcentajeNormalizado : null,
-    estado: tieneDato ? 'ok' : 'sin_dato',
-    mensaje: tieneDato ? null : 'Iván no devolvió un porcentaje de descuento',
+    porcentaje: porcentajeNormalizado,
+    estado: porcentajeNormalizado !== null ? 'ok' : 'sin_dato',
+    mensaje: porcentajeNormalizado !== null ? null : tieneDato ? 'El descuento recibido no es válido.' : 'Iván no devolvió un porcentaje de descuento',
   }), 'guardar descuento');
 }
 
@@ -35,19 +38,20 @@ async function obtenerDescuentoItems(poolExterno, mayoristaId, cuit) {
          FROM "viewClientes"
          WHERE regexp_replace(doc_cliente::text, '[^0-9]', '', 'g') = $1
            AND es_activo = true
-         LIMIT 1`,
+         LIMIT 2`,
         [documento]
       );
       const porcentaje = porcentajeSeguro(resultado.rows[0]?.porcentaje_descuento_items);
+      if (resultado.rows.length !== 1 || porcentaje === null) {
+        throw crearErrorCosto(503, 'COSTO_CLIENTE_NO_VERIFICADO', 'No se pudo confirmar el descuento de tu CUIT. Reintentá la consulta de costos.');
+      }
       guardarDescuentoItems(mayoristaId, cuit, porcentaje);
       return porcentaje;
     } catch (error) {
       console.error('Descuento Iván por CUIT no disponible:', error.message);
-      sinInterrumpir(registrarDescuento({
-        mayoristaId, cuit, porcentaje: existente?.porcentaje ?? 0,
-        estado: 'error', mensaje: error.message,
-      }), 'error descuento');
-      return existente?.porcentaje ?? 0;
+      const mensaje = 'No se pudo confirmar el descuento de tu CUIT en Iván. No se mostraron costos sin verificar.';
+      registrarFalloCosto(mayoristaId, cuit, 'COSTO_CLIENTE_NO_VERIFICADO', mensaje);
+      throw crearErrorCosto(503, 'COSTO_CLIENTE_NO_VERIFICADO', mensaje);
     } finally {
       consultasEnCurso.delete(cacheKey);
     }

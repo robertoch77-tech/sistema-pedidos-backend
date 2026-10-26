@@ -8,16 +8,20 @@ router.use(verificarCualquierToken);
 router.use(verificarSoloSuperadmin);
 
 router.get('/', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
   try {
     await asegurarTablas();
     const [descuentos, pedidos] = await Promise.all([
       pool.query(`
-        SELECT DISTINCT ON (a.mayorista_id, a.cuit)
-               a.mayorista_id, m.nombre AS mayorista, a.cuit, a.porcentaje,
+        SELECT a.mayorista_id, m.nombre AS mayorista, a.cuit, a.porcentaje,
                a.estado, a.mensaje, a.consultado_en
-        FROM auditoria_descuentos_ivan a
+        FROM (
+          SELECT DISTINCT ON (mayorista_id,cuit) * FROM auditoria_descuentos_ivan
+          ORDER BY mayorista_id,cuit,consultado_en DESC,id DESC
+        ) a
         LEFT JOIN mayoristas m ON m.id=a.mayorista_id
-        ORDER BY a.mayorista_id, a.cuit, a.consultado_en DESC
+        ORDER BY CASE WHEN a.estado='error' THEN 0 WHEN a.estado IN ('sesion_vencida','sin_dato') THEN 1 ELSE 2 END,
+                 a.consultado_en DESC
         LIMIT 300
       `),
       pool.query(`
@@ -37,6 +41,7 @@ router.get('/', async (req, res) => {
 });
 
 router.get('/resumen', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
   try {
     await asegurarTablas();
     const { rows } = await pool.query(`
@@ -45,7 +50,15 @@ router.get('/resumen', async (req, res) => {
         (SELECT COUNT(*) FROM clientes_roberto WHERE estado='activo') AS activos,
         (SELECT COUNT(*) FROM clientes_roberto WHERE estado='prueba') AS prueba,
         (SELECT COUNT(*) FROM clientes_roberto WHERE estado='suspendido') AS suspendidos,
-        (SELECT COUNT(*) FROM auditoria_pedidos_ivan WHERE estado='error') AS pedidos_ivan_error
+        (SELECT COUNT(*) FROM auditoria_pedidos_ivan WHERE estado='error') AS pedidos_ivan_error,
+        (SELECT COUNT(*) FROM (
+          SELECT DISTINCT ON (mayorista_id,cuit) estado FROM auditoria_descuentos_ivan
+          ORDER BY mayorista_id,cuit,consultado_en DESC,id DESC
+        ) ultimos WHERE estado='error') AS costos_ivan_error,
+        (SELECT COUNT(*) FROM (
+          SELECT DISTINCT ON (mayorista_id,cuit) estado FROM auditoria_descuentos_ivan
+          ORDER BY mayorista_id,cuit,consultado_en DESC,id DESC
+        ) ultimos WHERE estado='sesion_vencida') AS sesiones_ivan_vencidas
     `);
     res.json(rows[0]);
   } catch (error) {

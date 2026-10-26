@@ -11,6 +11,10 @@ const equivalenciasCodigos=require('../services/ivanEquivalenciasCodigos');
 const precioOrigen=require('../services/ivanPrecioOrigen');
 const condicionesOrigen=require('../services/ivanCondicionesOrigen');
 const circuitoCliente=require('../services/ivanCircuitoCliente');
+const rateLimit=require('express-rate-limit');
+router.get('/precios-cliente/:id/lectura',rateLimit({windowMs:60000,max:6,standardHeaders:true,legacyHeaders:false}),async(req,res,next)=>{
+  try{const id=await mayoristaValido(req.params.id);const cfg=await descuentosComerciales.leer(id);res.set('Cache-Control','no-store');res.json(await circuitoCliente.revisarLectura(id,req.query,cfg));}catch(e){next(e);}
+});
 router.get('/precios-cliente/:id',async(req,res,next)=>{
   try{const id=await mayoristaValido(req.params.id);res.set('Cache-Control','no-store');res.json(await circuitoCliente.leerAdmin(id));}catch(e){next(e);}
 });

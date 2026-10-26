@@ -9,6 +9,7 @@ const pool = require('../db');
 const conexionCompartida = require('../services/conexionMayorista');
 const jwt = require('jsonwebtoken');
 const { obtenerDescuentoItems } = require('../services/descuentoClienteIvan');
+const { validarSesionCosto, registrarFalloCosto, crearErrorCosto } = require('../services/ivanSesionCosto');
 const descuentosComerciales = require('../services/ivanDescuentosComerciales');
 const reglasComerciales = require('../services/ivanDescuentosReglas');
 const ivaCatalogo = require('../services/ivanIvaCatalogo');
@@ -34,7 +35,7 @@ async function getDtoPagoTermino(mayorista_id) {
       [mayorista_id]
     );
     return parseFloat(r.rows[0]?.dto_pago_termino) || 0;
-  } catch { return 0; }
+  } catch { throw crearErrorCosto(503,'CONFIGURACION_COSTO_NO_DISPONIBLE','No se pudo confirmar la configuración del costo. Reintentá la consulta.'); }
 }
 
 async function getConfiguracionPrecio(mayoristaId) {
@@ -48,8 +49,7 @@ async function getConfiguracionPrecio(mayoristaId) {
     );
     return r.rows[0] || {};
   } catch {
-    // Compatibilidad durante despliegue escalonado: sin migración, todo sigue legado.
-    return { modelo_precio_catalogo: 'precio_recibido' };
+    throw crearErrorCosto(503,'CONFIGURACION_COSTO_NO_DISPONIBLE','No se pudo confirmar la configuración del costo. Reintentá la consulta.');
   }
 }
 
@@ -64,8 +64,12 @@ async function aplicarCondicionesPrecio(productos, condiciones) {
   }catch(e){if(condiciones.origenIvan)e.condiciones_ivan=true;throw e;}
 }
 function responderFalloOrigen(res,error){
-  if(!error.condiciones_ivan)return false;
-  res.status(error.status||503).json({mensaje:error.status?error.message:'No se pudieron consultar las condiciones de Iván. No se estimó un precio.',codigo:'CONDICIONES_IVAN_REVISAR'});
+  if(!error.condiciones_ivan&&!error.costo_cliente)return false;
+  res.locals.costoErrorControlado=true;
+  const sesion=res.locals.costoSesion;
+  if(sesion)registrarFalloCosto(sesion.mayorista_id,sesion.cuit,error.codigo||'CONDICIONES_IVAN_REVISAR','No se pudo confirmar el costo y los descuentos del cliente. '+(error.codigo||'CONDICIONES_IVAN_REVISAR'));
+  res.set('Cache-Control','no-store');
+  res.status(error.status||503).json({mensaje:error.status?error.message:'No se pudieron consultar las condiciones de Iván. No se estimó un precio.',codigo:error.codigo||'CONDICIONES_IVAN_REVISAR'});
   return true;
 }
 
@@ -124,7 +128,7 @@ async function getCondicionesGestionMayorista(req, mayoristaId) {
 }
 
 async function getCondicionesPrecio(req, poolExterno, mayoristaId, gestionMayorista = false) {
-  const sesionIva=descuentosComerciales.sesionCliente(req,mayoristaId);
+  const sesionIva=validarSesionCosto(req,mayoristaId);
   const configComercial = await descuentosComerciales.leer(mayoristaId);
   if (gestionMayorista && circuitoCliente.activo(configComercial)) {
     req.res?.set('Cache-Control', 'no-store');
@@ -159,21 +163,12 @@ async function getCondicionesPrecio(req, poolExterno, mayoristaId, gestionMayori
     getDtoPagoTermino(mayoristaId),
     getConfiguracionPrecio(mayoristaId),
   ]);
-  const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-  if (!token) return { ivaCatalogo:iva, dtoPct, descuentoItemsPct: 0, configPrecio };
-  try {
-    const sesion = jwt.verify(token, process.env.JWT_SECRET);
-    if (sesion.tipo !== 'cliente' || Number(sesion.mayorista_id) !== Number(mayoristaId)) {
-      return { ivaCatalogo:iva, dtoPct, descuentoItemsPct: 0, configPrecio };
-    }
-    if (configPrecio.modelo_precio_catalogo === MODELO_COSTO_MARGEN_IVA) {
-      return { ivaCatalogo:iva, dtoPct: 0, descuentoItemsPct: 0, configPrecio };
-    }
-    const descuentoItemsPct = await obtenerDescuentoItems(poolExterno, mayoristaId, sesion.cuit);
-    return { ivaCatalogo:iva, dtoPct, descuentoItemsPct, configPrecio };
-  } catch (_) {
-    return { ivaCatalogo:iva, dtoPct, descuentoItemsPct: 0, configPrecio };
+  if (!sesionIva) return { ivaCatalogo:iva, dtoPct, descuentoItemsPct: 0, configPrecio };
+  if (configPrecio.modelo_precio_catalogo === MODELO_COSTO_MARGEN_IVA) {
+    return { ivaCatalogo:iva, dtoPct: 0, descuentoItemsPct: 0, configPrecio };
   }
+  const descuentoItemsPct = await obtenerDescuentoItems(poolExterno, mayoristaId, sesionIva.cuit);
+  return { ivaCatalogo:iva, dtoPct, descuentoItemsPct, configPrecio };
 }
 
 // Reemplaza ñ, acentos y el caracter roto (�) por comodin _ (1 caracter cualquiera).
@@ -195,6 +190,22 @@ function verificarClientePrecios(req, res, next) {
     return res.status(401).json({ mensaje: 'Sesión inválida o vencida' });
   }
 }
+
+// Validar una vez al entrar, antes de leer productos o descuentos del proveedor.
+router.use('/:mayorista_id',(req,res,next)=>{
+  try{
+    const id=Number(req.params.mayorista_id);
+    const cliente=validarSesionCosto(req,id);
+    req.ivanSesionCosto={mayoristaId:id,cliente};
+    res.locals.costoSesion=cliente;
+    res.on('finish',()=>{
+      if(cliente&&(res.statusCode>=500||res.statusCode===404)&&!res.locals.costoErrorControlado){
+        registrarFalloCosto(id,cliente.cuit,'CONSULTA_COSTOS_FALLO','Falló la consulta de costos de productos. Requiere reintentar o revisar la conexión del proveedor.');
+      }
+    });
+    next();
+  }catch(e){if(!responderFalloOrigen(res,e))next(e);}
+});
 
 // Ivan todavía no expone obs_producto en todos los clientes. Se detecta una
 // vez por conexión y el catálogo continúa funcionando aunque la columna falte.
