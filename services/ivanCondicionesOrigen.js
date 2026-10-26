@@ -198,6 +198,7 @@ async function aplicar(productos, ctx, detallar = false) {
   const porId = new Map(calculadas.map(p => [p.id, p])), cantidades = new Map(filas.map(p => [p.id, p.reglas.length]));
   return productos.map(p => { const v = porId.get(String(p.id_producto)); return { ...p, precio_producto: Number(v.importe),
     descuentos_comerciales: { origen_ivan: true, recibido: Number(v.base), importe: Number(v.importe),
+      ...(ctx.cascada_cliente === true ? { cliente_completo: true } : {}),
       version: ctx.version, perfil: 'Condiciones de Iván', pasos: v.pasos, total_pasos: cantidades.get(String(p.id_producto)) } }; });
 }
 function ordenarSql(ctx, parametros) {
