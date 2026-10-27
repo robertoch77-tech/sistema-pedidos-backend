@@ -164,7 +164,11 @@ async function cargarReglas(db, cfg, idCliente) {
   const reglas = r.rows.map(p => ({ porcentaje: cascada.porcentaje(p.porcentaje),
     ...Object.fromEntries(['rubro', 'marca', 'tipo'].map(k => [k, idOrigen(p[k], cfg.dimension_vacia === 'nulo_o_cero')])) }));
   const clave = p => JSON.stringify([p.rubro, p.marca, p.tipo, Number(p.porcentaje)]);
-  reglas.sort((a, b) => clave(a).localeCompare(clave(b)));
+  if (lecturaTotal) {
+    // Construir la clave una vez por fila, no en cada comparacion de la ordenacion.
+    const claves = new Map(reglas.map(r => [r, clave(r)]));
+    reglas.sort((a, b) => claves.get(a).localeCompare(claves.get(b)));
+  } else reglas.sort((a, b) => clave(a).localeCompare(clave(b)));
   // Dos filas iguales no se interpretan silenciosamente como dos descuentos.
   if (new Set(reglas.map(clave)).size !== reglas.length) throw errorCliente('Hay condiciones duplicadas en Iván para este cliente. Revisalas allí antes de calcular.', 409);
   return reglas.map((r, i) => ({ ...r, id: String(i + 1), etiqueta: ['rubro', 'marca', 'tipo'].filter(k => r[k] !== null).join(' + ') || 'Condición sin restricción de producto' }));
@@ -181,6 +185,28 @@ async function contexto(id, db, cuit, soloConsulta = false, configuracionLeida =
     todas: [{ etiqueta: 'General del cliente', porcentaje: persona.general, rubro: null, marca: null, tipo: null },
       { etiqueta: 'Extra del cliente', porcentaje: persona.extra, rubro: null, marca: null, tipo: null }, ...reglas] };
 }
+// Indice de esta lectura, no cache de descuentos entre consultas o clientes.
+const indicesLectura = new WeakMap();
+function reglasDeProducto(ctx, dimensiones) {
+  if (ctx.cfg.lectura_total_condiciones !== true) return ctx.todas.filter(regla => cascada.coincide(regla, dimensiones));
+  let indice = indicesLectura.get(ctx);
+  if (!indice) {
+    indice = new Map();
+    ctx.todas.forEach((regla, orden) => {
+      const clave = JSON.stringify([regla.rubro, regla.marca, regla.tipo]);
+      if (!indice.has(clave)) indice.set(clave, []);
+      indice.get(clave).push({ regla, orden });
+    });
+    indicesLectura.set(ctx, indice);
+  }
+  const claves = new Set();
+  // Cada dimension acepta el ID exacto o null (sin restriccion): ocho grupos.
+  for (let mascara = 0; mascara < 8; mascara++) claves.add(JSON.stringify(
+    ['rubro', 'marca', 'tipo'].map((k, bit) => mascara & (1 << bit) ? dimensiones[k] : null)));
+  const aplicables = [];
+  for (const clave of claves) for (const fila of indice.get(clave) || []) aplicables.push(fila);
+  return aplicables.sort((a, b) => a.orden - b.orden).map(p => p.regla);
+}
 async function aplicar(productos, ctx, detallar = false) {
   if (!ctx || !productos.length) return productos;
   const ids = [...new Set(productos.map(p => idSeguro(p.id_producto)))], c = ctx.cfg.campos;
@@ -192,7 +218,7 @@ async function aplicar(productos, ctx, detallar = false) {
   const filas = productos.map(p => {
     const d = dimensiones.get(String(p.id_producto));
     if (!d) throw errorCliente('Un producto ya no está en la vista de Iván.', 409);
-    return { id: String(p.id_producto), base: p.precio_producto, reglas: ctx.todas.filter(regla => cascada.coincide(regla, d)) };
+    return { id: String(p.id_producto), base: p.precio_producto, reglas: reglasDeProducto(ctx, d) };
   });
   const calculadas = [];
   for (let desde = 0; desde < filas.length; desde += 100) {
@@ -227,6 +253,7 @@ function ordenarSql(ctx, parametros) {
     Object.fromEntries(['rubro', 'marca', 'tipo'].map(k => [k, idSql(ctx.cfg.campos['producto_' + k])])), parametros);
 }
 async function nombresReglas(ctx) {
+  if (ctx.cfg.lectura_total_condiciones === true) return nombresLecturaCompleta(ctx);
   const nombres = {};
   for (const k of ['rubro', 'marca', 'tipo']) {
     const ids = [...new Set(ctx.reglas.map(r => r[k]).filter(v => v !== null))];
@@ -235,6 +262,26 @@ async function nombresReglas(ctx) {
     const r = await ctx.db.query(`SELECT ${campo} AS id,MIN(NULLIF(BTRIM(${campoSql('des_producto_' + k)}),'')) AS nombre
       FROM "viewProductos" WHERE ${campo}=ANY($1::text[]) GROUP BY ${campo}`, [ids]);
     nombres[k] = new Map(r.rows.map(p => [p.id, p.nombre]));
+  }
+  return ctx.reglas.map(r => ({ ...r, nombres: Object.fromEntries(['rubro', 'marca', 'tipo'].map(k =>
+    [k, r[k] === null ? 'Todos' : nombres[k].get(r[k]) || k + ' #' + r[k]])) }));
+}
+async function nombresLecturaCompleta(ctx) {
+  const nombres = Object.fromEntries(['rubro', 'marca', 'tipo'].map(k => [k, new Map()]));
+  const parametros = [], consultas = [], columnas = [];
+  for (const k of ['rubro', 'marca', 'tipo']) {
+    const ids = [...new Set(ctx.reglas.map(r => r[k]).filter(v => v !== null))];
+    if (!ids.length || !ctx.cfg.campos['producto_' + k]) continue;
+    columnas.push(`${idSql(ctx.cfg.campos['producto_' + k])} AS ${k},NULLIF(BTRIM(${campoSql('des_producto_' + k)}),'') AS nombre_${k}`);
+    parametros.push(ids);
+    consultas.push(`SELECT '${k}' AS dimension,${k} AS id,MIN(nombre_${k}) AS nombre FROM productos
+      WHERE ${k}=ANY($${parametros.length}::text[]) GROUP BY ${k}`);
+  }
+  if (consultas.length) {
+    // Una lectura de viewProductos y un viaje al proveedor para las tres dimensiones.
+    const r = await ctx.db.query(`WITH productos AS (SELECT ${columnas.join(',')} FROM "viewProductos")
+      ${consultas.join(' UNION ALL ')}`, parametros);
+    for (const fila of r.rows) nombres[fila.dimension].set(fila.id, fila.nombre);
   }
   return ctx.reglas.map(r => ({ ...r, nombres: Object.fromEntries(['rubro', 'marca', 'tipo'].map(k =>
     [k, r[k] === null ? 'Todos' : nombres[k].get(r[k]) || k + ' #' + r[k]])) }));
