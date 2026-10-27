@@ -154,10 +154,13 @@ async function cargarReglas(db, cfg, idCliente) {
   const vistas = await estructura(db);
   const fk = vistas.reglas.campos.find(f => f.nombre === c.regla_cliente);
   const clienteSql = fk?.numerico ? campoSql(c.regla_cliente) : idSql(c.regla_cliente);
+  // Moreschi tiene clientes con mas de 1.000 combinaciones validas. Leer todas
+  // sus filas, no truncarlas ni confundir su cantidad con un error del origen.
+  const lecturaTotal = cfg.lectura_total_condiciones === true;
   const r = await db.query(`SELECT ${campoSql(c.regla_porcentaje)}::text AS porcentaje,
     ${campoSql(c.regla_rubro)}::text AS rubro,${campoSql(c.regla_marca)}::text AS marca,${campoSql(c.regla_tipo)}::text AS tipo
-    FROM "view_clientes_descuentos_x_rubros" WHERE ${clienteSql}=$1 LIMIT 1001`, [idCliente]);
-  if (r.rows.length > 1000) throw errorCliente('El cliente supera 1.000 condiciones. Revisá el origen antes de calcular.', 409);
+    FROM "view_clientes_descuentos_x_rubros" WHERE ${clienteSql}=$1${lecturaTotal ? '' : ' LIMIT 1001'}`, [idCliente]);
+  if (!lecturaTotal && r.rows.length > 1000) throw errorCliente('El cliente supera 1.000 condiciones. Revisá el origen antes de calcular.', 409);
   const reglas = r.rows.map(p => ({ porcentaje: cascada.porcentaje(p.porcentaje),
     ...Object.fromEntries(['rubro', 'marca', 'tipo'].map(k => [k, idOrigen(p[k], cfg.dimension_vacia === 'nulo_o_cero')])) }));
   const clave = p => JSON.stringify([p.rubro, p.marca, p.tipo, Number(p.porcentaje)]);
@@ -202,6 +205,10 @@ async function aplicar(productos, ctx, detallar = false) {
       version: ctx.version, perfil: 'Condiciones de Iván', pasos: v.pasos, total_pasos: cantidades.get(String(p.id_producto)) } }; });
 }
 function ordenarSql(ctx, parametros) {
+  if (ctx.cfg.lectura_total_condiciones === true && ctx.reglas.length > 1000) {
+    return cascada.expresionOrdenArreglos('precio_producto', ctx.todas,
+      Object.fromEntries(['rubro', 'marca', 'tipo'].map(k => [k, idSql(ctx.cfg.campos['producto_' + k])])), parametros);
+  }
   if (ctx.cascada_cliente === true) {
     // Se ejecuta en PostgreSQL del proveedor (9.3); no usar JSONB aquí.
     const dimensiones = Object.fromEntries(['rubro', 'marca', 'tipo'].map(k => [k, idSql(ctx.cfg.campos['producto_' + k])]));

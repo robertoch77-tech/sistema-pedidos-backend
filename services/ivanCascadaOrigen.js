@@ -61,4 +61,25 @@ function expresionOrden(base, reglas, dimensiones, parametros) {
   ) SELECT ROUND(importe,2) FROM cadena ORDER BY paso DESC LIMIT 1)`;
 }
 
-module.exports = { porcentaje, coincide, calcular, expresionOrden };
+// Cuatro parametros, aunque existan miles de condiciones. Solo lo usa la lectura
+// completa de Moreschi. Compatible con PostgreSQL 9.3: arrays, sin JSONB externo.
+function expresionOrdenArreglos(base, reglas, dimensiones, parametros) {
+  parametros.push(reglas.map(r => porcentaje(r.porcentaje)));
+  const porcentajes = '$' + parametros.length + '::numeric[]';
+  const filtros = ['rubro', 'marca', 'tipo'].map(k => {
+    parametros.push(reglas.map(r => r[k]));
+    const arreglo = '$' + parametros.length + '::text[]';
+    return `((${arreglo})[indice] IS NULL OR (${arreglo})[indice]=(${dimensiones[k]})::text)`;
+  });
+  return `(WITH RECURSIVE aplicables AS (
+    SELECT ROW_NUMBER() OVER(ORDER BY indice) AS paso,(${porcentajes})[indice] AS porcentaje
+    FROM generate_subscripts(${porcentajes},1) AS fila(indice)
+    WHERE ${filtros.join(' AND ')}
+  ), cadena AS (
+    SELECT 0::bigint AS paso,(${base})::numeric AS importe
+    UNION ALL SELECT c.paso+1,c.importe*(1-a.porcentaje/100)
+    FROM cadena c JOIN aplicables a ON a.paso=c.paso+1
+  ) SELECT ROUND(importe,2) FROM cadena ORDER BY paso DESC LIMIT 1)`;
+}
+
+module.exports = { porcentaje, coincide, calcular, expresionOrden, expresionOrdenArreglos };

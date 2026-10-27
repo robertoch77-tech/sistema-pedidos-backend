@@ -131,7 +131,8 @@ async function contexto(id, db, cuit, cfgLeida = null) {
   const cliente = { id: idOrigen(r.rows[0].id), cuit: doc, nombre: r.rows[0].nombre,
     general: completa ? cascada.porcentaje(r.rows[0].general) : exclusiva ? null : cascada.porcentaje(c.dto_pago_termino ?? 0),
     extra: exclusiva ? null : cascada.porcentaje(r.rows[0].descuento ?? 0) };
-  const configuracion = { campos: vinculos, dimension_vacia: cfg.datos.ivan.dimension_vacia === 'nulo_o_cero' ? 'nulo_o_cero' : 'nulo', aplicar_catalogo: true };
+  const configuracion = { campos: vinculos, dimension_vacia: cfg.datos.ivan.dimension_vacia === 'nulo_o_cero' ? 'nulo_o_cero' : 'nulo', aplicar_catalogo: true,
+    lectura_total_condiciones: Number(id) === 23 };
   const reglas = (await origen.cargarReglas(db, configuracion, cliente.id)).map(r => ({ ...r,
     etiqueta: exclusiva && ['rubro', 'marca', 'tipo'].every(k => r[k] === null) ? 'General para todos sus productos' : r.etiqueta }));
   return { id, db, version: Number(cfg.version), configDescuentos: cfg, cfg: configuracion, cliente, reglas, cascada_cliente: completa,
