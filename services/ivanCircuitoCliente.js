@@ -151,6 +151,7 @@ async function consultarCliente(id, cuit) {
 }
 
 async function revisarLectura(id, datos, cfg) {
+  if (Number(id) === 23 && (datos?.codigo_producto !== undefined || datos?.producto_id !== undefined)) return require('./ivanDiagnosticoMoreschi').revisar(id, datos, cfg, { contexto, contextoIva, esCircuito });
   if (!esCircuito(cfg) || !cfg.habilitado || !cfg.datos.ivan.habilitado) throw errorCliente('Esta revisión requiere la integración de condiciones habilitada.', 403);
   const doc = documento(datos?.cuit);
   if (!/^\d{7,20}$/.test(doc)) throw errorCliente('Elegí un cliente para revisar la lectura.');
