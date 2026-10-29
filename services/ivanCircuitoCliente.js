@@ -5,6 +5,9 @@ const conexion = require('./conexionMayorista');
 const descuentos = require('./ivanDescuentosComerciales');
 const origen = require('./ivanCondicionesOrigen');
 const cascada = require('./ivanCascadaOrigen');
+const pagoTermino = require('./ivanPagoTermino');
+const condicionesCache = require('./ivanCondicionesCache').crearCache();
+const nombresCache = new WeakMap();
 const { mayoristaValido } = require('./ivanFuncionesCatalogo');
 const { errorCliente, idSeguro } = require('./ivanImagenesDatos');
 
@@ -92,7 +95,18 @@ async function resumen(id, cfgLeida = null) {
   const cfg = cfgLeida || await descuentos.leer(id), estado = await leerAdmin(id, cfg);
   return { disponible: cfg.disponible, permiso: cfg.habilitado, version: Number(cfg.version), modo_circuito: true,
     origen: { habilitado: cfg.habilitado === true && cfg.datos?.ivan?.habilitado === true, aplicar_catalogo: activo(cfg) },
-    pendientes: [], pendientes_consulta: [], fuente_descuentos: fuenteDescuentos(cfg), iva: estado };
+    pendientes: [], pendientes_consulta: [], fuente_descuentos: fuenteDescuentos(cfg), iva: estado,
+    ...(pagoTermino.disponible(id, cfg) ? { pago_termino: pagoTermino.leer(id, cfg) } : {}) };
+}
+
+async function guardarPagoTermino(id, datos) {
+  const pago = pagoTermino.validar(datos), cfg = await descuentos.leer(id);
+  if (!pagoTermino.disponible(id, cfg) || !activo(cfg)) throw errorCliente('El pago en término no está habilitado para este mayorista.', 403);
+  const nueva = await descuentos.transaccion(id, 'mayorista', datos.version, actual => {
+    if (!pagoTermino.disponible(id, actual) || !activo(actual)) throw errorCliente('Cambió la modalidad. Actualizá la pantalla.', 409);
+    return { ...actual, datos: { ...actual.datos, ivan: { ...actual.datos.ivan, pago_termino: pago } } };
+  });
+  return resumen(id, nueva);
 }
 
 async function guardarIva(id, datos) {
@@ -112,7 +126,7 @@ async function guardarIva(id, datos) {
   return resumen(id, nueva);
 }
 
-async function contexto(id, db, cuit, cfgLeida = null) {
+async function contexto(id, db, cuit, cfgLeida = null, opciones = {}) {
   const cfg = cfgLeida || await descuentos.leer(id);
   if (!activo(cfg)) return null;
   const doc = documento(cuit);
@@ -120,6 +134,15 @@ async function contexto(id, db, cuit, cfgLeida = null) {
   const exclusiva = soloVista(cfg), completa = clienteCompleto(cfg);
   const c = await configuracionMayorista(id, descuentoAnterior(cfg));
   if (c.modelo_precio_catalogo !== 'precio_recibido') throw errorCliente('El modelo de precio del mayorista cambió.', 409);
+  // Permisos, versión y modelo se leen en cada solicitud antes de reutilizar
+  // condiciones. Ni el login ni un resultado en cache sustituyen esos controles.
+  const cargar = () => cargarContexto(id, db, doc, cfg, c, exclusiva, completa);
+  if (Number(id) !== 23 || !completa || opciones.sinCache) return cargar();
+  const clave = JSON.stringify([Number(id), doc, Number(cfg.version)]);
+  return condicionesCache(db, clave, cargar, opciones.refrescar === true);
+}
+
+async function cargarContexto(id, db, doc, cfg, c, exclusiva, completa) {
   const vinculos = await campos(db, exclusiva, completa);
   const r = await db.query(`SELECT id_cliente::text AS id,
     COALESCE(NULLIF(BTRIM(nom_fan_cliente),''),BTRIM(raz_soc_cliente),'') AS nombre
@@ -136,17 +159,26 @@ async function contexto(id, db, cuit, cfgLeida = null) {
   const reglas = (await origen.cargarReglas(db, configuracion, cliente.id)).map(r => ({ ...r,
     etiqueta: exclusiva && ['rubro', 'marca', 'tipo'].every(k => r[k] === null) ? 'General para todos sus productos' : r.etiqueta }));
   return { id, db, version: Number(cfg.version), configDescuentos: cfg, cfg: configuracion, cliente, reglas, cascada_cliente: completa,
-    todas: exclusiva ? reglas : [
+    todas: pagoTermino.agregar(exclusiva ? reglas : [
       { etiqueta: completa ? 'Descuento general del cliente' : 'Descuento general / por pago', porcentaje: cliente.general, rubro: null, marca: null, tipo: null },
-      { etiqueta: completa ? 'Descuento adicional del cliente' : 'Descuento del cliente', porcentaje: cliente.extra, rubro: null, marca: null, tipo: null }, ...reglas] };
+      { etiqueta: completa ? 'Descuento adicional del cliente' : 'Descuento del cliente', porcentaje: cliente.extra, rubro: null, marca: null, tipo: null }, ...reglas], pagoTermino.leer(id, cfg)) };
 }
 
-async function consultarCliente(id, cuit) {
+async function consultarCliente(id, cuit, refrescar = false, cfgLeida = null) {
   const db = await conexion.getConexionMayorista(id);
   if (!db) throw errorCliente('La conexión del mayorista no está disponible.', 503);
-  const ctx = await contexto(id, db, cuit);
+  const ctx = await contexto(id, db, cuit, cfgLeida, { refrescar });
   if (!ctx) throw errorCliente('La integración no está habilitada.', 403);
-  return { version: ctx.version, cliente: ctx.cliente, reglas: await origen.nombresReglas(ctx),
+  let nombres = Number(id) === 23 ? nombresCache.get(ctx) : null;
+  if (!nombres) {
+    nombres = origen.nombresReglas(ctx);
+    if (Number(id) === 23) {
+      nombresCache.set(ctx, nombres);
+      nombres.catch(() => { if (nombresCache.get(ctx) === nombres) nombresCache.delete(ctx); });
+    }
+  }
+  return { version: ctx.version, cliente: ctx.cliente, reglas: await nombres,
+    ...(pagoTermino.disponible(id, ctx.configDescuentos) ? { pago_termino: pagoTermino.leer(id, ctx.configDescuentos) } : {}),
     aplicada_catalogo: true, calculo_disponible: true, modo_circuito: true, solo_lectura: true };
 }
 
@@ -287,4 +319,4 @@ async function contextoIva(id, db, cuit, cfg, version) {
       alicuota_general: c.tasa, catalogo_iva: { permitido: true, modo: 'agregar', envio: 'neto' } } };
 }
 
-module.exports = { esCircuito, activo, leerAdmin, guardarAdmin, resumen, guardarIva, contexto, consultarCliente, consultarProducto, contextoIva, revisarLectura };
+module.exports = { esCircuito, activo, leerAdmin, guardarAdmin, resumen, guardarIva, guardarPagoTermino, contexto, consultarCliente, consultarProducto, contextoIva, revisarLectura };

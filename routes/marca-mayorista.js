@@ -4,6 +4,22 @@ const pool = require('../db');
 
 const router = express.Router();
 
+// Manifiesto exclusivo del cliente Iván. No consulta productos ni permite
+// elegir roles, CUIT, destinos arbitrarios o accesos administrativos.
+router.get('/publico/:codigo/manifest.json', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    const codigo = String(req.params.codigo || '').trim();
+    if (!codigo || codigo.length > 100 || /[\u0000-\u001f\u007f]/.test(codigo)) return res.status(400).json({ mensaje: 'Código inválido.' });
+    const r = await pool.query(`SELECT nombre,razon_social FROM mayoristas
+      WHERE codigo=$1 AND activo=true AND tipo_fuente IS DISTINCT FROM 'roberto' LIMIT 1`, [codigo]);
+    if (!r.rows[0]) return res.status(404).json({ mensaje: 'Mayorista no encontrado.' });
+    const manifest = require('../services/ivanManifestCliente').crearManifest(codigo,
+      r.rows[0].razon_social || r.rows[0].nombre, req.query.origen);
+    res.type('application/manifest+json').json(manifest);
+  } catch (e) { res.status(e.status || 503).json({ mensaje: e.status ? e.message : 'No se pudo preparar la instalación.' }); }
+});
+
 function verificarSesionMayorista(req, res, next) {
   const authorization = String(req.headers.authorization || '');
   const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';

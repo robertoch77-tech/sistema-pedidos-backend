@@ -171,6 +171,14 @@ router.post('/login-cliente', async (req, res) => {
       req,
     }), 'inicio cliente Iván');
 
+    // Precarga opcional después de validar la identidad y la clave. Comparte
+    // la lectura con el primer catálogo; un fallo no impide iniciar sesión ni
+    // habilita precios de respaldo. El catálogo conserva sus propias alertas.
+    if (Number(conexion.mayorista_id) === 23) {
+      require('../services/ivanCircuitoCliente').contexto(23, conexion.pool, cliente.doc_cliente, null, { refrescar: true })
+        .catch(() => { /* El siguiente intento del catálogo vuelve a consultar. */ });
+    }
+
     res.json({
       token,
       cliente: {
@@ -178,6 +186,7 @@ router.post('/login-cliente', async (req, res) => {
         nombre: cliente.raz_soc_cliente || cliente.nom_fan_cliente,
         cuit: cliente.doc_cliente,
         mayorista_id: conexion.mayorista_id,
+        codigo_mayorista: String(codigo).trim(),
         ver_stock: cfg.rows[0]?.mostrar_stock ?? true,
         ver_precios: cfg.rows[0]?.mostrar_precios ?? true,
         ...(descuentosCliente || {})

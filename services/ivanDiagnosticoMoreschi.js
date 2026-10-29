@@ -134,7 +134,7 @@ async function revisar(id, datos, cfg, funciones) {
     });
     informe.motor = await leer('lectura y cálculo del motor vigente', async () => {
       if (!informe.producto_origen.datos) throw errorCliente('Primero debe poder leerse el producto de origen.', 409);
-      const ctx = await funciones.contexto(id, client, doc, cfg);
+      const ctx = await funciones.contexto(id, client, doc, cfg, { sinCache: true });
       if (!ctx) throw errorCliente('El cálculo de condiciones no está activo.', 409);
       const p = informe.producto_origen.datos.campos;
       const dimensiones = Object.fromEntries(DIMENSIONES.map(k => [k, normalizarId(p[ctx.cfg.campos['producto_' + k]])]));
