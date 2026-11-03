@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const jwt = require('jsonwebtoken');
 const conexionCompartida = require('../services/conexionMayorista');
 const bultos = require('../services/ivanBultos');
 const ivaOpcional=require('../services/ivanIvaCatalogo');
@@ -16,6 +17,26 @@ const {
 async function getConexionMayorista(mayorista_id) {
   return conexionCompartida.getConexionMayorista(mayorista_id);
 }
+
+// Resumen liviano: nunca aceptar el CUIT de la consulta como identidad.
+router.get('/resumen-cliente/:mayorista_id', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  let sesion;
+  try {
+    sesion = jwt.verify(String(req.headers.authorization || '').replace(/^Bearer\s+/i, ''), process.env.JWT_SECRET, { algorithms: ['HS256'] });
+  } catch { return res.status(401).json({ mensaje: 'Ingresá nuevamente para consultar tus borradores.' }); }
+  const id = Number(req.params.mayorista_id), doc = String(sesion.cuit || '').replace(/\D/g, '');
+  if (sesion.tipo !== 'cliente' || !Number.isSafeInteger(id) || id <= 0 ||
+      Number(sesion.mayorista_id) !== id || !/^\d{7,20}$/.test(doc)) return res.status(403).json({ mensaje: 'La sesión no corresponde a este cliente.' });
+  try {
+    const cuenta = await pool.query("SELECT id FROM mayoristas WHERE id=$1 AND activo=true AND COALESCE(tipo_fuente,'ivan')<>'roberto'", [id]);
+    if (!cuenta.rows.length) return res.status(403).json({ mensaje: 'El proveedor no está disponible.' });
+    const r = await pool.query(`SELECT COUNT(*)::integer AS borradores FROM pedidos_web
+      WHERE mayorista_id=$1 AND cliente_cuit::text=ANY($2::text[]) AND estado='borrador'`,
+      [id, [...new Set([String(sesion.cuit), doc])]]);
+    res.json({ borradores: r.rows[0].borradores });
+  } catch { res.status(503).json({ mensaje: 'No pudimos consultar los borradores.' }); }
+});
 
 // Mis Pedidos del cliente
 router.get('/cliente/:cuit', async (req, res) => {

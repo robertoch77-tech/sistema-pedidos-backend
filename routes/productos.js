@@ -603,6 +603,12 @@ router.get('/:mayorista_id', async (req, res) => {
     const params = [];
     let i = 1;
 
+    if (req.query.ids !== undefined) {
+      const ids = typeof req.query.ids === 'string' ? req.query.ids.split(',').map(Number) : [];
+      if (!ids.length || ids.length > 50 || ids.some(id => !Number.isSafeInteger(id) || id <= 0 || id > 2147483647)) return res.status(400).json({ mensaje: 'Productos del respaldo inválidos.' });
+      condiciones.push(`id_producto=ANY($${i}::integer[])`); params.push([...new Set(ids)]); i++;
+    }
+
     if (busqueda.trim() !== '') {
       const palabras = normalizar(busqueda).trim().split(/\s+/).filter(p => p);
       for (const palabra of palabras) {
