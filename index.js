@@ -256,6 +256,7 @@ app.use('/api/pi/importar', require('./routes/pi/importar'));
 app.use('/api/pi/procesar', require('./routes/pi/procesar'));
 app.use('/api/pi/pedidos',  require('./routes/pi/pedidos'));
 app.use('/api/pi/config',   require('./routes/pi/config'));
+app.use('/api/cliente-consultas', require('./routes/cliente-consultas'));
 app.use('/api/catalogo',             require('./routes/catalogo/catalogo'));
 app.use('/api/superadmin/catalogo',  require('./routes/superadmin/catalogo'));
 app.use('/api/superadmin/historial', require('./routes/superadmin/historial'));

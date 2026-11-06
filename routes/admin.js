@@ -103,6 +103,20 @@ router.use((req, res, next) => {
 });
 
 // GET — listar todos
+router.get('/mayoristas/:id/consultas-cliente', checkAdmin, async (req, res) => {
+  try {
+    const id = await require('../services/ivanFuncionesCatalogo').mayoristaValido(req.params.id);
+    res.set('Cache-Control', 'no-store');
+    res.json(await require('../services/ivanClienteConsultasConfig').leer(id));
+  } catch (e) { res.status(e.status || 503).json({ mensaje: e.status ? e.message : 'No se pudieron consultar las opciones del cliente.' }); }
+});
+router.put('/mayoristas/:id/consultas-cliente', checkAdmin, async (req, res) => {
+  try {
+    const id = await require('../services/ivanFuncionesCatalogo').mayoristaValido(req.params.id);
+    res.set('Cache-Control', 'no-store');
+    res.json(await require('../services/ivanClienteConsultasConfig').guardar(id, req.body));
+  } catch (e) { res.status(e.status || 503).json({ mensaje: e.status ? e.message : 'No se pudieron guardar las opciones. Se conserva la configuración anterior.' }); }
+});
 router.get('/mayoristas/:id/portal-cliente', checkAdmin, async (req, res) => {
   res.set('Cache-Control', 'no-store');
   const id = Number(req.params.id);
