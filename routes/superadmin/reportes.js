@@ -2,6 +2,7 @@ const express = require('express');
 const router  = express.Router();
 const pool    = require('../../db');
 const { verificarCualquierToken, verificarClienteId } = require('./authMiddleware');
+const { rangoPeriodo, leerReporteIva } = require('../../services/robertoReporteIva');
 
 router.use(verificarCualquierToken);
 
@@ -258,6 +259,25 @@ router.get('/stock/:cliente_id', verificarClienteId, async (req, res) => {
   } catch (err) {
     console.error('Reportes stock:', err.message);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// GET /iva-detalle/:cliente_id
+// ═══════════════════════════════════════════════════════════════
+router.get('/iva-detalle/:cliente_id', verificarClienteId, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const cliente = Number(req.params.cliente_id);
+  const periodo = req.query.periodo;
+  const rango = rangoPeriodo(periodo);
+  if (!Number.isSafeInteger(cliente) || cliente <= 0 || !rango) {
+    return res.status(400).json({ error: 'Seleccioná un período válido (año y mes).' });
+  }
+  try {
+    return res.json(await leerReporteIva(pool, cliente, periodo, rango));
+  } catch (error) {
+    console.error('Reportes IVA detalle:', error.code || error.name);
+    return res.status(500).json({ error: 'No se pudo consultar el detalle de IVA.' });
   }
 });
 
