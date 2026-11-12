@@ -7,11 +7,25 @@ const {CAMPO_ACTUAL,camposDisponibles,validarCampo}=require('../services/ivanCam
 const descuentosComerciales=require('../services/ivanDescuentosComerciales');
 const marcaProducto=require('../services/ivanMarcaProducto');
 const bultos=require('../services/ivanBultos');
+const lectorEanLumac = require('../services/ivanLectorEanLumac');
 const equivalenciasCodigos=require('../services/ivanEquivalenciasCodigos');
 const precioOrigen=require('../services/ivanPrecioOrigen');
 const condicionesOrigen=require('../services/ivanCondicionesOrigen');
 const circuitoCliente=require('../services/ivanCircuitoCliente');
 const rateLimit=require('express-rate-limit');
+router.get('/lector-ean-lumac/:id', async (req, res, next) => {
+  try {
+    const id = await mayoristaValido(req.params.id, true);
+    res.set('Cache-Control', 'no-store');
+    res.json(await lectorEanLumac.leer(id, true));
+  } catch (error) { next(error); }
+});
+router.put('/lector-ean-lumac/:id', async (req, res, next) => {
+  try {
+    const id = await mayoristaValido(req.params.id, true);
+    res.json(await lectorEanLumac.guardar(id, req.body?.habilitado));
+  } catch (error) { next(error); }
+});
 router.get('/precios-cliente/:id/lectura',rateLimit({windowMs:60000,max:6,standardHeaders:true,legacyHeaders:false}),async(req,res,next)=>{
   try{const id=await mayoristaValido(req.params.id);const cfg=await descuentosComerciales.leer(id);res.set('Cache-Control','no-store');res.json(await circuitoCliente.revisarLectura(id,req.query,cfg));}catch(e){next(e);}
 });

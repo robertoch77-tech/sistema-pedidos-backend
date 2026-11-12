@@ -15,6 +15,7 @@ const reglasComerciales = require('../services/ivanDescuentosReglas');
 const ivaCatalogo = require('../services/ivanIvaCatalogo');
 const condicionesOrigen = require('../services/ivanCondicionesOrigen');
 const circuitoCliente = require('../services/ivanCircuitoCliente');
+const lectorEanLumac = require('../services/ivanLectorEanLumac');
 const {
   MODELO_COSTO_MARGEN_IVA,
   asegurarColumnasPrecioMayorista,
@@ -346,16 +347,14 @@ router.get('/:mayorista_id/todos', async (req, res) => {
   }
 });
 
-// === NUEVO (Mejora 1 — lector de código de barras, modo EAN) ===
-// Busca un producto por EAN exacto. Si "viewProductos" de Ivan no tiene la
-// columna ean (no todos los mayoristas la exponen), la query falla y acá lo
-// atrapamos devolviendo ean_no_soportado — el frontend cae al modo texto
-// (escribe el código escaneado en el buscador) sin romper nada.
+// Los mayoristas usan ean y conservan su búsqueda por texto de respaldo.
+// Lumac puede buscar en ean_producto y requiere una coincidencia única.
 router.get('/:mayorista_id/buscar-ean/:ean', async (req, res) => {
   try {
     const { mayorista_id, ean } = req.params;
     const poolExterno = await getConexionMayorista(mayorista_id);
     if (!poolExterno) return res.status(404).json({ mensaje: 'Sin conexión configurada' });
+    const { habilitado: usarEanLumac } = await lectorEanLumac.leer(mayorista_id);
     const campoIva = await campoIvaProducto(poolExterno, mayorista_id);
     try {
       const resultado = await poolExterno.query(
@@ -363,15 +362,24 @@ router.get('/:mayorista_id/buscar-ean/:ean', async (req, res) => {
                 precio_producto, stock_temporal, des_producto_marca,
                 des_producto_rubro, des_producto_tipo
                 ${seleccionIva(campoIva)}
-         FROM "viewProductos" WHERE ean = $1 LIMIT 1`,
+         FROM "viewProductos" WHERE ${usarEanLumac ? 'ean_producto::text = $1 LIMIT 2' : 'ean = $1 LIMIT 1'}`,
         [ean]
       );
+      if (usarEanLumac && resultado.rows.length !== 1) {
+        return res.json({
+          producto: null,
+          aviso_escaneo: resultado.rows.length
+            ? 'Hay más de un producto con este código de barras. Buscalo por su código de producto.'
+            : 'No encontramos un producto con este código de barras.',
+        });
+      }
       const condicionesPrecio = await getCondicionesPrecio(req, poolExterno, mayorista_id);
       const prod = resultado.rows[0] || null;
       if (prod) Object.assign(prod, (await aplicarCondicionesPrecio([prod], condicionesPrecio))[0]);
       res.json({ producto: prod ? (await aplicarImagenesCatalogo([prod], mayorista_id))[0] : prod });
     } catch (errCampo) {
       if(responderFalloOrigen(res,errCampo))return;
+      if (usarEanLumac) return res.json({ producto: null, aviso_escaneo: 'No pudimos consultar este código de barras. Podés buscar el producto manualmente.' });
       // La vista no tiene columna "ean" en este mayorista — modo EAN no disponible.
       res.json({ producto: null, ean_no_soportado: true });
     }
