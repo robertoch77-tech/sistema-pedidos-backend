@@ -260,6 +260,7 @@ app.use('/api/cliente-consultas', require('./routes/cliente-consultas'));
 app.use('/api/catalogo',             require('./routes/catalogo/catalogo'));
 app.use('/api/superadmin/catalogo',  require('./routes/superadmin/catalogo'));
 app.use('/api/superadmin/historial', require('./routes/superadmin/historial'));
+app.use('/api/superadmin/consulta-cambios-productos', require('./routes/superadmin/consulta-cambios-productos'));
 app.use('/api/superadmin/backup', require('./routes/superadmin/backup'));
 
 const PORT = process.env.PORT || 4000;

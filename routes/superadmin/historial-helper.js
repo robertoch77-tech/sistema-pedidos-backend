@@ -1,6 +1,6 @@
 const pool = require('../../db');
 
-async function registrarCambios({ cliente_id, producto_id, codigo, descripcion, cambios, tipo_operacion, origen }) {
+async function registrarCambios({ cliente_id, producto_id, codigo, descripcion, cambios, tipo_operacion, origen, auditoria_id }) {
   try {
     const entries = Object.entries(cambios || {});
     if (!entries.length) return;
@@ -11,14 +11,14 @@ async function registrarCambios({ cliente_id, producto_id, codigo, descripcion, 
       const a = anterior == null ? null : String(anterior);
       const n = nuevo == null ? null : String(nuevo);
       if (a === n) continue;
-      placeholders.push(`($${idx},$${idx+1},$${idx+2},$${idx+3},$${idx+4},$${idx+5},$${idx+6},$${idx+7},$${idx+8})`);
-      values.push(cliente_id, producto_id || null, codigo || null, descripcion || null, campo, a, n, tipo_operacion, origen);
-      idx += 9;
+      placeholders.push(`(${Array.from({ length: 10 }, (_, i) => '$' + (idx + i)).join(',')})`);
+      values.push(cliente_id, producto_id || null, codigo || null, descripcion || null, campo, a, n, tipo_operacion, origen, auditoria_id || null);
+      idx += 10;
     }
     if (!placeholders.length) return;
     await pool.query(
       `INSERT INTO historial_cambios_productos
-         (cliente_id, producto_id, codigo, descripcion, campo, valor_anterior, valor_nuevo, tipo_operacion, origen)
+         (cliente_id, producto_id, codigo, descripcion, campo, valor_anterior, valor_nuevo, tipo_operacion, origen, auditoria_id)
        VALUES ${placeholders.join(',')}`,
       values
     );

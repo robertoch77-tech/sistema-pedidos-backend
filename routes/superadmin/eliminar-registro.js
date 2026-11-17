@@ -2,6 +2,7 @@ const express = require('express');
 const router  = express.Router();
 const bcrypt  = require('bcryptjs');
 const pool    = require('../../db');
+const { registroProducto, escribirProducto } = require('./registro-productos');
 const { verificarCualquierToken } = require('./authMiddleware');
 
 router.use(verificarCualquierToken);
@@ -64,10 +65,12 @@ router.post('/', async (req, res) => {
       }
     }
 
-    await pool.query(
-      `DELETE FROM ${tabla} WHERE id = $1 AND ${config.col_cliente} = $2`,
-      [id, cliente_id]
-    );
+    const sqlEliminar = `DELETE FROM ${tabla} WHERE id = $1 AND ${config.col_cliente} = $2`;
+    if (tabla === 'productos_propios') {
+      await escribirProducto(pool, registroProducto('eliminacion', 'Eliminar producto'), sqlEliminar, [id, cliente_id]);
+    } else {
+      await pool.query(sqlEliminar, [id, cliente_id]);
+    }
 
     res.json({ mensaje: `${config.label} eliminado correctamente`, id });
   } catch (err) {

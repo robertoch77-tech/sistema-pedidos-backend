@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../../db');
+const { registroProducto, escribirProducto } = require('./registro-productos');
 const { verificarCualquierToken, verificarClienteId } = require('./authMiddleware');
 
 router.use(verificarCualquierToken);
@@ -150,7 +151,7 @@ router.put('/:cid/config', verificarClienteId, async (req, res) => {
 router.put('/:cid/productos/:prod_id/destacado', verificarClienteId, async (req, res) => {
   try {
     const { cid, prod_id } = req.params;
-    const r = await pool.query(
+    const r = await escribirProducto(pool, registroProducto('catalogo', 'Destacar producto'),
       `UPDATE productos_propios
        SET destacado = NOT COALESCE(destacado, false), modificado_en = now()
        WHERE id = $1 AND cliente_id = $2

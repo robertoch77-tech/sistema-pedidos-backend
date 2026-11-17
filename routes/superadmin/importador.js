@@ -6,6 +6,7 @@ const bcrypt   = require('bcryptjs');
 const pool     = require('../../db');
 const { verificarCualquierToken, verificarClienteId, verificarClienteIdBody } = require('./authMiddleware');
 const { registrarCambios, registrarEvento } = require('./historial-helper');
+const { registroProducto, escribirProducto, fijarRegistro, guardarEvidencia } = require('./registro-productos');
 const { buildSearchConditions } = require('./search-helper');
 const { parseNumeroImportacion, parsePorcentajeImportacion } = require('../../utils/parseNumeroImportacion');
 
@@ -915,7 +916,7 @@ router.post('/productos/:cliente_id', verificarClienteId, async (req, res) => {
       return res.status(400).json({ mensaje: 'La descripción es obligatoria' });
     }
 
-    const r = await pool.query(
+    const r = await escribirProducto(pool, registroProducto('nuevo', 'Alta manual'),
       `INSERT INTO productos_propios
          (cliente_id, codigo, descripcion, descripcion_corta, marca, proveedor_id, rubro, tipo,
           precio_costo, dto_1, dto_2, dto_3, dto_4, precio_costo_final,
@@ -962,7 +963,7 @@ router.put('/productos/:cliente_id/:id', verificarClienteId, async (req, res) =>
       return res.status(400).json({ mensaje: 'La descripción es obligatoria' });
     }
 
-    const r = await pool.query(
+    const r = await escribirProducto(pool, registroProducto('edicion_manual', 'Ficha de Productos'),
       `UPDATE productos_propios SET
          codigo=$1, descripcion=$2, descripcion_corta=$3, marca=$4, proveedor_id=$5,
          rubro=$6, tipo=$7, precio_costo=$8, dto_1=$9, dto_2=$10, dto_3=$11, dto_4=$12,
@@ -998,7 +999,7 @@ router.put('/productos/:cliente_id/:id', verificarClienteId, async (req, res) =>
 router.delete('/productos/:cliente_id/:id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id, id } = req.params;
-    const r = await pool.query(
+    const r = await escribirProducto(pool, registroProducto('desactivado', 'Desactivar producto'),
       `UPDATE productos_propios SET activo=false, modificado_en=now()
        WHERE id=$1 AND cliente_id=$2`,
       [id, cliente_id]
@@ -1056,7 +1057,7 @@ router.delete('/productos', verificarClienteIdBody, async (req, res) => {
       query = `DELETE FROM productos_propios WHERE ${conds.join(' AND ')} RETURNING id`;
     }
 
-    const r = await pool.query(query, vals);
+    const r = await escribirProducto(pool, registroProducto('eliminacion', 'Eliminar productos'), query, vals);
     res.json({ ok: true, eliminados: r.rowCount });
   } catch (err) {
     console.error('DELETE /productos error:', err.message);
@@ -1579,6 +1580,7 @@ router.post('/analizar-diff', upload.single('archivo'), verificarClienteIdBody, 
     const tempId = genTempId();
     tempFiles.set(tempId, {
       buffer: req.file.buffer,
+      nombreArchivo: req.file.originalname,
       expires: Date.now() + 30 * 60 * 1000,
       cliente_id: String(cliente_id),
       procesadas: new Set(),
@@ -1781,8 +1783,7 @@ router.post('/analizar-diff', upload.single('archivo'), verificarClienteIdBody, 
       !identidadesCandidatasExcel.has(identidadExcelImportacion(row.codigo, row.descripcion))
     ).map(row => ({ id: row.id, codigo: row.codigo, descripcion: row.descripcion,
       rubro: row.rubro, marca: row.marca, precio_costo: parseFloat(row.precio_costo) || 0 }));
-    res.json({
-      temp_id: tempId,
+    const vistaPrevia = {
       resumen: {
         nuevos:             nuevos.length,
         actualizar:         actualizar.length,
@@ -1803,7 +1804,10 @@ router.post('/analizar-diff', upload.single('archivo'), verificarClienteIdBody, 
       interpretaciones: interpretaciones.slice(0, 500),
       errores_validacion: erroresValidacion,
       perfiles_por_fila: { proveedor: proveedor || '', excepciones_aplicadas: filasConPerfilAplicado },
-    });
+    };
+    const temporal = tempFiles.get(tempId);
+    if (temporal) temporal.vistaPrevia = vistaPrevia;
+    res.json({ temp_id: tempId, ...vistaPrevia });
   } catch (err) {
     console.error('POST /analizar-diff error:', err.message);
     res.status(500).json({ mensaje: 'Error al analizar', detalle: err.message });
@@ -1985,6 +1989,7 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
     const BATCH = 100;
 
     await client.query('BEGIN');
+    await fijarRegistro(client, registroProducto('importacion', 'Importación Excel', operacion_id));
     for (const hojaName of hojas_seleccionadas) {
       if (!wb.Sheets[hojaName]) continue;
       const filas = XLSX.utils.sheet_to_json(wb.Sheets[hojaName], { header: 1, defval: '' });
@@ -2202,6 +2207,13 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
       filas_reintentables: filasFallidas, ausentes: ausentes.length, ausentes_detalle: ausentes,
       procesados, conflictos_perfiles: conflictosPerfiles, alcance_importacion: alcance,
       perfiles_por_fila: { proveedor: proveedor || '', excepciones_aplicadas: filasConPerfilAplicado } };
+    await guardarEvidencia(client, {
+      clienteId: cliente_id,
+      operacionId: operacion_id,
+      archivo: fileBuffer,
+      nombre: req.file?.originalname || tempEntrada?.nombreArchivo || 'Importacion.xlsx',
+      vistaPrevia: tempEntrada?.vistaPrevia || null,
+    });
     await client.query(
       `UPDATE importaciones_v2_operaciones SET estado='completada', resultado=$3::jsonb,
        filas_evaluadas=$4, error=NULL, actualizado_en=now() WHERE id=$1 AND cliente_id=$2`,
@@ -2236,6 +2248,7 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
 // PUT /actualizar-precios-v2
 // ═══════════════════════════════════════════════════════════════
 router.put('/actualizar-precios-v2', verificarClienteIdBody, async (req, res) => {
+  const registro = registroProducto('edicion_precios', 'Editar precios o ficha');
   try {
     const { cliente_id, productos } = req.body;
     if (!cliente_id || !Array.isArray(productos) || !productos.length)
@@ -2317,7 +2330,7 @@ router.put('/actualizar-precios-v2', verificarClienteIdBody, async (req, res) =>
           ).catch(() => {});
         }
         // UPDATE principal — cada producto en su propio try/catch
-        const r = await pool.query(
+        const r = await escribirProducto(pool, registro,
           `UPDATE productos_propios SET
              precio_costo=COALESCE($1,precio_costo),
              precio_costo_final=COALESCE($2,precio_costo_final),
@@ -2361,7 +2374,7 @@ router.put('/actualizar-precios-v2', verificarClienteIdBody, async (req, res) =>
               cliente_id, producto_id: p.id,
               codigo: prevH.codigo, descripcion: prevH.descripcion,
               cambios,
-              tipo_operacion: 'edicion_precios',
+              tipo_operacion: 'edicion_precios', auditoria_id: registro.id,
               origen: 'Editar precios'
             });
           }
@@ -2402,6 +2415,7 @@ router.put('/actualizar-masivo', verificarClienteIdBody, async (req, res) => {
     );
     const CAMPOS_PRECIO = ['dto_1','dto_2','dto_3','utilidad_1','utilidad_2','utilidad_3','precio_costo','alicuota_iva'];
     const afectaPrecio = CAMPOS_PRECIO.includes(campo);
+    const registro = registroProducto('edicion_masiva', 'Acción masiva: ' + campo);
 
     if (afectaPrecio) {
       // Recalcular precios de venta para cada producto afectado
@@ -2423,7 +2437,7 @@ router.put('/actualizar-masivo', verificarClienteIdBody, async (req, res) => {
         const pv1 = pcF * (1+i1/100) * (1+i2/100) * (1+iva/100) * (u1>0 ? (1+u1/100) : 1);
         const pv2 = pcF * (1+i1/100) * (1+i2/100) * (1+iva/100) * (u2>0 ? (1+u2/100) : 1);
         const pv3 = pcF * (1+i1/100) * (1+i2/100) * (1+iva/100) * (u3>0 ? (1+u3/100) : 1);
-        await pool.query(
+        await escribirProducto(pool, registro,
           `UPDATE productos_propios SET ${campo}=$1, precio_costo_final=$2,
              precio_venta_1=$3, precio_venta_2=$4, precio_venta_3=$5, precio_venta_final=$3,
              modificado_en=now()
@@ -2437,13 +2451,13 @@ router.put('/actualizar-masivo', verificarClienteIdBody, async (req, res) => {
           cliente_id, producto_id: prev.id,
           codigo: prev.codigo, descripcion: prev.descripcion,
           cambios: { [campo]: { anterior: prev.valor_actual, nuevo: valor } },
-          tipo_operacion: 'edicion_masiva',
+          tipo_operacion: 'edicion_masiva', auditoria_id: registro.id,
           origen: `Acción masiva: ${campo}`
         });
       }
       res.json({ ok: true, actualizados });
     } else {
-      const r = await pool.query(
+      const r = await escribirProducto(pool, registro,
         `UPDATE productos_propios SET ${campo}=$1, modificado_en=now() WHERE id=ANY($2) AND cliente_id=$3`,
         [valor, ids, cliente_id]
       );
@@ -2452,7 +2466,7 @@ router.put('/actualizar-masivo', verificarClienteIdBody, async (req, res) => {
           cliente_id, producto_id: prev.id,
           codigo: prev.codigo, descripcion: prev.descripcion,
           cambios: { [campo]: { anterior: prev.valor_actual, nuevo: valor } },
-          tipo_operacion: 'edicion_masiva',
+          tipo_operacion: 'edicion_masiva', auditoria_id: registro.id,
           origen: `Acción masiva: ${campo}`
         });
       }
@@ -2553,9 +2567,11 @@ router.put('/ajuste-porcentaje', verificarClienteIdBody, async (req, res) => {
 
     // Si confirmar=true, guardar en DB
     if (confirmar) {
+      const registro = registroProducto('ajuste_porcentaje', `${tipo === 'aumento_costo' ? 'Aumento' : tipo === 'descuento_costo' ? 'Descuento' : 'Cambio utilidad'} ${porcentaje || ''}%`);
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
+        await fijarRegistro(client, registro);
         for (const r of resultados) {
           await client.query(
             `UPDATE productos_propios
@@ -2586,7 +2602,7 @@ router.put('/ajuste-porcentaje', verificarClienteIdBody, async (req, res) => {
             cliente_id, producto_id: r.id,
             codigo: r.codigo, descripcion: r.descripcion,
             cambios,
-            tipo_operacion: 'ajuste_porcentaje',
+            tipo_operacion: 'ajuste_porcentaje', auditoria_id: registro.id,
             origen: `${tipo === 'aumento_costo' ? 'Aumento' : tipo === 'descuento_costo' ? 'Descuento' : 'Cambio utilidad'} ${porcentaje || ''}%`
           });
         }
@@ -2705,7 +2721,7 @@ router.patch('/productos/:id/catalogo', verificarClienteIdBody, async (req, res)
     const { id } = req.params;
     const { visible_catalogo, cliente_id } = req.body;
     if (!cliente_id) return res.status(400).json({ mensaje: 'cliente_id requerido' });
-    await pool.query(
+    await escribirProducto(pool, registroProducto('catalogo', 'Visibilidad de producto'),
       'UPDATE productos_propios SET visible_catalogo = $1, modificado_en = now() WHERE id = $2 AND cliente_id = $3',
       [!!visible_catalogo, id, cliente_id]
     );
@@ -2721,7 +2737,7 @@ router.post('/productos/ocultar-sin-foto', verificarClienteIdBody, async (req, r
   try {
     const { cliente_id } = req.body;
     if (!cliente_id) return res.status(400).json({ mensaje: 'cliente_id requerido' });
-    const r = await pool.query(
+    const r = await escribirProducto(pool, registroProducto('catalogo', 'Ocultar productos sin foto'),
       `UPDATE productos_propios SET visible_catalogo = false, modificado_en = now()
        WHERE cliente_id = $1 AND (imagen_url IS NULL OR imagen_url = '') RETURNING id`,
       [cliente_id]
