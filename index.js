@@ -60,6 +60,7 @@ app.use(helmet({
 app.use(cors({
   origin: [
     'https://sistemagestionpedidos.netlify.app',
+    'https://lumac-clientes-pedidos.netlify.app',
     'http://localhost:3000'
   ],
   credentials: true,

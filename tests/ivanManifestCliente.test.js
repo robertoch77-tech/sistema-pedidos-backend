@@ -17,6 +17,15 @@ test('arranque e identidad separan proveedor y rol; sin tokens ni CUIT y con URL
   assert.notEqual(m.id, new URL('/login', m.scope).href);
   assert.doesNotMatch(JSON.stringify(m), /token|cuit|dashboard/i);
 });
+test('el origen de clientes Lumac instala solo el portal por CUIT de Lumac', () => {
+  const origen = 'https://lumac-clientes-pedidos.netlify.app';
+  const app = crearManifest(CODIGO_LUMAC, 'LUMAC SAS', origen);
+  assert.equal(app.name, 'Lumac Clientes');
+  assert.equal(app.start_url, origen + '/login?m=' + CODIGO_LUMAC);
+  assert.equal(app.scope, origen + '/');
+  assert.throws(() => crearManifest('bobinar', 'Bobinar', origen), { status: 400 });
+});
+
 test('codifica el proveedor y rechaza orígenes ajenos; permite desarrollo local', () => {
   const m = crearManifest('a & b', 'Nombre', 'http://localhost:3000');
   assert.equal(new URL(m.start_url).searchParams.get('m'), 'a & b');

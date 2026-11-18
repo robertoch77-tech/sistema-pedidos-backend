@@ -13,13 +13,15 @@ function rutaLogoCloudinary(logo) {
 }
 
 function crearManifest(codigo, nombre, origen = ORIGEN, logo) {
-  if (!ORIGENES.has(origen)) throw Object.assign(new Error('Origen de instalación inválido.'), { status: 400 });
+  const clientesLumac = codigo === CODIGO_LUMAC && origen === 'https://lumac-clientes-pedidos.netlify.app';
+  if (!clientesLumac && !ORIGENES.has(origen)) throw Object.assign(new Error('Origen de instalación inválido.'), { status: 400 });
   const entrada = origen + '/login?m=' + encodeURIComponent(codigo);
   const lumac = codigo === CODIGO_LUMAC;
   const rutaLogo = rutaLogoCloudinary(logo);
   return {
     id: entrada, start_url: entrada, scope: origen + '/',
-    name: nombre || 'Pedidos de tu proveedor', short_name: (nombre || 'Pedidos').slice(0, 24),
+    name: clientesLumac ? 'Lumac Clientes' : nombre || 'Pedidos de tu proveedor',
+    short_name: clientesLumac ? 'Lumac Clientes' : (nombre || 'Pedidos').slice(0, 24),
     description: 'Pedidos para clientes', display: 'standalone',
     theme_color: '#2563eb', background_color: '#ffffff',
     icons: [192, 512].map(size => ({
