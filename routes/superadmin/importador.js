@@ -1222,6 +1222,26 @@ function resolverDestinoImportacion(codigo, descripcion, rubro, marca, alcance, 
   if (libre) return { tipo: 'nuevo', codigo_final: libre, prefijado: libre.toUpperCase() !== codigoOriginal.toUpperCase() };
   return { tipo: 'omitido', motivo: 'Código ocupado por otro producto; no hay un código alternativo libre en este alcance' };
 }
+function resolverFilaRevisada(codigo, descripcion, rubro, marca, alcance, proveedorId, prefix, mapa, eleccion) {
+  const destino = resolverDestinoImportacion(codigo, descripcion, rubro, marca, alcance, proveedorId, prefix, mapa);
+  if (!eleccion && !(destino.tipo === 'nuevo' && destino.prefijado)) return destino;
+  const ocupantes = mapa.get(String(codigo).trim().toUpperCase()) || [];
+  const candidatos = ocupantes.filter(p => p.id != null && proveedorId != null &&
+    String(p.proveedor_id) === String(proveedorId) && perteneceAlcanceImportacion(p, alcance, proveedorId));
+  const candidato = candidatos.length === 1 ? candidatos[0] : null;
+  const conflicto = destino.tipo === 'nuevo' && destino.prefijado ? {
+    codigo_original: codigo, codigo_nuevo: destino.codigo_final, descripcion,
+    candidato_id: candidato?.id ?? null, descripcion_actual: candidato?.descripcion ?? null,
+    proveedor_id: candidato?.proveedor_id ?? ocupantes[0]?.proveedor_id
+  } : null;
+  if (!eleccion) return { ...destino, conflicto };
+  if (eleccion.accion === 'omitir') return { tipo:'omitido', motivo:'Omitido por decisión del cliente', conflicto };
+  if (!conflicto || !candidato || eleccion.accion !== 'actualizar' ||
+      String(candidato.id) !== String(eleccion.id) || candidato.descripcion !== eleccion.descripcion_actual)
+    return { tipo:'omitido', motivo:'La coincidencia cambió. Revisá esta fila nuevamente.', conflicto };
+  return { tipo:'actualizar', existing:candidato, codigo_final:candidato.codigo, conservarDescripcion:true, conflicto };
+}
+
 function resolverMapeoFila(mapeo, fila, encabezados, perfiles, defaults = {}) {
   const rubro = val(fila, mapeo.rubro, encabezados) || defaults.rubro || '';
   const marca = val(fila, mapeo.marca, encabezados) || defaults.marca || '';
@@ -1721,7 +1741,10 @@ router.post('/analizar-diff', upload.single('archivo'), verificarClienteIdBody, 
           stock_minimo:       numericos.valores.stock_minimo,
         };
 
-        const destino = resolverDestinoImportacion(codigo, descripcion, rubro, marca, alcance, proveedor_id, prefix, dbMap);
+        const destino = resolverFilaRevisada(codigo, descripcion, rubro, marca, alcance, proveedor_id, prefix, dbMap, cfg.decisiones_fila?.[rowId]);
+        if (destino.conflicto) prefijados.push({ ...destino.conflicto, row_id:rowId,
+          proveedor_existente: provNombres.get(Number(destino.conflicto.proveedor_id)) || 'Otro alcance' });
+        if (destino.conservarDescripcion) camposExcel.descripcion = destino.existing.descripcion;
         if (destino.tipo === 'omitido') {
           omitidosPrevistos.push({ row_id: rowId, codigo, descripcion, motivo: destino.motivo });
           continue;
@@ -1730,11 +1753,6 @@ router.post('/analizar-diff', upload.single('archivo'), verificarClienteIdBody, 
         if (destino.tipo === 'nuevo') {
           nuevos.push({ row_id: rowId, codigo, codigo_final: destino.codigo_final, descripcion, rubro, marca,
             perfiles: resolucionPerfil.perfiles_aplicados });
-          if (destino.prefijado) {
-            const ocupante = (dbMap.get(String(codigo).trim().toUpperCase()) || [])[0];
-            prefijados.push({ codigo_original: codigo, codigo_nuevo: destino.codigo_final, descripcion,
-              proveedor_existente: provNombres.get(Number(ocupante?.proveedor_id)) || 'Otro alcance' });
-          }
           const claveNueva = destino.codigo_final.toUpperCase();
           if (!dbMap.has(claveNueva)) dbMap.set(claveNueva, []);
           dbMap.get(claveNueva).push({ codigo: destino.codigo_final, descripcion, proveedor_id, rubro, marca, id: null });
@@ -1770,12 +1788,18 @@ router.post('/analizar-diff', upload.single('archivo'), verificarClienteIdBody, 
               else                   preciosSinCambio++;
             }
 
-            actualizar.push({ row_id: rowId, codigo, descripcion, id: existing.id, rubro, marca,
+            actualizar.push({ row_id: rowId, codigo, descripcion: camposExcel.descripcion, id: existing.id, rubro, marca,
               diffs, perfiles: resolucionPerfil.perfiles_aplicados });
         }
       }
     }
 
+    const elegidos = new Set(actualizar.filter(p=>cfg.decisiones_fila?.[p.row_id]?.accion==='actualizar').map(p=>p.id));
+    const usados = new Set();
+    for (const p of actualizar) {
+      if (elegidos.has(p.id) && usados.has(p.id)) return res.status(409).json({mensaje:'Dos filas actualizarían el mismo artículo. Elegí una y omití la otra.'});
+      usados.add(p.id);
+    }
     // Ausencia informativa: jamás modifica el estado del producto.
     const ausentes = dbRes.rows.filter(row =>
       row.activo && row.codigo &&
@@ -1808,7 +1832,7 @@ router.post('/analizar-diff', upload.single('archivo'), verificarClienteIdBody, 
     };
     const temporal = tempFiles.get(tempId);
     if (temporal) temporal.vistaPrevia = vistaPrevia;
-    res.json({ temp_id: tempId, ...vistaPrevia });
+    res.json({ temp_id: tempId, ...vistaPrevia, decisiones_revisadas: cfg.decisiones_fila || {} });
   } catch (err) {
     console.error('POST /analizar-diff error:', err.message);
     res.status(500).json({ mensaje: 'Error al analizar', detalle: err.message });
@@ -1929,6 +1953,7 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
       rubro: alcance.tipo === 'rubro' ? alcance.clave : rubro_defecto,
       marca: alcance.tipo === 'marca' ? alcance.clave : marca_defecto,
     };
+    if (cfg.decisiones_fila && !tempEntrada?.vistaPrevia) return res.status(409).json({mensaje:'Revisá la vista previa antes de confirmar tus decisiones.'});
     if (tempEntrada && (tempEntrada.proveedor !== String(proveedor || '').trim() ||
         tempEntrada.configuracion !== JSON.stringify(cfg))) {
       return res.status(409).json({ mensaje: 'El proveedor o mapeo cambió desde la previsualización. Analizá de nuevo.' });
@@ -2060,7 +2085,7 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
             continue;
           }
 
-          const destino = resolverDestinoImportacion(codigo, descripcion, rubro, marca, alcance, proveedor_id, prefix, existMap);
+          const destino = resolverFilaRevisada(codigo, descripcion, rubro, marca, alcance, proveedor_id, prefix, existMap, cfg.decisiones_fila?.[rowId]);
           if (destino.tipo === 'omitido') {
             omitidos++; totalOmitidos++;
             detalle.push({ row_id: rowId, hoja: hojaName, fila: filaExcel, codigo, etapa: 'coincidencia',
@@ -2117,11 +2142,11 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
                    precio_venta_final=COALESCE($18,precio_venta_final),
                    utilidad_1=COALESCE($21,utilidad_1),utilidad_2=COALESCE($22,utilidad_2),utilidad_3=COALESCE($23,utilidad_3),
                    activo=true,modificado_en=now() WHERE id=$19 AND cliente_id=$20
-                   AND descripcion=$27 AND codigo=$26
+                   AND descripcion=$27 AND codigo=$26 AND (NOT $28::boolean OR proveedor_id=$2)
                    AND (($24='proveedor' AND proveedor_id=$2)
                      OR ($24='rubro' AND COALESCE(rubro,'')=$25)
                      OR ($24='marca' AND COALESCE(marca,'')=$25))`,
-                  [descripcion,proveedor_id,campos.precio_costo,pv1,pv2,
+                  [destino.conservarDescripcion ? existing.descripcion : descripcion,proveedor_id,campos.precio_costo,pv1,pv2,
                    pv3,campos.marca,campos.rubro,campos.unidad_medida,campos.ean,
                    campos.dto_1,campos.dto_2,campos.dto_3,campos.alicuota_iva,
                    campos.stock_actual,campos.stock_minimo,
@@ -2129,13 +2154,13 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
                    existing.id,cliente_id,
                    campos.utilidad_1||null,campos.utilidad_2||null,campos.utilidad_3||null,
                    alcance.tipo, alcance.tipo === 'rubro' ? existing.rubro : existing.marca,
-                   existing.codigo, existing.descripcion]
+                   existing.codigo, existing.descripcion, Boolean(destino.conservarDescripcion)]
                 );
                 if (upd.rowCount !== 1) throw new Error('El producto cambió de alcance durante la importación');
                 idsPresentes.add(Number(existing.id));
                 actualizados++;
                 procesados.push({ row_id: rowId, hoja: hojaName, fila: filaExcel, codigo: destino.codigo_final,
-                  descripcion, rubro, marca, estado: 'actualizado', perfiles: resolucionPerfil.perfiles_aplicados });
+                  descripcion: destino.conservarDescripcion ? existing.descripcion : descripcion, rubro, marca, estado: 'actualizado', ...(destino.conservarDescripcion && {decision:'conservar_descripcion',descripcion_excel:descripcion}), perfiles: resolucionPerfil.perfiles_aplicados });
             } else {
               // CASO 2 — identidad nueva: insertar con el código libre elegido
               const codigoFinal = destino.codigo_final;
