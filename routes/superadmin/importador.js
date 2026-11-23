@@ -321,6 +321,7 @@ function leerNumerosV2(fila, mapeo, encabezados, hoja, filaExcel, hojaExcel = nu
 
 // ── Middleware de auth (aplica a todas las rutas) ─────────────
 router.use(verificarCualquierToken);
+require('./costos-proveedor').rutasCostos(router, { pool, upload, verificarClienteId, detectarEncabezado, calcPCF, val, calcPrefix, identidadExcelImportacion, mapearProductosPorCodigo, resolverDestinoImportacion, candidatosCodigoImportacion });
 
 // ═══════════════════════════════════════════════════════════════
 // ENDPOINT 1 — POST /analizar
