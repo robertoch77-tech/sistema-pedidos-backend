@@ -34,7 +34,7 @@ function handler(pool, axios) {
   const inicio = fuente.indexOf("router.post('/facturar/:cliente_id'");
   const fin = fuente.indexOf('// ─── POST /conciliar/', inicio);
   assert(fin > inicio);
-  const contexto = { pool, axios, require: p => require(p.replace('../../services/', '../services/')),
+  const contexto = { pool, axios, letraGongora: require('../services/arcaLetraGongora'), require: p => require(p.replace('../../services/', '../services/')),
     verificarClienteId() {}, obtenerToken: async () => ({ token: 'MOCK', sign: 'MOCK', expira: new Date('2099-01-01') }),
     facturaHabilitada: () => true, fechaComprobanteARCA: () => '20260913', alicuotaAfipId: () => 5,
     WSFE_PROD: 'mock://wsfe', WSFE_HOMO: 'mock://homo', logARCA: async () => {},
@@ -43,7 +43,7 @@ function handler(pool, axios) {
   return contexto.fn;
 }
 
-function escenario({ fallo, pendiente = false, existente = false, total = '121.00', emisorCompleto = true, seriePendiente = false } = {}) {
+function escenario({ condicionVenta = 'Consumidor Final', fallo, pendiente = false, existente = false, total = '121.00', emisorCompleto = true, seriePendiente = false } = {}) {
   const llamadas = [], diario = [];
   let calls = 0, released = false, commit = false;
   const db = { release() { released = true; }, async query(sql, params) {
@@ -55,7 +55,7 @@ function escenario({ fallo, pendiente = false, existente = false, total = '121.0
     if (sql.includes('SELECT id FROM arca_logs')) return { rows: pendiente ? [{ id: 1 }] : [] };
     if (sql.includes('SELECT request FROM arca_logs')) return { rows: seriePendiente ? [{ request: 'venta:8|{"modo":"produccion","cuit":"24259173554","punto":4,"tipo":6}' }] : [] };
     if (sql.includes('SELECT * FROM arca_configuracion')) return { rows: [{ condicion_iva: '1', cuit: '24259173554', punto_venta: 4, modo: 'produccion' }] };
-    if (sql.includes('SELECT * FROM ventas')) return { rows: [{ total }] };
+    if (sql.includes('SELECT * FROM ventas')) return { rows: [{ total, condicion_iva: condicionVenta }] };
     if (sql.includes('SUM(subtotal')) return { rows: [{ alicuota: '21', base_imp: '100', iva_monto: '21' }] };
     if (sql.includes('to_jsonb(c)')) return { rows: [{ cuit: '24259173554', razon_social: 'EMISOR SIMULADO', condicion_iva: 'Responsable Inscripto', direccion_fiscal: 'Prueba 123', ingresos_brutos: 'PRUEBA', inicio_actividades: emisorCompleto ? '2000-01-01' : null }] };
     if (sql.includes('SELECT vi.*')) return { rows: [{ cantidad: 1, subtotal: '100', iva_monto: '21', precio_unitario: '100', descripcion_libre: 'Prueba' }] };
@@ -78,6 +78,13 @@ function escenario({ fallo, pendiente = false, existente = false, total = '121.0
   return { async run() { await handler(pool, axios)({ params: { cliente_id: '11' }, body: { venta_id: 7 } }, res); },
     res, llamadas, diario, get calls() { return calls; }, get released() { return released; }, get commit() { return commit; } };
 }
+
+test('Góngora rechaza B para monotributista antes de llamar al servicio fiscal', async () => {
+  const e = escenario({ condicionVenta: 'Monotributista' });
+  await e.run();
+  assert.match(e.res.body.error, /condición de IVA o la letra/);
+  assert.equal(e.calls, 0);
+});
 
 test('handler simulado: tres escrituras atomicas y journal sin secretos', async () => {
   const s = escenario(); await s.run();

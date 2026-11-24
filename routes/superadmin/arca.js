@@ -228,6 +228,8 @@ function fechaComprobanteARCA(fecha = new Date()) {
   return fechaHoraARCA(fecha).slice(0, 10).replace(/-/g, '');
 }
 
+const letraGongora = require('../../services/arcaLetraGongora');
+
 function facturaHabilitada(config, tipo) {
   return (tipo === 1 && config.emite_factura_a) ||
          (tipo === 6 && config.emite_factura_b) ||
@@ -399,7 +401,7 @@ router.get('/config/:cliente_id', verificarClienteId, async (req, res) => {
       [cliente_id]
     );
     if (r.rows.length === 0) return res.json({ configurado: false });
-    res.json({ configurado: true, ...r.rows[0] });
+    res.json({ configurado: true, ...r.rows[0], ...(letraGongora.esGongora(cliente_id) && { reglas_letra: letraGongora.reglas }) });
   } catch (err) {
     console.error('arca config get:', err.message);
     res.status(500).json({ error: err.message });
@@ -539,7 +541,9 @@ router.post('/facturar/:cliente_id', verificarClienteId, async (req, res) => {
     if (![1, 6, 11].includes(cbteTipo) || !facturaHabilitada(config, cbteTipo)) {
       throw new Error('El tipo de factura solicitado no está habilitado para este cliente');
     }
-    if (!['1', 'Responsable Inscripto'].includes(String(config.condicion_iva)) || ![1, 6].includes(cbteTipo)) {
+    const emisorRI = letraGongora.esGongora(cliente_id) ? letraGongora.emisorInscripto(config.condicion_iva)
+      : ['1', 'Responsable Inscripto'].includes(String(config.condicion_iva));
+    if (!emisorRI || ![1, 6].includes(cbteTipo)) {
       throw new Error('Este flujo requiere emisor Responsable Inscripto y factura A o B');
     }
     const condicionReceptor = Number(receptor_condicion_iva);
@@ -572,6 +576,7 @@ router.post('/facturar/:cliente_id', verificarClienteId, async (req, res) => {
         if (ventaRes.rows.length > 0) {
           const venta = ventaRes.rows[0];
           if (venta.facturado) throw new Error('Esta venta ya tiene un comprobante emitido');
+          if (letraGongora.esGongora(cliente_id)) letraGongora.validarLetra(venta.condicion_iva, condicionReceptor, cbteTipo);
           importe_total = controles.centavos(venta.total ?? venta.monto_total) / 100;
 
           const itemsAgrup = await db.query(
@@ -912,7 +917,7 @@ router.get('/:cliente_id/superadmin-config', verificarClienteId, async (req, res
       [cliente_id]
     );
     if (r.rows.length === 0) return res.json({ configurado: false });
-    res.json({ configurado: true, ...r.rows[0] });
+    res.json({ configurado: true, ...r.rows[0], ...(letraGongora.esGongora(cliente_id) && { reglas_letra: letraGongora.reglas }) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

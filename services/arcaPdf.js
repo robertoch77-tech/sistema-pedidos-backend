@@ -124,6 +124,9 @@ async function generarPdfArca(comp, emisor, items) {
   doc.moveDown().font('Helvetica-Bold').fontSize(12).text(`${esNC?'TOTAL ACREDITADO':'TOTAL'}: $${dinero(comp.importe_total)}`);
   if ([1,3].includes(datos.tipoCmp)) {
     doc.font('Helvetica').fontSize(10).text(`Neto: $${dinero(comp.importe_neto)} - IVA: $${dinero(comp.importe_iva)}`);
+    if (require('./arcaLetraGongora').esGongora(comp.cliente_id) && datos.tipoCmp === 1 && Number(comp.receptor_cond_iva) === 6) {
+      doc.moveDown(0.4).text('El crédito fiscal discriminado en el presente comprobante, solo podrá ser computado a efectos del Régimen de Sostenimiento e Inclusión Fiscal para Pequeños Contribuyentes de la Ley Nº 27.618.', { width: 510 });
+    }
   } else if ([6,8].includes(datos.tipoCmp)) {
     doc.font('Helvetica').fontSize(10).text('Regimen de Transparencia Fiscal al Consumidor (Ley 27.743)');
     doc.text(`IVA contenido: $${dinero(comp.importe_iva)}`);
