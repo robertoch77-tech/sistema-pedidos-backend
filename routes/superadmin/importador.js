@@ -279,6 +279,7 @@ function celdaExcelImportacion(hojaExcel, filaExcel, indiceColumna) {
 function leerNumerosV2(fila, mapeo, encabezados, hoja, filaExcel, hojaExcel = null) {
   const valores = {};
   const celdas = [];
+  const faltantes = [];
   const errores = [];
 
   for (const def of CAMPOS_NUMERICOS_V2) {
@@ -291,10 +292,7 @@ function leerNumerosV2(fila, mapeo, encabezados, hoja, filaExcel, hojaExcel = nu
     const idx = encabezados.indexOf(columna);
     if (idx === -1) {
       valores[def.campo] = null;
-      errores.push({
-        hoja, fila: filaExcel, columna, campo: def.campo, valor_original: null,
-        motivo: 'La columna configurada no existe en esta hoja', etapa: 'validacion',
-      });
+      faltantes.push(def);
       continue;
     }
 
@@ -302,6 +300,7 @@ function leerNumerosV2(fila, mapeo, encabezados, hoja, filaExcel, hojaExcel = nu
       ? parsePorcentajeImportacion(fila[idx], celdaExcelImportacion(hojaExcel, filaExcel, idx))
       : parseNumeroImportacion(fila[idx]);
     valores[def.campo] = parsed.estado === 'valido' ? parsed.valor : null;
+    if (parsed.estado === 'vacio') faltantes.push(def);
     celdas.push({
       hoja, fila: filaExcel, columna, campo: def.campo, label: def.label,
       valor_original: parsed.original,
@@ -316,7 +315,7 @@ function leerNumerosV2(fila, mapeo, encabezados, hoja, filaExcel, hojaExcel = nu
     }
   }
 
-  return { valores, celdas, errores };
+  return { valores, celdas, errores, faltantes };
 }
 
 // ── Middleware de auth (aplica a todas las rutas) ─────────────
@@ -1108,6 +1107,31 @@ function calcPCF(pc, d1, d2, d3) {
   return n(pc) * (1 - n(d1)/100) * (1 - n(d2)/100) * (1 - n(d3)/100);
 }
 
+
+function resolverPreciosImportados(v, p, mapeo) {
+  const dato = campo => Number(v[campo] ?? p?.[campo] ?? (p && campo === 'alicuota_iva' ? 21 : 0));
+  const listas = [1, 2, 3];
+  const directo = listas.some(i => mapeo['precio_venta_' + i]);
+  const cambiaBase = ['precio_costo','dto_1','dto_2','dto_3','alicuota_iva','utilidad_1','utilidad_2','utilidad_3']
+    .some(campo => v[campo] != null);
+  const pcf = cambiaBase ? calcPCF(dato('precio_costo'), dato('dto_1'), dato('dto_2'), dato('dto_3')) : null;
+  const calcular = cambiaBase && (v.precio_costo != null || dato('precio_costo') > 0);
+  const precios = listas.map(i => calcular && !mapeo['precio_venta_' + i] && (!directo || v['utilidad_' + i] != null)
+    ? pcf * (1 + Number(p?.imp_1 || 0)/100) * (1 + Number(p?.imp_2 || 0)/100)
+      * (1 + dato('alicuota_iva')/100) * (1 + dato('utilidad_' + i)/100)
+    : v['precio_venta_' + i]);
+  const iguales = (a,b) => a != null && b != null && Math.round(Number(a)*100) === Math.round(Number(b)*100);
+  const activas = listas.filter(i => p && iguales(p['precio_venta_'+i], p.precio_venta_final));
+  const finales = activas.map(i => precios[i-1] ?? p['precio_venta_'+i]);
+  const ambiguo = Number(p?.precio_venta_final) !== 0 && finales.some(x => !iguales(x, finales[0]));
+  const final = precios.every(x => x == null) ? null : (activas.length ? finales[0] : precios[0]);
+  return {pcf, precios, final, ambiguo};
+}
+function faltantesFila(numericos, destino) {
+  const p = destino.tipo === 'actualizar' ? destino.existing : null;
+  return numericos.faltantes.map(def => ({campo:def.campo, nombre:def.label, valor:p?.[def.campo] ?? null}));
+}
+
 function normalizarPerfilesMapeo(valor) {
   if (typeof valor === 'string') {
     try { valor = JSON.parse(valor); } catch { return {}; }
@@ -1622,18 +1646,9 @@ router.post('/analizar-diff', upload.single('archivo'), verificarClienteIdBody, 
     // Cargar DB — productos del cliente
     const dbRes = await pool.query(
       `SELECT id, codigo, proveedor_id, descripcion,
-              COALESCE(precio_costo,0)::numeric       AS precio_costo,
-              COALESCE(precio_venta_1,0)::numeric     AS precio_venta_1,
-              COALESCE(precio_venta_2,0)::numeric     AS precio_venta_2,
-              COALESCE(precio_venta_final,0)::numeric AS precio_venta_final,
-              COALESCE(precio_venta_3,0)::numeric     AS precio_venta_3,
-              marca, rubro, activo, unidad_medida, ean,
-              COALESCE(dto_1,0)::numeric AS dto_1,
-              COALESCE(dto_2,0)::numeric AS dto_2,
-              COALESCE(dto_3,0)::numeric AS dto_3,
-              COALESCE(alicuota_iva,0)::numeric AS alicuota_iva,
-              COALESCE(stock_actual,0)::numeric AS stock_actual,
-              COALESCE(stock_minimo,0)::numeric AS stock_minimo
+              precio_costo, precio_venta_1, precio_venta_2, precio_venta_3, precio_venta_final,
+              dto_1, dto_2, dto_3, alicuota_iva, utilidad_1, utilidad_2, utilidad_3,
+              imp_1, imp_2, stock_actual, stock_minimo, marca, rubro, activo, unidad_medida, ean, modificado_en::text AS version_fila
        FROM productos_propios WHERE cliente_id=$1`,
       [cliente_id]
     );
@@ -1666,7 +1681,8 @@ router.post('/analizar-diff', upload.single('archivo'), verificarClienteIdBody, 
     ];
 
     const nuevos = [], actualizar = [], prefijados = [], omitidosPrevistos = [], conflictosPerfiles = [];
-    const erroresValidacion = [], interpretaciones = [];
+    const erroresValidacion = [], interpretaciones = [], datosFicha = [];
+    const versiones = new Map();
     const idsPresentes = new Set(), identidadesExcel = new Set(), identidadesCandidatasExcel = new Set(), filasInvalidas = new Set();
     let preciosSuben = 0, preciosBajan = 0, preciosSinCambio = 0, sumVar = 0, cntVar = 0;
     let filasConPerfilAplicado = 0;
@@ -1750,6 +1766,21 @@ router.post('/analizar-diff', upload.single('archivo'), verificarClienteIdBody, 
           continue;
         }
 
+        const faltantes = faltantesFila(numericos, destino);
+        const sinDato = faltantes.filter(f => f.valor == null);
+        const ficha = destino.tipo === 'actualizar' ? destino.existing : null;
+        const calculo = resolverPreciosImportados(numericos.valores, ficha, mapeoFila);
+        if (sinDato.length || calculo.ambiguo) {
+          filasInvalidas.add(rowId);
+          erroresValidacion.push({row_id:rowId, hoja:hojaName, fila:filaExcel, codigo,
+            columna:sinDato.map(f => f.nombre).join(', '), motivo:sinDato.length
+              ? 'Falta el dato en Excel y en Productos' : 'Revisar la lista de precio activa en Productos'});
+          continue;
+        }
+        if (ficha) versiones.set(rowId, {id:ficha.id, version:ficha.version_fila});
+        if (faltantes.length) datosFicha.push({row_id:rowId, codigo, descripcion, campos:faltantes});
+        [camposExcel.precio_venta_1, camposExcel.precio_venta_2, camposExcel.precio_venta_3] = calculo.precios;
+        camposExcel.precio_venta_final = calculo.final;
         if (destino.tipo === 'nuevo') {
           nuevos.push({ row_id: rowId, codigo, codigo_final: destino.codigo_final, descripcion, rubro, marca,
             perfiles: resolucionPerfil.perfiles_aplicados });
@@ -1827,11 +1858,11 @@ router.post('/analizar-diff', upload.single('archivo'), verificarClienteIdBody, 
       ausentes, omitidos_previstos: omitidosPrevistos, conflictos_perfiles: conflictosPerfiles,
       alcance_importacion: alcance,
       interpretaciones: interpretaciones.slice(0, 500),
-      errores_validacion: erroresValidacion,
+      errores_validacion: erroresValidacion, datos_ficha: datosFicha,
       perfiles_por_fila: { proveedor: proveedor || '', excepciones_aplicadas: filasConPerfilAplicado },
     };
     const temporal = tempFiles.get(tempId);
-    if (temporal) temporal.vistaPrevia = vistaPrevia;
+    if (temporal) { temporal.vistaPrevia = vistaPrevia; temporal.versiones = versiones; temporal.nuevas = new Map(nuevos.map(f => [f.row_id, f.codigo_final])); temporal.filasFicha = new Set(datosFicha.map(f => f.row_id)); }
     res.json({ temp_id: tempId, ...vistaPrevia, decisiones_revisadas: cfg.decisiones_fila || {} });
   } catch (err) {
     console.error('POST /analizar-diff error:', err.message);
@@ -1953,6 +1984,7 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
       rubro: alcance.tipo === 'rubro' ? alcance.clave : rubro_defecto,
       marca: alcance.tipo === 'marca' ? alcance.clave : marca_defecto,
     };
+    if (tempEntrada?.vistaPrevia?.datos_ficha?.length && req.body.usar_datos_ficha !== 'si') return res.status(409).json({mensaje:'Aceptá usar los valores de Productos antes de importar.'});
     if (cfg.decisiones_fila && !tempEntrada?.vistaPrevia) return res.status(409).json({mensaje:'Revisá la vista previa antes de confirmar tus decisiones.'});
     if (tempEntrada && (tempEntrada.proveedor !== String(proveedor || '').trim() ||
         tempEntrada.configuracion !== JSON.stringify(cfg))) {
@@ -2113,19 +2145,33 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
               utilidad_2:     numericos.valores.utilidad_2,
               utilidad_3:     numericos.valores.utilidad_3,
             };
-            const pcf = calcPCF(campos.precio_costo, campos.dto_1, campos.dto_2, campos.dto_3);
-            const u1 = campos.utilidad_1 || 0;
-            const u2 = campos.utilidad_2 || 0;
-            const u3 = campos.utilidad_3 || 0;
-            const iva = campos.alicuota_iva || 0;
-            let pv1 = campos.precio_venta_1;
-            let pv2 = campos.precio_venta_2;
-            let pv3 = campos.precio_venta_3;
-            if (u1 > 0 && pcf > 0) pv1 = pcf * (1 + u1 / 100);
-            if (u2 > 0 && pcf > 0) pv2 = pcf * (1 + u2 / 100);
-            if (u3 > 0 && pcf > 0) pv3 = pcf * (1 + u3 / 100);
-            let pvFinal = pv1 || pcf || 0;
-            if (iva > 0 && pvFinal > 0) pvFinal = pvFinal * (1 + iva / 100);
+            const previa = tempEntrada?.versiones?.get(rowId);
+            if (tempEntrada?.vistaPrevia && !previa) {
+              const nuevoPrevisto = tempEntrada.nuevas?.get(rowId);
+              if (!nuevoPrevisto) {
+                await client.query('RELEASE SAVEPOINT fila_importacion');
+                omitidos++; totalOmitidos++;
+                detalle.push({row_id:rowId, hoja:hojaName, fila:filaExcel, codigo, estado:'omitido', motivo:'La fila quedó pendiente de revisión en la vista previa'});
+                continue;
+              }
+              if (destino.tipo !== 'nuevo' || nuevoPrevisto !== destino.codigo_final) throw new Error('Cambió el destino previsto. Revisá la fila.');
+            }
+            if (previa && destino.tipo !== 'actualizar') throw new Error('El destino cambió después de la vista previa. Revisá la fila.');
+            let ficha = null;
+            if (destino.tipo === 'actualizar') {
+              const actual = await client.query('SELECT *, modificado_en::text AS version_fila FROM productos_propios WHERE id=$1 AND cliente_id=$2 FOR UPDATE', [destino.existing.id, cliente_id]);
+              ficha = actual.rows[0];
+              if (!ficha || (previa && (String(previa.id) !== String(ficha.id) || previa.version !== ficha.version_fila))) throw new Error('El artículo cambió después de la vista previa. Revisá la fila.');
+            }
+            const faltantes = faltantesFila(numericos, {...destino, existing:ficha});
+            if (faltantes.some(f => f.valor == null) || (faltantes.length && !(req.body.usar_datos_ficha === 'si' && tempEntrada?.filasFicha?.has(rowId)))) {
+              await client.query('RELEASE SAVEPOINT fila_importacion');
+              omitidos++; totalOmitidos++;
+              detalle.push({row_id:rowId, hoja:hojaName, fila:filaExcel, codigo, estado:'omitido', motivo:'Hay campos faltantes sin valor de ficha aceptado'});
+              continue;
+            }
+            const {pcf, precios:[pv1,pv2,pv3], final:pvFinal, ambiguo} = resolverPreciosImportados(campos, ficha, mapeoFila);
+            if (ambiguo) throw new Error('Revisar la lista de precio activa en Productos');
             if (destino.tipo === 'actualizar') {
               const existing = destino.existing;
               // CASO 1 — coincidencia exacta en el alcance
@@ -2150,9 +2196,9 @@ router.post('/importar-v2', (req, res, next) => { req.setTimeout(300000); next()
                    pv3,campos.marca,campos.rubro,campos.unidad_medida,campos.ean,
                    campos.dto_1,campos.dto_2,campos.dto_3,campos.alicuota_iva,
                    campos.stock_actual,campos.stock_minimo,
-                   pcf||null, pvFinal||null,
+                   pcf, pvFinal,
                    existing.id,cliente_id,
-                   campos.utilidad_1||null,campos.utilidad_2||null,campos.utilidad_3||null,
+                   campos.utilidad_1,campos.utilidad_2,campos.utilidad_3,
                    alcance.tipo, alcance.tipo === 'rubro' ? existing.rubro : existing.marca,
                    existing.codigo, existing.descripcion, Boolean(destino.conservarDescripcion)]
                 );
