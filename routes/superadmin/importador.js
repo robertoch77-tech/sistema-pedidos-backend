@@ -667,23 +667,58 @@ router.post('/aplicar', verificarClienteIdBody, async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // ENDPOINT 5 — GET /productos/:cliente_id
 // ═══════════════════════════════════════════════════════════════
+function filtrosProductos(cliente_id, filtros) {
+  const { buscar = '', proveedor_id, marca = '', rubro = '', activo, visible_catalogo, sin_foto, fecha_desde, fecha_hasta, fecha_tipo = 'importacion' } = filtros;
+  const buscarTexto = String(buscar).trim();
+  const values  = [cliente_id];
+  const where   = ['cliente_id = $1'];
+
+  if (buscarTexto) {
+    const { condition } = buildSearchConditions(buscarTexto, values.length + 1, values);
+    if (condition) where.push(condition);
+  }
+  if (proveedor_id) {
+    values.push(proveedor_id);
+    where.push(`proveedor_id = $${values.length}`);
+  }
+  if (marca.trim()) {
+    values.push(marca.trim());
+    where.push(`marca = $${values.length}`);
+  }
+  if (rubro && rubro.trim()) {
+    values.push(rubro.trim());
+    where.push(`rubro = $${values.length}`);
+  }
+  if (activo === 'true' || activo === 'false') {
+    values.push(activo === 'true');
+    where.push(`activo = $${values.length}`);
+  }
+  if (visible_catalogo === 'true' || visible_catalogo === 'false') {
+    values.push(visible_catalogo === 'true');
+    where.push(`COALESCE(visible_catalogo, true) = $${values.length}`);
+  }
+  if (sin_foto === 'true') {
+    where.push(`(imagen_url IS NULL OR imagen_url = '')`);
+  }
+  const campoFecha = fecha_tipo === 'actualizacion' ? 'modificado_en' : 'creado_en';
+  if (fecha_desde) {
+    values.push(fecha_desde);
+    where.push(`${campoFecha} >= $${values.length}`);
+  }
+  if (fecha_hasta) {
+    values.push(fecha_hasta);
+    where.push(`${campoFecha} <= ($${values.length}::date + interval '1 day')`);
+  }
+
+  return {values, where};
+}
+
+require('./recalcular-precios')(router, pool, verificarClienteId, filtrosProductos, resolverMapeoFila);
+
 router.get('/productos/:cliente_id', verificarClienteId, async (req, res) => {
   try {
     const { cliente_id } = req.params;
-    const {
-      buscar      = '',
-      proveedor_id,
-      marca       = '',
-      rubro       = '',
-      activo,
-      visible_catalogo,
-      sin_foto,
-      fecha_desde,
-      fecha_hasta,
-      fecha_tipo  = 'importacion',
-      page        = '1',
-      limit       = '25',
-    } = req.query;
+    const { buscar = '', page = '1', limit = '25' } = req.query;
 
     const buscarTexto = String(buscar).trim();
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
@@ -706,46 +741,7 @@ router.get('/productos/:cliente_id', verificarClienteId, async (req, res) => {
       });
     }
 
-    const values  = [cliente_id];
-    const where   = ['cliente_id = $1'];
-
-    if (buscarTexto) {
-      const { condition } = buildSearchConditions(buscarTexto, values.length + 1, values);
-      if (condition) where.push(condition);
-    }
-    if (proveedor_id) {
-      values.push(proveedor_id);
-      where.push(`proveedor_id = $${values.length}`);
-    }
-    if (marca.trim()) {
-      values.push(marca.trim());
-      where.push(`marca = $${values.length}`);
-    }
-    if (rubro && rubro.trim()) {
-      values.push(rubro.trim());
-      where.push(`rubro = $${values.length}`);
-    }
-    if (activo === 'true' || activo === 'false') {
-      values.push(activo === 'true');
-      where.push(`activo = $${values.length}`);
-    }
-    if (visible_catalogo === 'true' || visible_catalogo === 'false') {
-      values.push(visible_catalogo === 'true');
-      where.push(`COALESCE(visible_catalogo, true) = $${values.length}`);
-    }
-    if (sin_foto === 'true') {
-      where.push(`(imagen_url IS NULL OR imagen_url = '')`);
-    }
-    const campoFecha = fecha_tipo === 'actualizacion' ? 'modificado_en' : 'creado_en';
-    if (fecha_desde) {
-      values.push(fecha_desde);
-      where.push(`${campoFecha} >= $${values.length}`);
-    }
-    if (fecha_hasta) {
-      values.push(fecha_hasta);
-      where.push(`${campoFecha} <= ($${values.length}::date + interval '1 day')`);
-    }
-
+    const {values, where} = filtrosProductos(cliente_id, req.query);
     const whereStr = where.join(' AND ');
     const priorizarPrefijo = buscarTexto.length >= 2;
     const dataValues = priorizarPrefijo ? [...values, `${buscarTexto}%`] : values;
