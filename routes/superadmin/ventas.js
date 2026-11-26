@@ -5,6 +5,7 @@ const { verificarCualquierToken, verificarClienteId } = require('./authMiddlewar
 const { calcularTotalesIVA } = require('../../utils/calcularTotalesIVA');
 const { registrarCobroCliente } = require('../../services/cobrosClientes');
 const { resolverSucursalVenta } = require('../../services/sucursalVenta');
+const notasObra = require('../../services/notasObra');
 const { fallo, bloquearOperacion, bloquearCuenta, resolverCuentaVenta, cuentaDeVenta, huellaOperacion } = require('../../services/cuentaCorrienteVentas');
 
 // ── Asegurar tablas ───────────────────────────────────────────
@@ -153,6 +154,13 @@ router.post('/:cliente_id', verificarClienteId, async (req, res) => {
     await client.query('BEGIN');
 
     await bloquearOperacion(client, cliente_id);
+    if (req.body.nota_obra_id != null) {
+      const previa = await notasObra.validarParaVenta(client, cliente_id, req.body);
+      if (previa) {
+        await client.query('COMMIT');
+        return res.json({ok: true, repetida: true, ...previa});
+      }
+    }
     const operacionId = String(req.headers['x-operacion-id'] || '');
     const referenciaOperacion = operacionId ? 'cc-venta:' + operacionId + ':' + huellaOperacion(req.body) : '';
     if (operacionId && !/^[a-zA-Z0-9_-]{16,100}$/.test(operacionId)) {
@@ -413,6 +421,7 @@ router.post('/:cliente_id', verificarClienteId, async (req, res) => {
       }
     }
 
+    if (req.body.nota_obra_id != null) await notasObra.finalizar(client, cliente_id, req.body, venta_id);
     await client.query('COMMIT');
     res.json({ ok: true, venta_id, numero_completo });
 

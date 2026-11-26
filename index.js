@@ -235,6 +235,7 @@ app.use('/api/superadmin/importador-entidades', require('./routes/superadmin/imp
 app.use('/api/superadmin/eliminar-registro',   require('./routes/superadmin/eliminar-registro'));
 app.use('/api/superadmin/gestion-claves',      require('./routes/superadmin/gestion-claves'));
 app.use('/api/superadmin/ventas', require('./routes/superadmin/ventas'));
+app.use('/api/superadmin/notas-obra', require('./routes/superadmin/notas-obra'));
 app.use('/api/superadmin/clientes-finales', require('./routes/superadmin/clientes-finales'));
 app.use('/api/superadmin/presupuestos', require('./routes/superadmin/presupuestos'));
 app.use('/api/superadmin/remitos', require('./routes/superadmin/remitos'));
