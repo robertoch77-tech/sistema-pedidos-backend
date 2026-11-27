@@ -161,7 +161,8 @@ async function cargarContexto(id, db, doc, cfg, c, exclusiva, completa) {
   return { id, db, version: Number(cfg.version), configDescuentos: cfg, cfg: configuracion, cliente, reglas, cascada_cliente: completa,
     todas: pagoTermino.agregar(exclusiva ? reglas : [
       { etiqueta: completa ? 'Descuento general del cliente' : 'Descuento general / por pago', porcentaje: cliente.general, rubro: null, marca: null, tipo: null },
-      { etiqueta: completa ? 'Descuento adicional del cliente' : 'Descuento del cliente', porcentaje: cliente.extra, rubro: null, marca: null, tipo: null }, ...reglas], pagoTermino.leer(id, cfg)) };
+      { etiqueta: completa ? 'Descuento adicional del cliente' : 'Descuento del cliente', porcentaje: cliente.extra, rubro: null, marca: null, tipo: null,
+        ...(Number(id) === 23 && completa ? { fijoSinEspecifico: true } : {}) }, ...reglas], pagoTermino.leer(id, cfg)) };
 }
 
 async function consultarCliente(id, cuit, refrescar = false, cfgLeida = null) {

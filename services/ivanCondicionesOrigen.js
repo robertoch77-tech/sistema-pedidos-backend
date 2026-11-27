@@ -205,7 +205,10 @@ function reglasDeProducto(ctx, dimensiones) {
     ['rubro', 'marca', 'tipo'].map((k, bit) => mascara & (1 << bit) ? dimensiones[k] : null)));
   const aplicables = [];
   for (const clave of claves) for (const fila of indice.get(clave) || []) aplicables.push(fila);
-  return aplicables.sort((a, b) => a.orden - b.orden).map(p => p.regla);
+  const ordenadas = aplicables.sort((a, b) => a.orden - b.orden).map(p => p.regla);
+  const hayEspecifico = ordenadas.some(r => Number(r.porcentaje) > 0 &&
+    (r.rubro !== null || r.marca !== null || r.tipo !== null));
+  return hayEspecifico ? ordenadas.filter(r => !r.fijoSinEspecifico) : ordenadas;
 }
 async function aplicar(productos, ctx, detallar = false) {
   if (!ctx || !productos.length) return productos;
@@ -231,7 +234,8 @@ async function aplicar(productos, ctx, detallar = false) {
       version: ctx.version, perfil: 'Condiciones de Iván', pasos: v.pasos, total_pasos: cantidades.get(String(p.id_producto)) } }; });
 }
 function ordenarSql(ctx, parametros) {
-  if (ctx.cfg.lectura_total_condiciones === true && ctx.reglas.length > 1000) {
+  if (ctx.cfg.lectura_total_condiciones === true && (ctx.reglas.length > 1000 ||
+      (ctx.reglas.length > 0 && ctx.todas.some(r => r.fijoSinEspecifico)))) {
     return cascada.expresionOrdenArreglos('precio_producto', ctx.todas,
       Object.fromEntries(['rubro', 'marca', 'tipo'].map(k => [k, idSql(ctx.cfg.campos['producto_' + k])])), parametros);
   }

@@ -164,7 +164,13 @@ test('cascada 23%, 5%, pago 5% da 37392.71; rubro/marca/tipo restringen solo sus
   const regla = { etiqueta: 'Coincidencia', porcentaje: '8', rubro: '105', marca: '19', tipo: '23' };
   const ctx2 = { ...ctx, todas: pago.agregar([...ctx.todas.slice(0, 2), regla], pago.leer(23, e.cfg)) };
   await origen.aplicar([{ id_producto: 3149, precio_producto: '53808.27' }], ctx2);
-  assert.deepEqual(llamadas.at(-1)[0].reglas.map(r => r.porcentaje), ['23','5','8','5']);
+  assert.deepEqual(llamadas.at(-1)[0].reglas.map(r => r.porcentaje), ['23','8','5']);
+  for (const [campo, valor] of Object.entries({ rubro:'105', marca:'19', tipo:'23' })) {
+    const especifica = { ...regla, rubro:null, marca:null, tipo:null, [campo]:valor };
+    const individual = { ...ctx, todas:pago.agregar([...ctx.todas.slice(0,2), especifica], pago.leer(23,e.cfg)) };
+    await origen.aplicar([{id_producto:3149, precio_producto:'100'}], individual);
+    assert.deepEqual(llamadas.at(-1)[0].reglas.map(r=>r.porcentaje), ['23','8','5']);
+  }
   const ctx3 = { ...ctx2, db: { query: async () => ({ rows: [{ id: '3149', rubro: '105', marca: '20', tipo: '23' }] }) } };
   await origen.aplicar([{ id_producto: 3149, precio_producto: '53808.27' }], ctx3);
   assert.deepEqual(llamadas.at(-1)[0].reglas.map(r => r.porcentaje), ['23','5','5']);
